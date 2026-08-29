@@ -37,6 +37,10 @@ constexpr UINT kRunningDebounceMs = 250;
 // update installing while the dock runs) takes a couple of seconds to come
 // back, so the first few attempts are close together and then it gives up
 // rather than spinning a timer for the rest of the session.
+// The hover label's idle dismissal. Restarted on every cursor movement, so it
+// only ever fires once the cursor has actually been still.
+constexpr UINT_PTR kLabelTimer = 6;
+
 constexpr UINT_PTR kDeviceRetryTimer = 5;
 constexpr UINT kDeviceRetryMs = 1500;
 constexpr int kMaxDeviceRetries = 10;
@@ -1381,12 +1385,37 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     // was just drawn with rather than from a mouse message, so the label cannot
     // point at where an icon used to be.
     int wanted = -1;
+    bool onDock = false;
     POINT cursor{};
     float x = 0.0f;
     float y = 0.0f;
-    if (!menuOpen_ && revealState_ != RevealState::Hidden && GetCursorPos(&cursor) &&
+    const bool haveCursor = GetCursorPos(&cursor) != 0;
+    if (!menuOpen_ && revealState_ != RevealState::Hidden && haveCursor &&
         CursorToLayout(cursor, &x, &y)) {
+        onDock = layout_.Contains(x, y);
         wanted = layout_.ItemAt(x, y);
+    }
+
+    // Movement is what wakes the label and what keeps it up. Every move
+    // restarts the idle timer rather than polling for a second to learn the
+    // same thing, and un-dismisses a label a click had put away.
+    if (haveCursor && (cursor.x != lastCursor_.x || cursor.y != lastCursor_.y)) {
+        lastCursor_ = cursor;
+        labelSuppressed_ = false;
+        if (hwnd_ && onDock) {
+            SetTimer(hwnd_, kLabelTimer, design::label::kIdleMs, nullptr);
+        }
+    }
+
+    // Between two icons ItemAt finds nothing, and letting that clear the label
+    // made it blink out in every gap along the row - which is most of what
+    // looked like it "going away". The name holds until another icon claims it
+    // or the cursor leaves the dock altogether.
+    if (wanted < 0 && onDock) {
+        wanted = labelItem_;
+    }
+    if (!onDock || labelSuppressed_) {
+        wanted = -1;
     }
 
     // The name changes the instant the cursor crosses onto another icon.
@@ -1409,6 +1438,9 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     const bool moving = (labelAlpha_ != target);
     if (labelAlpha_ <= 0.001f || labelItem_ < 0 ||
         labelItem_ >= static_cast<int>(store_.items().size()) || !text_.ready()) {
+        // Nothing showing, so the next label starts where its icon is rather
+        // than sliding in from wherever the last one happened to end up.
+        labelPlaced_ = false;
         return moving;
     }
 
@@ -1431,10 +1463,26 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
 
     const float width = text_.MeasureWidth(name) + 2.0f * design::label::kPaddingX;
     const float height = design::kLabelHeight;
-    const float iconTop = icon->centerY - icon->size * 0.5f + slideLogical;
+    // Measured off where a *fully magnified* icon reaches, not off this icon's
+    // current top. The icon under the cursor is at full size anyway, so the
+    // tail still lands just above it - but the height no longer rides the swell,
+    // and the label holds one line as the cursor travels the row.
+    const float iconTop = layout_.magnified_icon_top() + slideLogical;
+
+    // The pill travels to the next icon instead of teleporting. Exponential
+    // approach, so it is frame-rate independent and has no overshoot to settle.
+    const float targetX = icon->centerX;
+    if (!labelPlaced_) {
+        labelX_ = targetX;
+        labelPlaced_ = true;
+    } else if (deltaSeconds > 0.0f) {
+        labelX_ += (targetX - labelX_) *
+                   (1.0f - std::exp(-deltaSeconds / design::label::kSlideTau));
+    }
+    const bool sliding = std::fabs(targetX - labelX_) > 0.3f;
 
     const float viewWidth = static_cast<float>(target_.width()) / scale;
-    float left = icon->centerX - width * 0.5f;
+    float left = labelX_ - width * 0.5f;
     // Kept inside the window: an icon at either end would otherwise have half
     // its name clipped away by the swap chain.
     left = std::clamp(left, 4.0f, std::max(4.0f, viewWidth - width - 4.0f));
@@ -1456,7 +1504,7 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     text_.Draw(name, pill, colour(design::label::kText, labelAlpha_));
     text_.End();
 
-    return moving;
+    return moving || sliding;
 }
 
 LRESULT CALLBACK DockWindow::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1537,6 +1585,11 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             POINT screen{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             ClientToScreen(hwnd, &screen);
             pressedItem_ = CursorToLayout(screen, &x, &y) ? layout_.ItemAt(x, y) : -1;
+            // Once you have clicked, you know what the thing was called. The
+            // next cursor movement brings the label back.
+            labelSuppressed_ = true;
+            KillTimer(hwnd, kLabelTimer);
+            RequestRedraw();
             return 0;
         }
 
@@ -1670,6 +1723,15 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     // blur would otherwise keep the old radius until the dock
                     // happened to move.
                     frostDirty_ = true;
+                    RequestRedraw();
+                }
+            } else if (wParam == kLabelTimer) {
+                // A second with the cursor still. Put the name away - it has
+                // been read by now, and leaving it up parks a black pill over
+                // whatever is behind the dock.
+                KillTimer(hwnd_, kLabelTimer);
+                if (labelItem_ >= 0) {
+                    labelSuppressed_ = true;
                     RequestRedraw();
                 }
             } else if (wParam == kSimulateLossTimer) {

@@ -89,6 +89,10 @@ float DockLayout::icon_row_bottom() const {
     return bar_bottom() - kPaddingY * scale();
 }
 
+float DockLayout::magnified_icon_top() const {
+    return icon_row_bottom() - kIconSize * maxScale_ * scale();
+}
+
 void DockLayout::SetItems(const std::vector<DockItem>& items) {
     elements_.clear();
     icons_.clear();

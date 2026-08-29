@@ -98,6 +98,10 @@ public:
     float corner_radius() const;
     // Where the running indicators sit, and where icons rest their bottom edge.
     float icon_row_bottom() const;
+    // Where the top of a fully magnified icon sits. It depends on the row's
+    // geometry and nothing else - no cursor, no per-icon scale - which is what
+    // lets the hover label hold one height instead of riding the swell.
+    float magnified_icon_top() const;
 
     const std::vector<PlacedIcon>& icons() const { return icons_; }
     const std::vector<GlassLens>& lenses() const { return lenses_; }

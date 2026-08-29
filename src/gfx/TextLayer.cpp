@@ -30,6 +30,26 @@ bool TextLayer::Initialize(GraphicsDevice& device, float fontSize, DWRITE_FONT_W
     // with and matching it was the point.
     LD_CHECK(dwrite_->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                                        DWRITE_FONT_STRETCH_NORMAL, fontSize, L"en-us", &format_));
+    // Nexus is a VB6 program and draws its labels through GDI, which hints
+    // glyph stems onto the pixel grid. DirectWrite's natural mode places them
+    // at fractional positions instead - truer to the outline, and visibly not
+    // the same lettering at 16 px however exactly the family, size and weight
+    // are matched. GDI_CLASSIC asks for the hinted rasterisation.
+    //
+    // Grayscale rather than ClearType because the label is drawn onto a surface
+    // with alpha, where subpixel coverage has nothing to blend against.
+    ComPtr<IDWriteRenderingParams> defaults;
+    if (SUCCEEDED(dwrite_->CreateRenderingParams(&defaults))) {
+        ComPtr<IDWriteRenderingParams> gdiLike;
+        if (SUCCEEDED(dwrite_->CreateCustomRenderingParams(
+                defaults->GetGamma(), defaults->GetEnhancedContrast(),
+                defaults->GetClearTypeLevel(), defaults->GetPixelGeometry(),
+                DWRITE_RENDERING_MODE_GDI_CLASSIC, &gdiLike))) {
+            d2d_->SetTextRenderingParams(gdiLike.Get());
+        }
+    }
+    d2d_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+
     format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);

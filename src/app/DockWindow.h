@@ -163,6 +163,14 @@ private:
     // cursor leaves the icon.
     int labelItem_ = -1;
     float labelAlpha_ = 0.0f;
+    // Where the pill is, as opposed to where the icon it names is. The two are
+    // separate so the label can travel between icons instead of jumping.
+    float labelX_ = 0.0f;
+    bool labelPlaced_ = false;
+    // Dismissed by a click, or by the cursor sitting still - and put back by
+    // the next movement.
+    bool labelSuppressed_ = false;
+    POINT lastCursor_{};
     // Set whenever the cached frost is stale: the dock moved or resized, the
     // wallpaper changed, or a shader edit may have changed the frost amount.
     bool frostDirty_ = true;

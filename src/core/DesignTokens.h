@@ -145,6 +145,14 @@ inline constexpr float kGap = 6.0f;
 // is another tenth of a second between pointing at something and being told
 // what it is.
 inline constexpr float kFadeSeconds = 0.0f;
+// How quickly the pill slides sideways to the next icon, as the time constant
+// of an exponential approach: ~95% of the way there in three of these. The one
+// thing here that is deliberately not instant - the label travels along the row
+// rather than teleporting, which is what makes a sweep read as smooth.
+inline constexpr float kSlideTau = 0.045f;
+// Dismissed after this long without the cursor moving. Nexus does the same, and
+// it is what stops a name you have finished reading from sitting over your work.
+inline constexpr unsigned kIdleMs = 1000;
 
 // Near-black and near-opaque. The label has to be readable over a photograph
 // with no idea what colour it is, and the only thing that reliably survives
