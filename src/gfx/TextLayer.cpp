@@ -1,5 +1,7 @@
 #include "gfx/TextLayer.h"
 
+#include <dwrite_1.h>
+
 #include "core/Check.h"
 #include "core/Log.h"
 
@@ -30,10 +32,31 @@ bool TextLayer::Initialize(GraphicsDevice& device, float fontSize, DWRITE_FONT_W
     // with and matching it was the point.
     LD_CHECK(dwrite_->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                                        DWRITE_FONT_STRETCH_NORMAL, fontSize, L"en-us", &format_));
-    // Left on DirectWrite's own rasterisation. Asking for GDI_CLASSIC hinting to
-    // match how Nexus draws was worse, not better: hinting a bold face onto the
-    // pixel grid at this size snaps some stems to full pixels and leaves others
-    // half covered, and the unevenness reads as the letters coming apart.
+    // Rasterisation, which is where the remaining difference from Nexus lives -
+    // the family, size and weight are the registry's own and are not in doubt.
+    //
+    // Not GDI_CLASSIC: hinting a bold face onto the pixel grid at this size
+    // snaps some stems to whole pixels and leaves others half covered, and that
+    // unevenness reads as the letters coming apart. NATURAL_SYMMETRIC is the
+    // opposite end - no hinting, symmetric coverage, the smoothest DirectWrite
+    // has.
+    //
+    // The contrast enhancement goes to zero. It exists to darken stems so dark
+    // text holds up on a light page; white glyphs on a near-black pill are the
+    // inverse case, where it only hardens an edge that is already at full
+    // contrast. That hardness is what reads as too sharp.
+    ComPtr<IDWriteRenderingParams> defaults;
+    if (SUCCEEDED(dwrite_->CreateRenderingParams(&defaults)) && defaults) {
+        ComPtr<IDWriteFactory1> dwrite1;
+        ComPtr<IDWriteRenderingParams1> soft;
+        if (SUCCEEDED(dwrite_.As(&dwrite1)) &&
+            SUCCEEDED(dwrite1->CreateCustomRenderingParams(
+                defaults->GetGamma(), 0.0f, 0.0f, defaults->GetClearTypeLevel(),
+                defaults->GetPixelGeometry(), DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, &soft))) {
+            d2d_->SetTextRenderingParams(soft.Get());
+        }
+    }
+
     format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
