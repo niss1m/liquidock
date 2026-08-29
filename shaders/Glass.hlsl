@@ -162,27 +162,25 @@ float4 PSMain(Varyings input) : SV_Target
 
     float3 body = gFrost.SampleLevel(gLinearClamp, frostUv, 0).rgb;
 
-    // Glass is not a colour filter. Pulling some saturation out and easing the
-    // whole thing toward mid grey is what stops the panel simply becoming
-    // whatever colour the wallpaper is, and keeps icons legible over it either
-    // way. The small lift afterwards is the luminous quality real glass has: it
-    // gathers light rather than merely passing it on.
+    // A whisper of each, and no more. An earlier version pulled 38% of the
+    // saturation out, dragged the result a tenth of the way to mid grey and
+    // lifted it another twelfth - which is a lot of processing to apply to
+    // something the design intends you to see straight through, and it is what
+    // made the dock look like a smudge rather than a pane. The design's own
+    // frame shows the wallpaper behind the bar essentially untouched.
     const float lum = dot(body, float3(0.2126, 0.7152, 0.0722));
-    body = lerp(lum.xxx, body, 0.62);
-    body = lerp(body, float3(0.5, 0.5, 0.5), 0.10);
-    // Glass gathers light, and it lifts a dark background far more than a bright
-    // one - which is also what keeps the panel visible as an object over black
-    // and stops it blowing out over white. A flat multiply cannot do both.
-    body = body + (1.0 - body) * 0.12;
+    body = lerp(lum.xxx, body, 0.94);
+    body = body + (1.0 - body) * 0.04;
 
     // A sheet lit from above. This gradient across the face, rather than any
     // amount of edge treatment, is what makes the surface read as a lit
-    // material instead of a cut-out filled with a blur - and unlike a bevel it
-    // adds no curvature, so it cannot turn the panel back into a dome.
+    // material instead of a cut-out - and unlike a bevel it adds no curvature,
+    // so it cannot turn the panel back into a dome. Kept slight: at clear glass
+    // there is nothing for a strong gradient to sit on.
     const float topEdge = RECT_CENTER.y - HALF_SIZE.y;
     const float vertical = saturate((windowPx.y - topEdge) / max(2.0 * HALF_SIZE.y, 1.0));
-    body += (1.0 - body) * 0.09 * (1.0 - vertical);
-    body *= 1.0 - 0.07 * vertical;
+    body += (1.0 - body) * 0.045 * (1.0 - vertical);
+    body *= 1.0 - 0.035 * vertical;
 
     // --- The lens ring -----------------------------------------------------
     // Glass disperses because its refractive index varies with wavelength, so

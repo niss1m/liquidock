@@ -35,41 +35,31 @@ inline constexpr float kIndicatorTint[4] = {1.0f, 1.0f, 1.0f, 0.75f};
 // nothing: the dock reads as glass because of what the shader does to the
 // backdrop behind it, not because of this fill. Raising it further is how the
 // design gets muddy.
-inline constexpr float kBarTint[4] = {1.0f, 1.0f, 1.0f, 0.06f};
+inline constexpr float kBarTint[4] = {1.0f, 1.0f, 1.0f, 0.05f};
 
 // separator, rgba(255,255,255,0.2)
 inline constexpr float kSeparatorTint[4] = {1.0f, 1.0f, 1.0f, 0.20f};
 
 // The glass, normalised to 0..1 from the 0..100 the Figma panel shows.
 //
-// These are the *shipping* defaults, not the panel's own numbers. The panel was
-// authored against a flat grey artboard; on a real desktop, over a photograph,
-// the same values turn the whole bar into a lens - the wallpaper is hauled
-// across the pane rather than bending at its edge, and the dock reads as a blob
-// of liquid instead of a sheet of glass. Each departure is noted with the value
-// it replaced, so the design can still be argued with rather than guessed at.
-//
-// Every one of these is overridable in settings.txt, which is the honest place
-// for a judgement call about how something looks.
+// These are the panel's own values. They were overridden for a while with a
+// heavier, frostier, desaturated set on the theory that the Figma numbers were
+// authored against a flat artboard and would not survive a photograph. Reading
+// the actual frame settles it: the design is nearly *clear* glass - the
+// wallpaper behind the bar is still sharp, and the bar is legible almost
+// entirely from its rim. The heavier set is what made it look muddy.
 namespace glass {
-inline constexpr float kLightAngleDegrees = -45.0f; // Figma
-inline constexpr float kLightIntensity = 0.55f;     // Figma 0.80; the specular blew out
-// The edge is where all the optics live now, so refraction can be strong again -
-// it is confined to a few pixels rather than smeared across the panel.
-inline constexpr float kRefraction = 0.74f;
-// Figma 0.20. This is the band width, and it is the number that decides whether
-// the dock reads as a sheet of glass or as a glossy dome; 0.28 puts the edge at
-// about seven logical pixels.
-inline constexpr float kDepth = 0.34f;
-inline constexpr float kDispersion = 0.30f;         // Figma 0.50, and now only at the rim
-// Figma 0.04, which is essentially clear glass. This is now purely the blur
-// radius behind the panel - the body is always fully the blurred image - so it
-// can be heavy without turning the panel to fog. Heavy is what makes whatever is
-// behind the dock read as depth rather than as clutter.
-inline constexpr float kFrost = 0.82f;
-// Figma 1.00, which fans the bending all the way to the middle of the pane. A
-// low value keeps the lens ring pinned to the edge, which is the whole point.
-inline constexpr float kSplay = 0.35f;
+inline constexpr float kLightAngleDegrees = -45.0f;
+inline constexpr float kLightIntensity = 0.80f;
+inline constexpr float kRefraction = 0.80f;
+inline constexpr float kDepth = 0.20f;
+inline constexpr float kDispersion = 0.50f;
+// Essentially clear. This is the one that was most wrong: at 0.82 the dock is a
+// frosted slab and the desktop behind it is gone.
+inline constexpr float kFrost = 0.04f;
+// Full splay, which now means something - it is how far the edge optics reach
+// across the face, and the design wants them reaching a long way in.
+inline constexpr float kSplay = 1.00f;
 } // namespace glass
 
 // --- Magnification --------------------------------------------------------
