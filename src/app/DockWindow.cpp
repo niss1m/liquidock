@@ -10,8 +10,10 @@
 #include <thread>
 
 #include "core/Check.h"
+#include "core/ConfigPaths.h"
 #include "core/DesignTokens.h"
 #include "core/Log.h"
+#include "gfx/TextureDump.h"
 
 namespace liquidock {
 namespace {
@@ -19,6 +21,11 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"LiquiDock.Dock";
 constexpr UINT_PTR kShaderWatchTimer = 1;
 constexpr UINT_PTR kHideTimer = 2;
+// One-shot, and only for --dump-backdrop. The dump has to wait for the capture
+// thread to produce its first frame, or it writes out the wallpaper the dock was
+// still showing while duplication was starting up.
+constexpr UINT_PTR kDumpTimer = 3;
+constexpr UINT kDumpDelayMs = 2500;
 
 // Posted to ourselves after presenting an animation frame. Present blocks on
 // vblank, so this self-paces at the monitor's refresh rate without a timer -
@@ -26,6 +33,8 @@ constexpr UINT_PTR kHideTimer = 2;
 constexpr UINT kAnimateMessage = WM_APP + 1;
 // Posted by the icon loader thread as each icon becomes available.
 constexpr UINT kIconMessage = WM_APP + 2;
+// Posted by the capture thread when the screen behind the dock changed.
+constexpr UINT kCaptureMessage = WM_APP + 3;
 
 enum ItemMenuCommand : UINT {
     kCommandOpen = 1,
@@ -74,10 +83,11 @@ DockWindow::~DockWindow() {
 }
 
 bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
-                        std::optional<bool> autoHideOverride) {
+                        std::optional<bool> autoHideOverride, bool dumpBackdrop) {
     device_ = &device;
     diagnostic_ = diagnostic;
     autoHideOverride_ = autoHideOverride;
+    dumpBackdrop_ = dumpBackdrop;
     shaders_ = std::make_unique<ShaderCache>(device.d3d());
 
     QueryPerformanceFrequency(&frequency_);
@@ -132,6 +142,10 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
     }
 
     StartIconLoad();
+    ApplyBackdropSource();
+    if (dumpBackdrop_) {
+        SetTimer(hwnd_, kDumpTimer, kDumpDelayMs, nullptr);
+    }
 
 #ifdef LIQUIDOCK_DEBUG
     shaders_->PollForChanges(); // establish the baseline stamp
@@ -170,6 +184,9 @@ void DockWindow::Reveal() {
     revealState_ = RevealState::Revealing;
     animating_ = true;
     trigger_.SetEnabled(false);
+    if (capture_) {
+        capture_->SetActive(true);
+    }
     QueryPerformanceCounter(&lastFrameTime_);
 
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
@@ -223,6 +240,10 @@ float DockWindow::AdvanceReveal(float deltaSeconds) {
             LogDebug("slide in complete, dock hidden");
             ShowWindow(hwnd_, SW_HIDE);
             trigger_.SetEnabled(true);
+            // Nothing behind a hidden dock is worth capturing.
+            if (capture_) {
+                capture_->SetActive(false);
+            }
         }
     }
 
@@ -297,20 +318,22 @@ bool DockWindow::CreateResources() {
         return false;
     }
 
-    if (!backdrop_.Initialize(*device_) || !frost_.Initialize(*device_, *shaders_)) {
+    if (!wallpaper_.Initialize(*device_) || !frost_.Initialize(*device_, *shaders_)) {
         return false;
     }
     return frost_.Resize(target_.width(), target_.height());
 }
 
 void DockWindow::Destroy() {
-    // Before the window goes: the loader posts to this HWND, so it has to be
-    // stopped while the handle is still valid.
+    // Before the window goes: both the icon loader and the capture thread post
+    // to this HWND, so they have to be stopped while the handle is still valid.
     iconLoader_.Stop();
+    capture_.reset();
     trigger_.Destroy();
     if (hwnd_) {
         KillTimer(hwnd_, kShaderWatchTimer);
         KillTimer(hwnd_, kHideTimer);
+        KillTimer(hwnd_, kDumpTimer);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
@@ -361,6 +384,9 @@ void DockWindow::ApplySettings() {
     // The frost is a cached blur at a particular radius, and the radius is a
     // setting, so it is stale by definition after a reload.
     frostDirty_ = true;
+    if (hwnd_) {
+        ApplyBackdropSource();
+    }
 }
 
 void DockWindow::ReloadSettings() {
@@ -402,6 +428,55 @@ void DockWindow::ReloadSettings() {
     }
 
     RequestRedraw();
+}
+
+Backdrop& DockWindow::ActiveBackdrop() {
+    if (capture_ && capture_->ready()) {
+        return *capture_;
+    }
+    return wallpaper_;
+}
+
+void DockWindow::ApplyBackdropSource() {
+    const bool wantCapture = (settings_.backdrop == BackdropSource::Screen);
+    if (wantCapture == (capture_ != nullptr)) {
+        return;
+    }
+
+    if (!wantCapture) {
+        capture_.reset();
+        // Put the dock back in the user's screenshots the moment capture stops.
+        SetWindowDisplayAffinity(hwnd_, WDA_NONE);
+        LogInfo("Backdrop source: wallpaper");
+        frostDirty_ = true;
+        return;
+    }
+
+    // The capture thread writes into the device context, so without the
+    // runtime's multithread protection this mode would silently corrupt D3D
+    // state rather than merely look wrong.
+    if (!device_->multithread_safe()) {
+        LogWarn("Live capture needs D3D11 multithread protection, which is unavailable");
+        return;
+    }
+
+    // The exclusion has to be in place *before* the first frame is captured, or
+    // the dock refracts its own previous frame into an infinite mirror.
+    if (!SetWindowDisplayAffinity(hwnd_, WDA_EXCLUDEFROMCAPTURE)) {
+        LogWarn("Could not exclude the dock from capture ({}); staying on the wallpaper backdrop",
+                GetLastError());
+        return;
+    }
+
+    auto capture = std::make_unique<CaptureBackdrop>();
+    if (!capture->Initialize(*device_, hwnd_, kCaptureMessage)) {
+        SetWindowDisplayAffinity(hwnd_, WDA_NONE);
+        return;
+    }
+    capture_ = std::move(capture);
+    capture_->SetActive(revealState_ != RevealState::Hidden);
+    LogInfo("Backdrop source: live screen capture");
+    frostDirty_ = true;
 }
 
 void DockWindow::ReloadItems() {
@@ -582,20 +657,45 @@ void DockWindow::Render() {
     // immediately in the common case, which is why a static desktop presents no
     // frames at all.
     HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-    if (backdrop_.Update(monitor)) {
+
+    // The capture source only copies the part of the screen the dock covers,
+    // and only wakes for changes that land in it, so it has to be told where
+    // that is before it is asked for a frame.
+    RECT windowRect{};
+    GetWindowRect(hwnd_, &windowRect);
+    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    if (GetMonitorInfoW(monitor, &monitorInfo) && capture_) {
+        const RECT& bounds = monitorInfo.rcMonitor;
+        const RECT region{windowRect.left - bounds.left, windowRect.top - bounds.top,
+                          windowRect.right - bounds.left, windowRect.bottom - bounds.top};
+        capture_->SetRegion(region);
+    }
+
+    if (wallpaper_.Update(monitor)) {
+        frostDirty_ = true;
+    }
+    if (capture_ && capture_->Update(monitor)) {
+        frostDirty_ = true;
+    }
+    // A capture that failed outright - no duplication on this adapter - is
+    // dropped here rather than retried forever, and the dock carries on with
+    // the wallpaper it already has.
+    if (capture_ && capture_->failed()) {
+        LogWarn("Live capture unavailable; falling back to the wallpaper backdrop");
+        capture_.reset();
+        SetWindowDisplayAffinity(hwnd_, WDA_NONE);
         frostDirty_ = true;
     }
 
-    RECT windowRect{};
-    GetWindowRect(hwnd_, &windowRect);
-    const RECT monitorRect = backdrop_.monitor_rect();
+    Backdrop& backdrop = ActiveBackdrop();
+    const RECT monitorRect = backdrop.monitor_rect();
     const POINT windowOrigin{windowRect.left - monitorRect.left, windowRect.top - monitorRect.top};
     const SIZE windowSize{static_cast<LONG>(target_.width()),
                           static_cast<LONG>(target_.height())};
 
     const float frostSigma = settings_.frost * kMaxFrostSigmaPx * scale;
     if (frostDirty_ || !frost_.ready()) {
-        if (frost_.Build(backdrop_, windowOrigin, windowSize, frostSigma)) {
+        if (frost_.Build(backdrop, windowOrigin, windowSize, frostSigma)) {
             frostDirty_ = false;
         }
     }
@@ -648,7 +748,7 @@ void DockWindow::Render() {
     constants.material[0] = settings_.dispersion;
     constants.material[1] = settings_.frost;
     constants.material[2] = settings_.splay;
-    constants.material[3] = backdrop_.tiled() ? 1.0f : 0.0f;
+    constants.material[3] = backdrop.tiled() ? 1.0f : 0.0f;
 
     constants.windowOrigin[0] = static_cast<float>(windowOrigin.x);
     constants.windowOrigin[1] = static_cast<float>(windowOrigin.y);
@@ -657,8 +757,8 @@ void DockWindow::Render() {
 
     float uvScale[2]{};
     float uvOffset[2]{};
-    backdrop_.uv_scale(uvScale);
-    backdrop_.uv_offset(uvOffset);
+    backdrop.uv_scale(uvScale);
+    backdrop.uv_offset(uvOffset);
     constants.backdropUv[0] = uvScale[0];
     constants.backdropUv[1] = uvScale[1];
     constants.backdropUv[2] = uvOffset[0];
@@ -714,7 +814,7 @@ void DockWindow::Render() {
     ctx->VSSetConstantBuffers(0, 1, &cb);
     ctx->PSSetConstantBuffers(0, 1, &cb);
 
-    ID3D11ShaderResourceView* resources[2] = {backdrop_.srv(), frost_.srv()};
+    ID3D11ShaderResourceView* resources[2] = {backdrop.srv(), frost_.srv()};
     ctx->PSSetShaderResources(0, 2, resources);
     ID3D11SamplerState* samplers[1] = {sampler_.Get()};
     ctx->PSSetSamplers(0, 1, samplers);
@@ -732,6 +832,8 @@ void DockWindow::Render() {
     ID3D11RenderTargetView* nullRtv = nullptr;
     ctx->OMSetRenderTargets(1, &nullRtv, nullptr);
     ctx->PSSetShaderResources(0, 2, nullResources);
+
+    device_->DrainDebugMessages();
 
     if (!target_.EndFrame()) {
         // A TDR or a driver update removed the adapter. Everything device-bound
@@ -982,10 +1084,18 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             if (wParam == SPI_SETWORKAREA) {
                 UpdatePlacement();
             } else if (wParam == SPI_SETDESKWALLPAPER) {
-                backdrop_.Invalidate();
+                wallpaper_.Invalidate();
                 frostDirty_ = true;
                 RequestRedraw();
             }
+            return 0;
+
+        case kCaptureMessage:
+            // The screen behind the dock changed. The frost is a blur of it, so
+            // it is stale; the glass samples the capture texture directly and
+            // simply picks up the new contents.
+            frostDirty_ = true;
+            RequestRedraw();
             return 0;
 
         case kAnimateMessage:
@@ -1001,6 +1111,10 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     frostDirty_ = true;
                     RequestRedraw();
                 }
+            } else if (wParam == kDumpTimer) {
+                KillTimer(hwnd_, kDumpTimer);
+                DumpTextureToBmp(*device_, ActiveBackdrop().srv(),
+                                 ConfigFilePath(L"backdrop.bmp"));
             } else if (wParam == kHideTimer) {
                 KillTimer(hwnd_, kHideTimer);
                 // One cursor check when the dwell expires, rather than polling

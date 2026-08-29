@@ -1,5 +1,8 @@
 #include "gfx/GraphicsDevice.h"
 
+#include <string_view>
+#include <vector>
+
 #include "core/Check.h"
 #include "core/Log.h"
 
@@ -7,9 +10,14 @@ namespace liquidock {
 
 bool GraphicsDevice::Initialize() {
     // BGRA support is required for the Direct2D interop the settings UI needs in
-    // M4. SINGLETHREADED is deliberately not set: Windows.Graphics.Capture
-    // touches the device from its own threads in M3, and a device created
-    // single-threaded turns that into rare, near-undebuggable corruption.
+    // M4. SINGLETHREADED is deliberately not set: the capture thread touches the
+    // device context, and a device created single-threaded turns that into rare,
+    // near-undebuggable corruption.
+    //
+    // Leaving that flag off is necessary but NOT sufficient, which cost an
+    // afternoon: the runtime still does no locking until it is asked to, via
+    // ID3D10Multithread below. Without that call the context is a free-for-all
+    // and D3D happily corrupts itself.
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
 #ifdef LIQUIDOCK_DEBUG
@@ -66,7 +74,31 @@ bool GraphicsDevice::Initialize() {
     LD_CHECK(dxgi_->GetAdapter(&adapter));
     LD_CHECK(adapter->GetParent(IID_PPV_ARGS(&factory_)));
 
+    // The switch that makes the immediate context safe to touch from the
+    // capture thread. D3D11 takes an internal critical section around every
+    // context call once this is on; without it the debug layer reports "Two
+    // threads were found to be executing functions associated with the same
+    // Device[Context] at the same time", and release builds simply corrupt.
+    ComPtr<ID3D10Multithread> multithread;
+    if (SUCCEEDED(context_.As(&multithread))) {
+        multithread->SetMultithreadProtected(TRUE);
+    } else {
+        LogWarn("Could not enable D3D11 multithread protection; live capture will stay off");
+        multithreadSafe_ = false;
+    }
+
     LD_CHECK(DCompositionCreateDevice(dxgi_.Get(), IID_PPV_ARGS(&composition_)));
+
+#ifdef LIQUIDOCK_DEBUG
+    if (SUCCEEDED(d3d_.As(&infoQueue_))) {
+        // The debug layer breaks into the debugger on a corruption or error
+        // message by raising an exception, which without a debugger attached
+        // simply kills the process with no explanation. Reading the messages
+        // ourselves is strictly more useful than being killed by them.
+        infoQueue_->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+        infoQueue_->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, FALSE);
+    }
+#endif
 
     DXGI_ADAPTER_DESC desc{};
     if (SUCCEEDED(adapter->GetDesc(&desc))) {
@@ -77,6 +109,34 @@ bool GraphicsDevice::Initialize() {
                 static_cast<unsigned>(featureLevel_));
     }
     return true;
+}
+
+void GraphicsDevice::DrainDebugMessages() {
+#ifdef LIQUIDOCK_DEBUG
+    if (!infoQueue_) {
+        return;
+    }
+    const UINT64 count = infoQueue_->GetNumStoredMessages();
+    std::vector<char> buffer;
+    for (UINT64 i = 0; i < count; ++i) {
+        SIZE_T length = 0;
+        if (FAILED(infoQueue_->GetMessage(i, nullptr, &length)) || length == 0) {
+            continue;
+        }
+        buffer.resize(length);
+        auto* message = reinterpret_cast<D3D11_MESSAGE*>(buffer.data());
+        if (FAILED(infoQueue_->GetMessage(i, message, &length))) {
+            continue;
+        }
+        const std::string_view text(message->pDescription, message->DescriptionByteLength);
+        if (message->Severity <= D3D11_MESSAGE_SEVERITY_WARNING) {
+            LogWarn("D3D11: {}", text);
+        } else {
+            LogDebug("D3D11: {}", text);
+        }
+    }
+    infoQueue_->ClearStoredMessages();
+#endif
 }
 
 bool GraphicsDevice::Commit() {

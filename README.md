@@ -29,7 +29,7 @@ Early. See the milestones below for where things stand.
 | M0 | Build system, D3D11 + DirectComposition transparent window | done |
 | M1 | The liquid glass shader and backdrop pipeline | done |
 | M2 | Item model, icons, layout, launching, magnification | done |
-| M3 | Multi-monitor, appbar, running indicators, live-capture backdrop | |
+| M3 | Multi-monitor, appbar, running indicators, live-capture backdrop | in progress |
 | M4 | Settings UI | |
 | M5 | Portable / Microsoft Store / Steam packaging | |
 
@@ -57,9 +57,17 @@ first time the dock runs. Reachable from *Preferences…* in the tray menu. The 
 so saving it takes effect immediately — which is the point, because half of these are judgement
 calls about how something looks and the only way to settle one is to see it.
 
-Glass: `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`, `light-intensity`,
-`tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`, `icon-bulge`. Auto-hide:
-`auto-hide`, `dwell-seconds`, `slide-seconds`.
+Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
+`light-intensity`, `tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`,
+`icon-bulge`. Auto-hide: `auto-hide`, `dwell-seconds`, `slide-seconds`.
+
+`backdrop` decides what the glass refracts. `wallpaper` (the default) decodes your desktop
+background once and costs nothing after that — it is exactly right whenever nothing is behind the
+dock, and wrong-looking over a window. `screen` refracts what is actually there, by duplicating the
+strip of desktop the dock covers and ignoring every change that misses it. The catch is not
+performance: the dock has to be excluded from screen capture to stop it refracting its own last
+frame forever, and that same exclusion makes the dock invisible in your own screenshots and screen
+shares. That is why it is not the default.
 
 `icon-bulge` is **off** by default. With it on, the glass swells around a raised icon — the bar's
 outline fuses to the icons and reads as liquid clinging to them, which is a much stronger effect

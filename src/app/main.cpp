@@ -7,6 +7,7 @@
 #include "app/DockWindow.h"
 #include "app/TrayIcon.h"
 #include "core/ConfigWatcher.h"
+#include "core/CrashHandler.h"
 #include "core/Log.h"
 #include "core/Settings.h"
 #include "gfx/GraphicsDevice.h"
@@ -37,7 +38,8 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-int Run(bool diagnostic, std::optional<bool> autoHideOverride) {
+int Run(bool diagnostic, std::optional<bool> autoHideOverride, bool dumpBackdrop) {
+    InstallCrashHandler();
     InitLogFile();
     LogInfo("LiquiDock {} starting{}", LIQUIDOCK_VERSION,
             diagnostic ? " (diagnostic render)" : "");
@@ -52,7 +54,7 @@ int Run(bool diagnostic, std::optional<bool> autoHideOverride) {
     }
 
     DockWindow dock;
-    if (!dock.Create(device, diagnostic, autoHideOverride)) {
+    if (!dock.Create(device, diagnostic, autoHideOverride, dumpBackdrop)) {
         MessageBoxW(nullptr, L"LiquiDock could not create its window.", L"LiquiDock",
                     MB_ICONERROR | MB_OK);
         return 1;
@@ -127,6 +129,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLin
     if (wcsstr(commandLine, L"--no-autohide") != nullptr) {
         autoHideOverride = false;
     }
+    // Writes the image the glass is refracting to backdrop.bmp beside the log.
+    // Live capture excludes the dock from screen capture, so this is the only
+    // way to see what it is actually sampling.
+    const bool dumpBackdrop = wcsstr(commandLine, L"--dump-backdrop") != nullptr;
 
     liquidock::SingleInstanceGuard guard;
     if (!guard.Acquire()) {
@@ -140,7 +146,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLin
         return 1;
     }
 
-    const int result = liquidock::Run(diagnostic, autoHideOverride);
+    const int result = liquidock::Run(diagnostic, autoHideOverride, dumpBackdrop);
     CoUninitialize();
     return result;
 }

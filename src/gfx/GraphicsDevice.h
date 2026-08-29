@@ -35,12 +35,24 @@ public:
     // has to be rebuilt; the caller decides when.
     bool IsDeviceLost() const;
 
+    // Moves anything the D3D11 debug layer has complained about into our own
+    // log. Without this the debug layer's findings only exist in the debugger's
+    // output window, which is exactly where they are not when a bug only shows
+    // up in a run launched from a script. No-op in release.
+    void DrainDebugMessages();
+
+    // False if the runtime refused to enable multithread protection, in which
+    // case nothing may touch the context off the render thread.
+    bool multithread_safe() const { return multithreadSafe_; }
+
 private:
     ComPtr<ID3D11Device1> d3d_;
     ComPtr<ID3D11DeviceContext1> context_;
     ComPtr<IDXGIDevice> dxgi_;
     ComPtr<IDXGIFactory2> factory_;
     ComPtr<IDCompositionDevice> composition_;
+    ComPtr<ID3D11InfoQueue> infoQueue_;
+    bool multithreadSafe_ = true;
     D3D_FEATURE_LEVEL featureLevel_ = D3D_FEATURE_LEVEL_11_0;
 };
 

@@ -5,6 +5,7 @@
 #include <string>
 
 #include "gfx/GraphicsDevice.h"
+#include "glass/Backdrop.h"
 
 namespace liquidock {
 
@@ -22,7 +23,7 @@ namespace liquidock {
 // a monitor-sized copy, the fit mode is reduced to a UV transform the shader
 // applies while sampling, which keeps this to a single texture and no
 // per-frame work at all.
-class WallpaperBackdrop {
+class WallpaperBackdrop : public Backdrop {
 public:
     WallpaperBackdrop() = default;
     WallpaperBackdrop(const WallpaperBackdrop&) = delete;
@@ -33,22 +34,22 @@ public:
     // Loads the wallpaper for `monitor` if it is not already loaded. Returns
     // true when the backdrop changed and dependent caches (the frost blur) must
     // be rebuilt.
-    bool Update(HMONITOR monitor);
+    bool Update(HMONITOR monitor) override;
 
     // Forces a reload on the next Update, for WM_SETTINGCHANGE/SPI_SETDESKWALLPAPER.
-    void Invalidate() { loadedKey_.clear(); }
+    void Invalidate() override { loadedKey_.clear(); }
 
-    ID3D11ShaderResourceView* srv() const { return srv_.Get(); }
+    ID3D11ShaderResourceView* srv() const override { return srv_.Get(); }
 
     // Maps a point in monitor-relative pixels to a UV in the wallpaper:
     //     t  = pixel / monitorSize
     //     uv = t * uvScale + uvOffset
     // With `tiled`, the shader takes frac(uv) so a clamp sampler still tiles.
-    void uv_scale(float out[2]) const { out[0] = uvScale_[0]; out[1] = uvScale_[1]; }
-    void uv_offset(float out[2]) const { out[0] = uvOffset_[0]; out[1] = uvOffset_[1]; }
-    bool tiled() const { return tiled_; }
+    void uv_scale(float out[2]) const override { out[0] = uvScale_[0]; out[1] = uvScale_[1]; }
+    void uv_offset(float out[2]) const override { out[0] = uvOffset_[0]; out[1] = uvOffset_[1]; }
+    bool tiled() const override { return tiled_; }
 
-    RECT monitor_rect() const { return monitorRect_; }
+    RECT monitor_rect() const override { return monitorRect_; }
 
 private:
     bool LoadImage(const std::wstring& path);

@@ -4,7 +4,7 @@
 
 #include "gfx/GraphicsDevice.h"
 #include "gfx/ShaderCache.h"
-#include "glass/WallpaperBackdrop.h"
+#include "glass/Backdrop.h"
 
 namespace liquidock {
 
@@ -32,8 +32,7 @@ public:
     // Runs the three passes. `windowOrigin` is the window's top-left in
     // monitor-relative pixels; `sigmaPx` is the blur radius in full-resolution
     // pixels.
-    bool Build(const WallpaperBackdrop& backdrop, POINT windowOrigin, SIZE windowSize,
-               float sigmaPx);
+    bool Build(const Backdrop& backdrop, POINT windowOrigin, SIZE windowSize, float sigmaPx);
 
     ID3D11ShaderResourceView* srv() const { return frost_.srv.Get(); }
     bool ready() const { return frost_.srv != nullptr; }
@@ -67,6 +66,7 @@ private:
     GraphicsDevice* device_ = nullptr;
     ShaderCache* shaders_ = nullptr;
     ComPtr<ID3D11Buffer> constantBuffer_;
+    ComPtr<ID3D11SamplerState> sampler_;
 
     Target quarter_;
     Target temp_;

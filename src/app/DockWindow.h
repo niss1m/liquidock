@@ -14,6 +14,7 @@
 #include "gfx/GraphicsDevice.h"
 #include "gfx/IconAtlas.h"
 #include "gfx/ShaderCache.h"
+#include "glass/CaptureBackdrop.h"
 #include "glass/FrostChain.h"
 #include "glass/WallpaperBackdrop.h"
 #include "model/IconLoader.h"
@@ -66,7 +67,7 @@ public:
     // settings file decides. Kept, so a settings reload cannot quietly turn
     // auto-hide back on under someone who launched with --no-autohide.
     bool Create(GraphicsDevice& device, bool diagnostic = false,
-                std::optional<bool> autoHideOverride = std::nullopt);
+                std::optional<bool> autoHideOverride = std::nullopt, bool dumpBackdrop = false);
     void Destroy();
 
     HWND hwnd() const { return hwnd_; }
@@ -110,6 +111,12 @@ private:
 
     // Pushes the current settings into everything that caches them.
     void ApplySettings();
+    // Starts or stops live screen capture to match the settings.
+    void ApplyBackdropSource();
+    // Whichever source is actually usable this frame. Capture only wins once it
+    // has produced a frame, so switching modes never flashes an empty backdrop
+    // and a capture that cannot start is simply never used.
+    Backdrop& ActiveBackdrop();
 
     void ReloadItems();
     void StartIconLoad();
@@ -120,7 +127,8 @@ private:
     GraphicsDevice* device_ = nullptr;
     std::unique_ptr<ShaderCache> shaders_;
     CompositionTarget target_;
-    WallpaperBackdrop backdrop_;
+    WallpaperBackdrop wallpaper_;
+    std::unique_ptr<CaptureBackdrop> capture_;
     FrostChain frost_;
 
     HWND hwnd_ = nullptr;
@@ -136,6 +144,9 @@ private:
     UINT dpi_ = 96;
     bool diagnostic_ = false;
     bool deviceLost_ = false;
+    // --dump-backdrop: write the backdrop texture out once, then stop. The only
+    // way to inspect a live capture, which by construction cannot be screenshot.
+    bool dumpBackdrop_ = false;
 
     // Items, their icons and their geometry.
     Settings settings_;

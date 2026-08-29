@@ -30,6 +30,14 @@ bool FrostChain::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
     desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     LD_CHECK(device_->d3d()->CreateBuffer(&desc, nullptr, &constantBuffer_));
+
+    D3D11_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.MaxLOD = D3D11_FLOAT32_MAX;
+    LD_CHECK(device_->d3d()->CreateSamplerState(&sampler, &sampler_));
     return true;
 }
 
@@ -107,6 +115,11 @@ void FrostChain::RunPass(Target& destination, ID3D11ShaderResourceView* source,
     ctx->VSSetConstantBuffers(0, 1, &cb);
     ctx->PSSetConstantBuffers(0, 1, &cb);
     ctx->PSSetShaderResources(0, 1, &source);
+    // Bound explicitly rather than left to the default sampler: the default
+    // wraps, so the blur's outermost taps would pull in the opposite edge of the
+    // backdrop instead of clamping to the nearest one.
+    ID3D11SamplerState* samplers[1] = {sampler_.Get()};
+    ctx->PSSetSamplers(0, 1, samplers);
     ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
     ctx->Draw(3, 0);
 
@@ -115,7 +128,7 @@ void FrostChain::RunPass(Target& destination, ID3D11ShaderResourceView* source,
     ctx->PSSetShaderResources(0, 1, nullSrv);
 }
 
-bool FrostChain::Build(const WallpaperBackdrop& backdrop, POINT windowOrigin, SIZE windowSize,
+bool FrostChain::Build(const Backdrop& backdrop, POINT windowOrigin, SIZE windowSize,
                        float sigmaPx) {
     if (!frost_.rtv || !backdrop.srv()) {
         return false;
@@ -147,7 +160,7 @@ bool FrostChain::Build(const WallpaperBackdrop& backdrop, POINT windowOrigin, SI
     constants.backdropUv[2] = uvOffset[0];
     constants.backdropUv[3] = uvOffset[1];
 
-    // Pass 1: crop the wallpaper to the window footprint at quarter size.
+    // Pass 1: crop the backdrop to the window footprint at quarter size.
     RunPass(quarter_, backdrop.srv(), "PSDownsample", constants);
 
     // Pass 2: horizontal.

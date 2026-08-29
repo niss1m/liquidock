@@ -94,6 +94,7 @@ void Settings::Load() {
     lightAngleDegrees = design::glass::kLightAngleDegrees;
     lightIntensity = design::glass::kLightIntensity;
     tintAlpha = design::kBarTint[3];
+    backdrop = BackdropSource::Wallpaper;
 
     magnification = true;
     maxScale = design::magnify::kMaxScale;
@@ -148,6 +149,14 @@ bool Settings::ReadFile(const std::wstring& path) {
             lightIntensity = ParseFloat(value, lightIntensity, 0.0f, 1.0f);
         } else if (key == L"tint-alpha") {
             tintAlpha = ParseFloat(value, tintAlpha, 0.0f, 1.0f);
+        } else if (key == L"backdrop") {
+            if (_wcsicmp(value.c_str(), L"screen") == 0) {
+                backdrop = BackdropSource::Screen;
+            } else if (_wcsicmp(value.c_str(), L"wallpaper") == 0) {
+                backdrop = BackdropSource::Wallpaper;
+            } else {
+                LogWarn("backdrop must be `wallpaper` or `screen`; keeping the default");
+            }
         } else if (key == L"magnification") {
             magnification = ParseBool(value, magnification);
         } else if (key == L"max-scale") {
@@ -214,11 +223,24 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# because of this. Raising it is how the design gets muddy.\n"
              L"tint-alpha = %.2f\n"
              L"\n"
+             L"# What the glass refracts. `wallpaper` decodes your desktop background\n"
+             L"# once and costs nothing after that - it is exactly right whenever\n"
+             L"# nothing is behind the dock, and wrong-looking over a window.\n"
+             L"# `screen` refracts what is actually there.\n"
+             L"#\n"
+             L"# The catch with `screen` is not performance - it copies only the strip\n"
+             L"# the dock covers and ignores changes that miss it. It is that the dock\n"
+             L"# has to be excluded from screen capture to stop it refracting its own\n"
+             L"# last frame forever, and that same exclusion makes the dock invisible\n"
+             L"# in your own screenshots and screen shares.\n"
+             L"backdrop = %s\n"
+             L"\n"
              L"# --- Magnification -------------------------------------------------\n"
              L"magnification = %s\n"
              L"\n"
-             L"# How big the icon under the cursor gets, and how far either side of\n"
-             L"# it the swell reaches, in pixels.\n"
+             L"# How big the icon under the cursor gets (2.00 is the ceiling - the\n"
+             L"# window reserves headroom for it at startup), and how far either side\n"
+             L"# of it the swell reaches, in pixels.\n"
              L"max-scale = %.2f\n"
              L"influence = %.0f\n"
              L"\n"
@@ -235,7 +257,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"dwell-seconds = %.1f\n"
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
-             tintAlpha, magnification ? L"on" : L"off", maxScale, influencePx,
+             tintAlpha, backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
+             magnification ? L"on" : L"off", maxScale, influencePx,
              iconBulge ? L"on" : L"off", autoHide ? L"on" : L"off", dwellSeconds, slideSeconds);
 
     fclose(file);

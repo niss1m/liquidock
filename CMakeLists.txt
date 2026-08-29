@@ -54,12 +54,15 @@ add_executable(liquidock WIN32
     src/app/TrayIcon.cpp
     src/core/ConfigPaths.cpp
     src/core/ConfigWatcher.cpp
+    src/core/CrashHandler.cpp
     src/core/Log.cpp
     src/core/Settings.cpp
     src/gfx/GraphicsDevice.cpp
     src/gfx/CompositionTarget.cpp
     src/gfx/IconAtlas.cpp
     src/gfx/ShaderCache.cpp
+    src/gfx/TextureDump.cpp
+    src/glass/CaptureBackdrop.cpp
     src/glass/WallpaperBackdrop.cpp
     src/glass/FrostChain.cpp
     src/model/IconLoader.cpp
@@ -103,6 +106,7 @@ target_link_libraries(liquidock PRIVATE
     oleaut32
     uuid
     comctl32
+    dbghelp
     user32
     gdi32)
 
@@ -115,6 +119,10 @@ if(MSVC)
     # mt.exe has nothing to reconcile.
     target_link_options(liquidock PRIVATE
         "/MANIFESTUAC:NO"
+        # A linker map turns the RVA in a Windows Error Reporting entry into a
+        # function name, which is the difference between debugging a crash and
+        # guessing at one. It costs nothing at runtime and is not shipped.
+        "/MAP:$<TARGET_FILE_DIR:liquidock>/liquidock.map"
         $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>)
 
     # Static CRT keeps the portable build a single file with no redistributable.

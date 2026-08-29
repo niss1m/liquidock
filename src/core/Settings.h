@@ -4,6 +4,17 @@
 
 namespace liquidock {
 
+// Where the glass gets the image it refracts.
+enum class BackdropSource {
+    // The desktop wallpaper, decoded once. Costs nothing after load and is
+    // exactly right whenever nothing is behind the dock.
+    Wallpaper,
+    // The live screen. Correct over a window, but it requires excluding the
+    // dock from capture to break the feedback loop, and that same exclusion
+    // hides the dock from the user's own screenshots and screen shares.
+    Screen,
+};
+
 // Everything about the dock a person is allowed to change, and the file it
 // lives in.
 //
@@ -27,6 +38,7 @@ struct Settings {
     float lightAngleDegrees = 0.0f;
     float lightIntensity = 0.0f;
     float tintAlpha = 0.0f;
+    BackdropSource backdrop = BackdropSource::Wallpaper;
 
     // --- Magnification ----------------------------------------------------
     bool magnification = true;
