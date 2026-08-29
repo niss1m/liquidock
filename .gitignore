@@ -1,0 +1,27 @@
+# Build output
+build/
+out/
+*.user
+
+# CMake
+CMakeUserPresets.json
+
+# Generated sources
+src/generated/
+
+# Packaging artifacts
+packaging/**/*.msix
+packaging/**/*.appx
+packaging/**/*.pfx
+packaging/steam/sdk/
+
+# Design exports are reference material, not build inputs
+design/figma-export/*.png
+design/figma-export/*.svg
+
+# Editor / OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

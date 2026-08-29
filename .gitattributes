@@ -1,0 +1,22 @@
+# Normalise to LF in the repository, check out native on Windows.
+* text=auto
+
+*.cpp   text
+*.h     text
+*.hlsl  text
+*.hlsli text
+*.cmake text
+*.txt   text
+*.json  text
+*.md    text
+
+# Must keep CRLF on disk or the tools that consume them misbehave.
+*.ps1        text eol=crlf
+*.cmd        text eol=crlf
+*.bat        text eol=crlf
+*.manifest   text eol=crlf
+
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.pfx  binary

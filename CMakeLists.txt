@@ -1,0 +1,115 @@
+cmake_minimum_required(VERSION 3.21)
+
+project(LiquiDock
+    VERSION 0.1.0
+    DESCRIPTION "A macOS-style dock for Windows with a real liquid glass background"
+    LANGUAGES CXX)
+
+if(NOT WIN32)
+    message(FATAL_ERROR "LiquiDock targets Windows only.")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ---------------------------------------------------------------------------
+# Shader embedding
+#
+# Shaders are compiled at runtime with D3DCompile rather than offline with fxc.
+# That buys hot reload, which is the whole point of the glass tuning work in M1:
+# edit a .hlsl, save, and the dock re-renders without a restart.
+#
+# To keep release builds self-contained, the HLSL *source* is embedded into a
+# generated header at build time. Debug builds prefer the file on disk so the
+# watcher can pick up edits. M5 switches release to precompiled bytecode to cut
+# the few milliseconds of startup compile.
+# ---------------------------------------------------------------------------
+set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(EMBEDDED_SHADERS "${GENERATED_DIR}/EmbeddedShaders.h")
+
+file(GLOB SHADER_FILES CONFIGURE_DEPENDS "${SHADER_DIR}/*.hlsl" "${SHADER_DIR}/*.hlsli")
+
+add_custom_command(
+    OUTPUT "${EMBEDDED_SHADERS}"
+    COMMAND ${CMAKE_COMMAND}
+            -DSHADER_DIR=${SHADER_DIR}
+            -DOUTPUT=${EMBEDDED_SHADERS}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShaders.cmake"
+    DEPENDS ${SHADER_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShaders.cmake"
+    COMMENT "Embedding HLSL sources"
+    VERBATIM)
+
+add_custom_target(liquidock_shaders DEPENDS "${EMBEDDED_SHADERS}")
+
+# ---------------------------------------------------------------------------
+# Executable
+# ---------------------------------------------------------------------------
+add_executable(liquidock WIN32
+    src/app/main.cpp
+    src/app/DockWindow.cpp
+    src/app/TrayIcon.cpp
+    src/core/Log.cpp
+    src/gfx/GraphicsDevice.cpp
+    src/gfx/CompositionTarget.cpp
+    src/gfx/ShaderCache.cpp
+    "${EMBEDDED_SHADERS}")
+
+add_dependencies(liquidock liquidock_shaders)
+
+target_include_directories(liquidock PRIVATE src "${GENERATED_DIR}")
+
+target_compile_definitions(liquidock PRIVATE
+    UNICODE
+    _UNICODE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    # Windows 10 2004 is the floor: WDA_EXCLUDEFROMCAPTURE and the Windows
+    # Graphics Capture surface we need in M3 both land there.
+    _WIN32_WINNT=0x0A00
+    LIQUIDOCK_VERSION="${PROJECT_VERSION}"
+    LIQUIDOCK_VERSION_W=L"${PROJECT_VERSION}"
+    $<$<CONFIG:Debug>:LIQUIDOCK_DEBUG>
+    $<$<CONFIG:Debug>:LIQUIDOCK_SHADER_DIR="${SHADER_DIR}">)
+
+target_link_libraries(liquidock PRIVATE
+    d3d11
+    dxgi
+    dcomp
+    d3dcompiler
+    d2d1
+    dwrite
+    windowscodecs
+    dxguid
+    shcore
+    shell32
+    ole32
+    oleaut32
+    uuid
+    comctl32
+    user32
+    gdi32)
+
+if(MSVC)
+    target_compile_options(liquidock PRIVATE
+        /W4 /permissive- /utf-8 /Zc:__cplusplus /MP
+        $<$<CONFIG:Release>:/O2 /GL /Gy>)
+    # Embed the manifest explicitly rather than relying on the generator to pick
+    # up a .manifest source file, which only some generators do. MANIFESTUAC:NO
+    # stops the linker synthesising a second trustInfo block that would collide
+    # with the one in our manifest.
+    target_link_options(liquidock PRIVATE
+        "/MANIFEST:EMBED"
+        "/MANIFESTUAC:NO"
+        "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/app/liquidock.manifest"
+        $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>)
+
+    # Static CRT keeps the portable build a single file with no redistributable.
+    set_property(TARGET liquidock PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+set_target_properties(liquidock PROPERTIES
+    OUTPUT_NAME "liquidock"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
