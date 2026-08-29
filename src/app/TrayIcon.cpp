@@ -32,8 +32,12 @@ bool TrayIcon::Create() {
     wc.lpszClassName = kWindowClass;
     RegisterClassExW(&wc);
 
-    hwnd_ = CreateWindowExW(0, kWindowClass, L"LiquiDock", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
-                            wc.hInstance, this);
+    // Deliberately NOT a message-only (HWND_MESSAGE) window. Message-only
+    // windows are excluded from broadcasts, and TaskbarCreated - the whole
+    // reason this window exists beyond the icon callback - is a broadcast. It
+    // is an ordinary top-level window that is simply never shown.
+    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, L"LiquiDock", WS_POPUP, 0, 0, 0, 0,
+                            nullptr, nullptr, wc.hInstance, this);
     if (!hwnd_) {
         LogError("Tray window creation failed: {}", GetLastError());
         return false;
@@ -43,6 +47,11 @@ bool TrayIcon::Create() {
     // tray client to re-register. Without it the dock survives an explorer
     // crash but loses its only exit affordance.
     taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
+
+    // Vista and later filter broadcasts to lower-integrity processes. The dock
+    // runs asInvoker so this is normally a no-op, but it costs nothing and
+    // makes the re-registration reliable if that ever changes.
+    ChangeWindowMessageFilterEx(hwnd_, taskbarCreatedMessage_, MSGFLT_ALLOW, nullptr);
 
     return AddIcon();
 }
@@ -125,12 +134,12 @@ LRESULT CALLBACK TrayIcon::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam, 
         self = reinterpret_cast<TrayIcon*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
     if (self) {
-        return self->WndProc(message, wParam, lParam);
+        return self->WndProc(hwnd, message, wParam, lParam);
     }
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-LRESULT TrayIcon::WndProc(UINT message, WPARAM wParam, LPARAM lParam) {
+LRESULT TrayIcon::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == taskbarCreatedMessage_ && taskbarCreatedMessage_ != 0) {
         iconAdded_ = false;
         AddIcon();
@@ -156,7 +165,7 @@ LRESULT TrayIcon::WndProc(UINT message, WPARAM wParam, LPARAM lParam) {
         default:
             break;
     }
-    return DefWindowProcW(hwnd_, message, wParam, lParam);
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 } // namespace liquidock

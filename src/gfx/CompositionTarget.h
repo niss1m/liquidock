@@ -19,15 +19,23 @@ public:
     CompositionTarget() = default;
     CompositionTarget(const CompositionTarget&) = delete;
     CompositionTarget& operator=(const CompositionTarget&) = delete;
+    ~CompositionTarget() { Reset(); }
 
     bool Initialize(GraphicsDevice& device, HWND hwnd, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
 
     // Blocks until the composition engine is ready for another frame, then
     // returns the back buffer view. Returns nullptr if the frame should be
-    // skipped.
+    // skipped, in which case no wait was consumed.
+    //
+    // Every successful BeginFrame MUST be followed by EndFrame. The wait takes
+    // a slot from the frame-latency semaphore and only Present gives it back;
+    // bailing out in between stalls the next frame for a full timeout.
     ID3D11RenderTargetView* BeginFrame();
     bool EndFrame();
+
+    // Releases the swap chain, the composition tree and the waitable handle.
+    void Reset();
 
     UINT width() const { return width_; }
     UINT height() const { return height_; }

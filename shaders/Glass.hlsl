@@ -70,10 +70,12 @@ float4 PSMain(Varyings input) : SV_Target
     // them fxc emits X3571, which warnings-as-errors turns into a build break.
     const float height = 1.0 - pow(max(1.0 - inset, 1e-5), lerp(1.0, 4.0, saturate(SPLAY)));
 
-    // The SDF gradient is the outward direction in the plane; tilting it by the
-    // remaining bevel height gives the surface normal M1 refracts through.
+    // The SDF gradient points outward, away from the shape. A convex bevel
+    // tilts its normal the same way - outward and toward the viewer - so the
+    // slope is added, not negated. Negating it puts the highlight on the rim
+    // opposite the light, and would send M1's refraction the wrong way too.
     const float2 slope = normalize(gradient + 1e-6) * (1.0 - height);
-    const float3 normal = normalize(float3(-slope, 0.35));
+    const float3 normal = normalize(float3(slope, 0.35));
 
     // Negating cosine puts the highlight on the top-left rim at -45 degrees,
     // matching the light puck in the Figma glass panel.
@@ -81,10 +83,19 @@ float4 PSMain(Varyings input) : SV_Target
     const float rim = pow(max(dot(normal.xy, lightDir), 1e-5), 6.0);
     const float specular = rim * (1.0 - height) * saturate(LIGHT_INTENSITY);
 
-    const float3 color = saturate(gTint.rgb + specular);
-    const float alpha = gTint.a * coverage;
+    // The rim highlight is emissive, so it has to be added *after*
+    // premultiplication rather than folded into the tint colour. The design
+    // tint is pure white, so `saturate(gTint.rgb + specular)` would clamp to 1
+    // no matter what the lighting did - every term above would be dead code.
+    //
+    // Adding light raises alpha along with colour, which is what keeps the
+    // premultiplied invariant rgb <= a intact.
+    const float baseAlpha = gTint.a * coverage;
+    const float glow = saturate(specular) * coverage;
+    const float alpha = saturate(baseAlpha + glow);
+    const float3 premultiplied = gTint.rgb * baseAlpha + glow;
 
     // The composition swap chain is premultiplied; straight alpha is not a
-    // legal alpha mode for it, so premultiply on the way out.
-    return float4(color * alpha, alpha);
+    // legal alpha mode for it.
+    return float4(premultiplied, alpha);
 }

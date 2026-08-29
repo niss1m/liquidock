@@ -130,8 +130,10 @@ ComPtr<ID3D11VertexShader> ShaderCache::VertexShader(std::string_view name,
     }
 
     ComPtr<ID3D11VertexShader> shader;
-    if (FAILED(device_->CreateVertexShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(),
-                                           nullptr, &shader))) {
+    const HRESULT hr = device_->CreateVertexShader(bytecode->GetBufferPointer(),
+                                                   bytecode->GetBufferSize(), nullptr, &shader);
+    if (FAILED(hr)) {
+        LogError("CreateVertexShader({}::{}) failed - {}", name, entryPoint, FormatHResult(hr));
         return nullptr;
     }
     vertexShaders_[key] = shader;
@@ -150,8 +152,10 @@ ComPtr<ID3D11PixelShader> ShaderCache::PixelShader(std::string_view name, const 
     }
 
     ComPtr<ID3D11PixelShader> shader;
-    if (FAILED(device_->CreatePixelShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(),
-                                          nullptr, &shader))) {
+    const HRESULT hr = device_->CreatePixelShader(bytecode->GetBufferPointer(),
+                                                  bytecode->GetBufferSize(), nullptr, &shader);
+    if (FAILED(hr)) {
+        LogError("CreatePixelShader({}::{}) failed - {}", name, entryPoint, FormatHResult(hr));
         return nullptr;
     }
     pixelShaders_[key] = shader;

@@ -22,7 +22,7 @@ public:
 
 private:
     static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
-    LRESULT WndProc(UINT message, WPARAM wParam, LPARAM lParam);
+    LRESULT WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     bool AddIcon();
     void ShowMenu();

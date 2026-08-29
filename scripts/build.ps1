@@ -61,6 +61,15 @@ if ($Clean -and (Test-Path $buildDir)) {
     Remove-Item -Recurse -Force $buildDir
 }
 
+# A running dock holds a write lock on its own exe, and the linker fails with
+# LNK1168 rather than anything that names the cause. Stop it before building.
+$running = Get-Process liquidock -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "Stopping running LiquiDock instance before linking..." -ForegroundColor Yellow
+    $running | Stop-Process -Force
+    Start-Sleep -Milliseconds 300
+}
+
 cmake --preset $Preset
 if ($LASTEXITCODE -ne 0) { throw "Configure failed." }
 

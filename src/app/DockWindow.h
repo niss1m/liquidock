@@ -48,7 +48,10 @@ public:
 
 private:
     static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
-    LRESULT WndProc(UINT message, WPARAM wParam, LPARAM lParam);
+    // Takes the HWND as a parameter rather than reading hwnd_: WM_DESTROY
+    // clears the member, and WM_NCDESTROY arrives afterwards and still has to
+    // reach DefWindowProc with a valid handle.
+    LRESULT WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     bool CreateResources();
     void UpdatePlacement();
@@ -62,6 +65,7 @@ private:
     ComPtr<ID3D11Buffer> constantBuffer_;
     UINT dpi_ = 96;
     bool diagnostic_ = false;
+    bool deviceLost_ = false;
     LARGE_INTEGER startTime_{};
     LARGE_INTEGER frequency_{};
 };

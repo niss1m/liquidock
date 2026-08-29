@@ -5,7 +5,22 @@
 
 namespace liquidock {
 
+void CompositionTarget::Reset() {
+    visual_.Reset();
+    target_.Reset();
+    rtv_.Reset();
+    swapChain_.Reset();
+    if (waitable_) {
+        // GetFrameLatencyWaitableObject hands out a handle the caller owns.
+        CloseHandle(waitable_);
+        waitable_ = nullptr;
+    }
+    width_ = 0;
+    height_ = 0;
+}
+
 bool CompositionTarget::Initialize(GraphicsDevice& device, HWND hwnd, UINT width, UINT height) {
+    Reset();
     device_ = &device;
     width_ = (width > 0) ? width : 1;
     height_ = (height > 0) ? height : 1;
@@ -29,6 +44,9 @@ bool CompositionTarget::Initialize(GraphicsDevice& device, HWND hwnd, UINT width
 
     ComPtr<IDXGISwapChain2> swapChain2;
     if (SUCCEEDED(swapChain_.As(&swapChain2))) {
+        // This is the call that governs latency for this swap chain. The
+        // device-level IDXGIDevice1::SetMaximumFrameLatency does not apply to a
+        // FRAME_LATENCY_WAITABLE_OBJECT swap chain at all.
         swapChain2->SetMaximumFrameLatency(1);
         waitable_ = swapChain2->GetFrameLatencyWaitableObject();
     }
@@ -66,10 +84,12 @@ bool CompositionTarget::Resize(UINT width, UINT height) {
     }
 
     // The context can still hold a reference to the old back buffer; the flip
-    // model refuses to resize until every reference is released.
+    // model refuses to resize until every reference is released. Release the
+    // view *before* flushing - flushing first retires commands while the view
+    // still holds its reference, which is the wrong way round.
     device_->context()->OMSetRenderTargets(0, nullptr, nullptr);
-    device_->context()->Flush();
     rtv_.Reset();
+    device_->context()->Flush();
 
     LD_CHECK(swapChain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN,
                                        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT));
@@ -79,6 +99,11 @@ bool CompositionTarget::Resize(UINT width, UINT height) {
 }
 
 ID3D11RenderTargetView* CompositionTarget::BeginFrame() {
+    // Check first, wait second. Waiting and then returning nullptr would
+    // consume a frame-latency slot that no Present ever returns.
+    if (!rtv_) {
+        return nullptr;
+    }
     if (waitable_) {
         WaitForSingleObjectEx(waitable_, 1000, TRUE);
     }

@@ -28,10 +28,13 @@ bool GraphicsDevice::Initialize() {
     }
 #endif
 
+    // 11_0 is the floor, not 10_1: ShaderCache compiles vs_5_0/ps_5_0
+    // exclusively, and those profiles cannot be created on a 10_1 device.
+    // Accepting 10_1 here would produce a device that comes up cleanly and then
+    // fails every shader creation, leaving a permanently blank dock.
     static constexpr D3D_FEATURE_LEVEL kLevels[] = {
         D3D_FEATURE_LEVEL_11_1,
         D3D_FEATURE_LEVEL_11_0,
-        D3D_FEATURE_LEVEL_10_1,
     };
 
     ComPtr<ID3D11Device> device;
@@ -54,13 +57,10 @@ bool GraphicsDevice::Initialize() {
     LD_CHECK(context.As(&context_));
     LD_CHECK(d3d_.As(&dxgi_));
 
-    // A single queued frame keeps the dock's response to the cursor tight. The
-    // default of three adds up to two frames of lag to the magnification wave,
-    // which is exactly the feel we are trying to get right.
-    ComPtr<IDXGIDevice1> dxgi1;
-    if (SUCCEEDED(dxgi_.As(&dxgi1))) {
-        dxgi1->SetMaximumFrameLatency(1);
-    }
+    // Frame latency is set per swap chain in CompositionTarget, not here:
+    // IDXGIDevice1::SetMaximumFrameLatency has no effect on a swap chain
+    // created with FRAME_LATENCY_WAITABLE_OBJECT, which is the only kind this
+    // process creates.
 
     ComPtr<IDXGIAdapter> adapter;
     LD_CHECK(dxgi_->GetAdapter(&adapter));

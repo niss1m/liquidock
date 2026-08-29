@@ -147,11 +147,13 @@ void DockWindow::UpdatePlacement() {
 }
 
 void DockWindow::Render() {
-    ID3D11RenderTargetView* rtv = target_.BeginFrame();
-    if (!rtv) {
+    if (deviceLost_) {
         return;
     }
 
+    // Everything that can fail is done before BeginFrame. BeginFrame takes a
+    // slot from the frame-latency semaphore that only Present hands back, so
+    // returning early after it stalls the *next* frame for a full timeout.
     ComPtr<ID3D11VertexShader> vs = shaders_->VertexShader("Glass", "VSMain");
     ComPtr<ID3D11PixelShader> ps = shaders_->PixelShader("Glass", "PSMain");
     if (!vs || !ps) {
@@ -204,6 +206,11 @@ void DockWindow::Render() {
     memcpy(mapped.pData, &constants, sizeof(constants));
     ctx->Unmap(constantBuffer_.Get(), 0);
 
+    ID3D11RenderTargetView* rtv = target_.BeginFrame();
+    if (!rtv) {
+        return;
+    }
+
     const D3D11_VIEWPORT viewport{0.0f, 0.0f, viewWidth, viewHeight, 0.0f, 1.0f};
     constexpr float kTransparent[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
@@ -225,7 +232,16 @@ void DockWindow::Render() {
     ID3D11RenderTargetView* nullRtv = nullptr;
     ctx->OMSetRenderTargets(1, &nullRtv, nullptr);
 
-    target_.EndFrame();
+    if (!target_.EndFrame()) {
+        // A TDR or a driver update removed the adapter. Everything device-bound
+        // is now invalid, so stop rendering rather than repainting a dead swap
+        // chain on every message.
+        // TODO(M3): rebuild the device and every device-bound resource instead
+        // of parking here. Needs the recreate path GraphicsDevice does not have
+        // yet, and is the same plumbing a monitor hot-plug will want.
+        deviceLost_ = true;
+        LogError("Device lost - the dock will stay blank until it is restarted");
+    }
 }
 
 LRESULT CALLBACK DockWindow::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -239,18 +255,18 @@ LRESULT CALLBACK DockWindow::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam
         self = reinterpret_cast<DockWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
     if (self) {
-        return self->WndProc(message, wParam, lParam);
+        return self->WndProc(hwnd, message, wParam, lParam);
     }
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-LRESULT DockWindow::WndProc(UINT message, WPARAM wParam, LPARAM lParam) {
+LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_PAINT: {
             PAINTSTRUCT ps{};
-            BeginPaint(hwnd_, &ps);
+            BeginPaint(hwnd, &ps);
             Render();
-            EndPaint(hwnd_, &ps);
+            EndPaint(hwnd, &ps);
             return 0;
         }
 
@@ -291,7 +307,7 @@ LRESULT DockWindow::WndProc(UINT message, WPARAM wParam, LPARAM lParam) {
         default:
             break;
     }
-    return DefWindowProcW(hwnd_, message, wParam, lParam);
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 } // namespace liquidock
