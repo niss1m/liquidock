@@ -139,7 +139,13 @@ private:
     void StartIconLoad();
     void DrainLoadedIcons();
     void Launch(int itemIndex);
-    void ShowItemMenu(int itemIndex, POINT screen);
+    // One menu for the whole dock, which grows the item commands when the click
+    // landed on an icon. `itemIndex` of -1 means the bar itself.
+    void ShowDockMenu(int itemIndex, POINT screen);
+    // Asks for a program with the standard file dialog and appends it.
+    void AddItemViaDialog();
+    // Re-reads items.txt and rebuilds everything that depends on it.
+    void ReloadItemsFromDisk();
 
     GraphicsDevice* device_ = nullptr;
     std::unique_ptr<ShaderCache> shaders_;

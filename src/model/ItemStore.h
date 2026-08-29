@@ -1,5 +1,7 @@
 #pragma once
 
+#include <windows.h>
+
 #include <string>
 #include <vector>
 
@@ -37,6 +39,21 @@ public:
     // Removes one item and rewrites the file. Returns false if the index is out
     // of range.
     bool Remove(size_t index);
+
+    // Adds `item` to the end of its group and writes the file. False if the
+    // dock is already full.
+    bool Add(DockItem item);
+
+    // Swaps an item with its neighbour, staying inside its own group so a move
+    // can never shuffle an app across the hairline into the utility run.
+    // Returns the item's new index, or -1 if it could not move.
+    int Move(size_t index, int direction);
+
+    // Asks for a program with the standard file dialog. False if cancelled.
+    // Lives here because acquiring an item is the item store's business, and
+    // because both the dock's context menu and the preferences window need it -
+    // two copies of a file dialog is two places for the flags to drift.
+    static bool PickProgram(HWND owner, DockItem* out);
 
     // %LOCALAPPDATA%\LiquiDock\items.txt, created on demand. Empty if the
     // directory could not be resolved.

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/Settings.h"
+#include "model/ItemStore.h"
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
 
@@ -32,13 +33,16 @@ public:
     // Called on every change, with the new settings, so the dock can apply them
     // before the file has even been written.
     using ChangedCallback = std::function<void(const Settings&)>;
+    // Called when the dock's contents change, so the dock can re-read them.
+    using ItemsCallback = std::function<void()>;
 
     SettingsWindow() = default;
     SettingsWindow(const SettingsWindow&) = delete;
     SettingsWindow& operator=(const SettingsWindow&) = delete;
     ~SettingsWindow();
 
-    bool Create(GraphicsDevice& device, const Settings& settings, ChangedCallback onChanged);
+    bool Create(GraphicsDevice& device, const Settings& settings, ChangedCallback onChanged,
+                ItemsCallback onItemsChanged);
     void Destroy();
 
     // Brings the window up, centred on `nearMonitor`, loading the current
@@ -54,7 +58,7 @@ private:
     // the field in Settings that it edits - binding by pointer keeps the whole
     // table declarative, which is what makes it cheap to add a setting.
     struct Row {
-        enum class Kind { Section, Slider, Toggle, Choice };
+        enum class Kind { Section, Slider, Toggle, Choice, Item, AddItem };
 
         Kind kind = Kind::Slider;
         const wchar_t* label = nullptr;
@@ -71,6 +75,7 @@ private:
         std::vector<std::wstring> options;
 
         int column = 0;
+        int itemIndex = -1; // for Kind::Item
         D2D1_RECT_F bounds{};  // the whole row, for hit testing and hover
         D2D1_RECT_F control{}; // the interactive part on the right
     };
@@ -88,11 +93,20 @@ private:
     // Applies a click or drag at `x` to the row, and returns true if the value
     // actually moved - a redraw and a save are only worth it if it did.
     bool ApplyPointer(int row, float x, bool dragging);
+    // Item rows rebuild the whole table, so they cannot be handled through
+    // ApplyPointer without invalidating the Row& it is holding.
+    bool HandleItemClick(int row, float x);
     void CommitChange();
+    void CommitItems();
 
     void DrawSlider(const Row& row, bool hovered);
     void DrawToggle(const Row& row, bool hovered);
     void DrawChoice(const Row& row, float pointerX);
+    void DrawItem(const Row& row, bool hovered, float pointerX);
+    // Chevrons and crosses drawn from line segments rather than glyphs, so they
+    // do not depend on a symbol font being present and are crisp at any size.
+    void DrawChevron(const D2D1_RECT_F& box, bool up, const D2D1_COLOR_F& colour);
+    void DrawCross(const D2D1_RECT_F& box, const D2D1_COLOR_F& colour);
     void DrawText(const std::wstring& text, IDWriteTextFormat* format, const D2D1_RECT_F& rect,
                   const D2D1_COLOR_F& colour);
 
@@ -114,7 +128,9 @@ private:
     ComPtr<IDWriteTextFormat> valueFormat_;
 
     Settings settings_;
+    ItemStore items_;
     ChangedCallback onChanged_;
+    ItemsCallback onItemsChanged_;
     std::vector<Row> rows_;
     // Mirrors Settings::backdrop, which is an enum the declarative table cannot
     // bind to as an int without lying about its type.
@@ -122,6 +138,10 @@ private:
 
     UINT dpi_ = 96;
     int hoverRow_ = -1;
+    // The items column scrolls on its own; the rest of the panel is fixed.
+    float itemScroll_ = 0.0f;
+    float itemScrollMax_ = 0.0f;
+    D2D1_RECT_F itemsClip_{};
     int dragRow_ = -1;
     float pointerX_ = 0.0f;
     float pointerY_ = 0.0f;

@@ -1,12 +1,14 @@
 #include "app/DockWindow.h"
 
 #include <shellapi.h>
+#include <shobjidl_core.h>
 #include <shellscalingapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <numbers>
 #include <thread>
 
@@ -63,7 +65,10 @@ constexpr UINT_PTR kStatsTimer = 7;
 enum ItemMenuCommand : UINT {
     kCommandOpen = 1,
     kCommandRemove = 2,
-    kCommandEditFile = 3,
+    kCommandAdd = 3,
+    kCommandPreferences = 4,
+    kCommandEditFile = 5,
+    kCommandQuit = 6,
 };
 
 constexpr int kTriggerThicknessPx = 2; // the strip that notices the cursor
@@ -610,6 +615,26 @@ void DockWindow::ApplyBackdropSource() {
     frostDirty_ = true;
 }
 
+void DockWindow::AddItemViaDialog() {
+    // The dwell timer must not slide the dock away while a modal dialog it
+    // opened is on screen.
+    menuOpen_ = true;
+    KillTimer(hwnd_, kHideTimer);
+    DockItem item;
+    const bool picked = ItemStore::PickProgram(hwnd_, &item);
+    menuOpen_ = false;
+    StartHideCountdown();
+
+    if (picked && store_.Add(std::move(item))) {
+        ReloadItems();
+    }
+}
+
+void DockWindow::ReloadItemsFromDisk() {
+    store_.Load();
+    ReloadItems();
+}
+
 void DockWindow::ReloadItems() {
     layout_.SetItems(store_.items());
     UpdatePlacement(); // the dock's width depends on how many items it holds
@@ -654,22 +679,30 @@ void DockWindow::Launch(int itemIndex) {
     }).detach();
 }
 
-void DockWindow::ShowItemMenu(int itemIndex, POINT screen) {
-    if (itemIndex < 0 || itemIndex >= static_cast<int>(store_.items().size())) {
-        return;
-    }
+void DockWindow::ShowDockMenu(int itemIndex, POINT screen) {
+    const bool onItem =
+        itemIndex >= 0 && itemIndex < static_cast<int>(store_.items().size());
 
     HMENU menu = CreatePopupMenu();
     if (!menu) {
         return;
     }
-    const std::wstring label = store_.items()[static_cast<size_t>(itemIndex)].label;
-    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, label.c_str());
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kCommandOpen, L"Open");
-    AppendMenuW(menu, MF_STRING, kCommandRemove, L"Remove from Dock");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // The item commands are the top of the menu when there is an item, and
+    // simply absent when the click landed on the bar - rather than a fixed menu
+    // with half its entries greyed out, which tells the user nothing.
+    if (onItem) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0,
+                    store_.items()[static_cast<size_t>(itemIndex)].label.c_str());
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kCommandOpen, L"Open");
+        AppendMenuW(menu, MF_STRING, kCommandRemove, L"Remove from Dock");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
+    AppendMenuW(menu, MF_STRING, kCommandAdd, L"Add app…");
+    AppendMenuW(menu, MF_STRING, kCommandPreferences, L"Preferences…");
     AppendMenuW(menu, MF_STRING, kCommandEditFile, L"Edit the items file…");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kCommandQuit, L"Quit LiquiDock");
 
     // The dwell timer must not fire while a menu is up, or the dock slides away
     // from underneath the thing the user is choosing from.
@@ -690,13 +723,22 @@ void DockWindow::ShowItemMenu(int itemIndex, POINT screen) {
             Launch(itemIndex);
             break;
         case kCommandRemove:
-            if (store_.Remove(static_cast<size_t>(itemIndex))) {
+            if (onItem && store_.Remove(static_cast<size_t>(itemIndex))) {
                 // Every item after this one shifted down, and atlas slots are
                 // item indices, so the icons are re-extracted rather than
                 // shuffled. It costs a few tens of milliseconds on a thread
                 // nobody is waiting on.
                 ReloadItems();
             }
+            break;
+        case kCommandAdd:
+            AddItemViaDialog();
+            break;
+        case kCommandPreferences:
+            PostMessageW(hwnd_, kShowSettingsMessage, 0, 0);
+            break;
+        case kCommandQuit:
+            PostQuitMessage(0);
             break;
         case kCommandEditFile: {
             const std::wstring path = ItemStore::ConfigPath();
@@ -1361,10 +1403,7 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             POINT screen{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             ClientToScreen(hwnd, &screen);
             if (CursorToLayout(screen, &x, &y)) {
-                const int item = layout_.ItemAt(x, y);
-                if (item >= 0) {
-                    ShowItemMenu(item, screen);
-                }
+                ShowDockMenu(layout_.ItemAt(x, y), screen);
             }
             return 0;
         }
@@ -1419,14 +1458,17 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             if (!settingsWindow_) {
                 settingsWindow_ = std::make_unique<SettingsWindow>();
-                if (!settingsWindow_->Create(*device_, settings_, [this](const Settings& next) {
+                if (!settingsWindow_->Create(
+                        *device_, settings_,
+                        [this](const Settings& next) {
                         // Applied before the file is even written, so dragging a
                         // slider changes the dock under the cursor.
-                        settings_ = next;
-                        ApplySettings();
-                        UpdatePlacement();
-                        RequestRedraw();
-                    })) {
+                            settings_ = next;
+                            ApplySettings();
+                            UpdatePlacement();
+                            RequestRedraw();
+                        },
+                        [this] { ReloadItemsFromDisk(); })) {
                     settingsWindow_.reset();
                     return 0;
                 }

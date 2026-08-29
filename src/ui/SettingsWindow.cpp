@@ -21,7 +21,7 @@ constexpr UINT_PTR kSaveTimer = 1;
 constexpr UINT kSaveDelayMs = 400;
 
 namespace layout {
-constexpr float kWidth = 880.0f;
+constexpr float kWidth = 1180.0f;
 constexpr float kPadding = 26.0f;
 constexpr float kTitleHeight = 62.0f;
 constexpr float kRowHeight = 54.0f;
@@ -30,6 +30,9 @@ constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
 constexpr float kValueWidth = 48.0f;
 constexpr float kFooterHeight = 34.0f;
+constexpr float kItemHeight = 34.0f;
+constexpr float kItemButton = 24.0f;
+constexpr int kColumns = 3;
 constexpr float kCorner = design::kCornerRadius;
 } // namespace layout
 
@@ -37,10 +40,11 @@ D2D1_COLOR_F Grey(float level, float alpha) {
     return D2D1::ColorF(level, level, level, alpha);
 }
 
-// The panel is nearly opaque. The dock is glass because you are meant to look
-// past it; preferences are meant to be read, and text over a moving desktop is
-// the single most common way a beautiful settings panel becomes an unusable one.
-const D2D1_COLOR_F kPanel = D2D1::ColorF(0.086f, 0.086f, 0.098f, 0.97f);
+// The panel is opaque. The dock is glass because you are meant to look past it;
+// preferences are meant to be read. Even three percent of translucency ghosts
+// white text from the window behind straight through the labels - which is a
+// 35% swing in brightness against a panel this dark, and looks like a bug.
+const D2D1_COLOR_F kPanel = D2D1::ColorF(0.086f, 0.086f, 0.098f, 1.0f);
 const D2D1_COLOR_F kPanelEdge = Grey(1.0f, 0.10f);
 const D2D1_COLOR_F kTitle = Grey(1.0f, 0.95f);
 const D2D1_COLOR_F kSection = Grey(1.0f, 0.42f);
@@ -74,10 +78,11 @@ SettingsWindow::~SettingsWindow() {
 }
 
 bool SettingsWindow::Create(GraphicsDevice& device, const Settings& settings,
-                            ChangedCallback onChanged) {
+                            ChangedCallback onChanged, ItemsCallback onItemsChanged) {
     device_ = &device;
     settings_ = settings;
     onChanged_ = std::move(onChanged);
+    onItemsChanged_ = std::move(onItemsChanged);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -197,30 +202,82 @@ void SettingsWindow::BuildRows() {
            1, L" s");
     slider(L"Slide time", L"How long the dock takes to arrive", &settings_.slideSeconds, 0.0f,
            0.8f, 2, 1, L" s");
+
+    // The dock's contents. This is the whole reason the panel has a third
+    // column: editing what is *on* the dock by hand in a text file is the part
+    // nobody should have to do.
+    section(L"Items", 2);
+    const auto& items = items_.items();
+    for (size_t i = 0; i < items.size(); ++i) {
+        Row row;
+        row.kind = Row::Kind::Item;
+        row.itemIndex = static_cast<int>(i);
+        row.column = 2;
+        rows_.push_back(std::move(row));
+    }
+    Row add;
+    add.kind = Row::Kind::AddItem;
+    add.label = L"Add app…";
+    add.column = 2;
+    rows_.push_back(std::move(add));
 }
 
 void SettingsWindow::LayoutRows() {
-    const float columnWidth = (layout::kWidth - 2.0f * layout::kPadding - layout::kColumnGap) * 0.5f;
-    float y[2] = {layout::kTitleHeight, layout::kTitleHeight};
+    const float columnWidth =
+        (layout::kWidth - 2.0f * layout::kPadding - (layout::kColumns - 1) * layout::kColumnGap) /
+        layout::kColumns;
+    float y[layout::kColumns];
+    for (float& value : y) {
+        value = layout::kTitleHeight;
+    }
 
     for (Row& row : rows_) {
-        const int column = row.column;
+        const int column = std::clamp(row.column, 0, layout::kColumns - 1);
         const float left = layout::kPadding + column * (columnWidth + layout::kColumnGap);
-        const float height =
-            (row.kind == Row::Kind::Section) ? layout::kSectionHeight : layout::kRowHeight;
+        float height = layout::kRowHeight;
+        if (row.kind == Row::Kind::Section) {
+            height = layout::kSectionHeight;
+        } else if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+            height = layout::kItemHeight;
+        }
 
-        row.bounds = D2D1::RectF(left, y[column], left + columnWidth, y[column] + height);
-        // The control hugs the right-hand edge of its column, with the numeric
-        // readout beyond it, so every control in a column shares one baseline.
-        const float controlRight = row.bounds.right - layout::kValueWidth;
-        row.control = D2D1::RectF(controlRight - layout::kControlWidth, y[column] + 12.0f,
-                                  controlRight, y[column] + 12.0f + 22.0f);
+        // Only the items column scrolls, and only its item rows move with it -
+        // its heading stays put, the way a list header does.
+        const float scroll =
+            (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) ? itemScroll_ : 0.0f;
+        row.bounds =
+            D2D1::RectF(left, y[column] - scroll, left + columnWidth, y[column] + height - scroll);
+
+        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+            // Three equal buttons hugging the right edge: up, down, remove.
+            const float top = row.bounds.top + (layout::kItemHeight - layout::kItemButton) * 0.5f;
+            row.control = D2D1::RectF(row.bounds.right - 3.0f * layout::kItemButton, top,
+                                      row.bounds.right, top + layout::kItemButton);
+        } else {
+            // The control hugs the right-hand edge of its column, with the
+            // numeric readout beyond it, so every control in a column shares one
+            // baseline.
+            const float controlRight = row.bounds.right - layout::kValueWidth;
+            row.control = D2D1::RectF(controlRight - layout::kControlWidth, row.bounds.top + 12.0f,
+                                      controlRight, row.bounds.top + 34.0f);
+        }
         y[column] += height;
     }
 
-    height_ = static_cast<int>(std::lround(
-        (std::max(y[0], y[1]) + layout::kFooterHeight) * (static_cast<float>(dpi_) / 96.0f)));
+    // The window is sized by the two fixed columns; the items column scrolls
+    // inside whatever height they produce rather than stretching the panel to
+    // however many apps someone has pinned.
+    const float fixed = std::max(y[0], y[1]);
+    height_ = static_cast<int>(
+        std::lround((fixed + layout::kFooterHeight) * (static_cast<float>(dpi_) / 96.0f)));
     width_ = static_cast<int>(std::lround(layout::kWidth * (static_cast<float>(dpi_) / 96.0f)));
+
+    itemsClip_ = D2D1::RectF(layout::kPadding + 2 * (columnWidth + layout::kColumnGap),
+                             layout::kTitleHeight + layout::kSectionHeight,
+                             layout::kWidth - layout::kPadding, fixed);
+    const float itemsContent = y[2] + itemScroll_ - itemsClip_.top;
+    itemScrollMax_ = std::max(0.0f, itemsContent - (itemsClip_.bottom - itemsClip_.top));
+    itemScroll_ = std::clamp(itemScroll_, 0.0f, itemScrollMax_);
 }
 
 bool SettingsWindow::CreateDeviceResources() {
@@ -278,6 +335,7 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     // running, so opening the window over a stale copy would silently revert
     // whatever was typed there.
     settings_.Load();
+    items_.Load();
     BuildRows();
 
     UINT dpiX = 96;
@@ -333,6 +391,13 @@ int SettingsWindow::RowAt(float x, float y) const {
         if (row.kind == Row::Kind::Section) {
             continue;
         }
+        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+            // Scrolled out of sight is not clickable, however much the row's
+            // rectangle still says it is there.
+            if (y < itemsClip_.top || y > itemsClip_.bottom) {
+                continue;
+            }
+        }
         if (x >= row.bounds.left && x <= row.bounds.right && y >= row.bounds.top &&
             y <= row.bounds.bottom) {
             return static_cast<int>(i);
@@ -382,6 +447,57 @@ bool SettingsWindow::ApplyPointer(int index, float x, bool dragging) {
         default:
             return false;
     }
+}
+
+bool SettingsWindow::HandleItemClick(int index, float x) {
+    if (index < 0 || index >= static_cast<int>(rows_.size())) {
+        return false;
+    }
+    // Copied, not referenced: everything below rebuilds rows_ and would leave a
+    // reference into a vector that has been reallocated.
+    const Row row = rows_[static_cast<size_t>(index)];
+
+    if (row.kind == Row::Kind::AddItem) {
+        DockItem item;
+        if (!ItemStore::PickProgram(hwnd_, &item) || !items_.Add(std::move(item))) {
+            return false;
+        }
+        CommitItems();
+        return true;
+    }
+    if (row.kind != Row::Kind::Item) {
+        return false;
+    }
+
+    const float third = (row.control.right - row.control.left) / 3.0f;
+    const int button = static_cast<int>((x - row.control.left) / std::max(third, 1.0f));
+    if (x < row.control.left || button < 0 || button > 2) {
+        return false;
+    }
+
+    const size_t item = static_cast<size_t>(row.itemIndex);
+    if (button == 2) {
+        if (!items_.Remove(item)) {
+            return false;
+        }
+    } else if (items_.Move(item, button == 0 ? -1 : 1) < 0) {
+        return false;
+    }
+    CommitItems();
+    return true;
+}
+
+void SettingsWindow::CommitItems() {
+    // ItemStore has already written the file; the dock re-reads it, which keeps
+    // the file the single source of truth rather than having two live copies of
+    // the list drift apart.
+    if (onItemsChanged_) {
+        onItemsChanged_();
+    }
+    BuildRows();
+    LayoutRows();
+    hoverRow_ = -1;
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void SettingsWindow::CommitChange() {
@@ -488,6 +604,88 @@ void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
     }
 }
 
+void SettingsWindow::DrawChevron(const D2D1_RECT_F& box, bool up, const D2D1_COLOR_F& colour) {
+    const float cx = (box.left + box.right) * 0.5f;
+    const float cy = (box.top + box.bottom) * 0.5f;
+    const float w = 4.5f;
+    const float h = 2.8f;
+    brush_->SetColor(colour);
+    const float tipY = up ? cy - h : cy + h;
+    const float armY = up ? cy + h : cy - h;
+    d2d_->DrawLine(D2D1::Point2F(cx - w, armY), D2D1::Point2F(cx, tipY), brush_.Get(), 1.6f);
+    d2d_->DrawLine(D2D1::Point2F(cx, tipY), D2D1::Point2F(cx + w, armY), brush_.Get(), 1.6f);
+}
+
+void SettingsWindow::DrawCross(const D2D1_RECT_F& box, const D2D1_COLOR_F& colour) {
+    const float cx = (box.left + box.right) * 0.5f;
+    const float cy = (box.top + box.bottom) * 0.5f;
+    const float r = 4.0f;
+    brush_->SetColor(colour);
+    d2d_->DrawLine(D2D1::Point2F(cx - r, cy - r), D2D1::Point2F(cx + r, cy + r), brush_.Get(), 1.6f);
+    d2d_->DrawLine(D2D1::Point2F(cx + r, cy - r), D2D1::Point2F(cx - r, cy + r), brush_.Get(), 1.6f);
+}
+
+void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
+    const auto& items = items_.items();
+
+    if (row.kind == Row::Kind::AddItem) {
+        const D2D1_RECT_F pill =
+            D2D1::RectF(row.bounds.left, row.bounds.top + 4.0f, row.bounds.left + 104.0f,
+                        row.bounds.bottom - 4.0f);
+        brush_->SetColor(hovered ? Grey(1.0f, 0.16f) : Grey(1.0f, 0.10f));
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 6.0f, 6.0f), brush_.Get());
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        DrawText(L"Add app…", valueFormat_.Get(),
+                 D2D1::RectF(pill.left, pill.top + 3.0f, pill.right, pill.bottom), kLabel);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+        return;
+    }
+
+    const size_t index = static_cast<size_t>(row.itemIndex);
+    if (index >= items.size()) {
+        return;
+    }
+    const DockItem& item = items[index];
+
+    if (hovered) {
+        brush_->SetColor(kRowHover);
+        d2d_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(row.bounds.left - 6.0f, row.bounds.top + 1.0f,
+                                          row.bounds.right + 6.0f, row.bounds.bottom - 1.0f),
+                              6.0f, 6.0f),
+            brush_.Get());
+    }
+
+    DrawText(item.label, labelFormat_.Get(),
+             D2D1::RectF(row.bounds.left, row.bounds.top + 7.0f, row.control.left - 10.0f,
+                         row.bounds.bottom),
+             item.group == ItemGroup::Utility ? kValue : kLabel);
+
+    // Only shown on hover: three sets of buttons against every row is noise, and
+    // the row you are pointing at is the only one you can act on anyway.
+    if (!hovered) {
+        return;
+    }
+    const float third = (row.control.right - row.control.left) / 3.0f;
+    for (int i = 0; i < 3; ++i) {
+        const D2D1_RECT_F box = D2D1::RectF(row.control.left + i * third, row.control.top,
+                                            row.control.left + (i + 1) * third, row.control.bottom);
+        const bool under = pointerX >= box.left && pointerX <= box.right;
+        if (under) {
+            brush_->SetColor(Grey(1.0f, 0.14f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, 5.0f, 5.0f), brush_.Get());
+        }
+        const D2D1_COLOR_F ink = under ? Grey(1.0f, 0.95f) : Grey(1.0f, 0.55f);
+        if (i == 0) {
+            DrawChevron(box, true, ink);
+        } else if (i == 1) {
+            DrawChevron(box, false, ink);
+        } else {
+            DrawCross(box, ink);
+        }
+    }
+}
+
 void SettingsWindow::Render() {
     if (!d2d_ || !target_.width()) {
         return;
@@ -532,9 +730,27 @@ void SettingsWindow::Render() {
     DrawText(L"Every change applies straight away", hintFormat_.Get(),
              D2D1::RectF(layout::kPadding, 44.0f, 460.0f, 62.0f), kHint);
 
+    bool clipped = false;
     for (size_t i = 0; i < rows_.size(); ++i) {
         const Row& row = rows_[i];
         const bool hovered = (static_cast<int>(i) == hoverRow_);
+
+        // The items list scrolls, so it is drawn inside a clip that stops it
+        // spilling over its heading or out of the bottom of the panel.
+        const bool wantsClip = (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem);
+        if (wantsClip != clipped) {
+            if (wantsClip) {
+                d2d_->PushAxisAlignedClip(itemsClip_, D2D1_ANTIALIAS_MODE_ALIASED);
+            } else {
+                d2d_->PopAxisAlignedClip();
+            }
+            clipped = wantsClip;
+        }
+
+        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+            DrawItem(row, hovered, pointerX_);
+            continue;
+        }
 
         if (row.kind == Row::Kind::Section) {
             DrawText(row.label, sectionFormat_.Get(),
@@ -581,6 +797,10 @@ void SettingsWindow::Render() {
             default:
                 break;
         }
+    }
+
+    if (clipped) {
+        d2d_->PopAxisAlignedClip();
     }
 
     DrawText(L"Esc to close  ·  these are the same values as settings.txt", hintFormat_.Get(),
@@ -679,6 +899,11 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             const float y = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
             const int row = RowAt(x, y);
             if (row >= 0) {
+                const Row::Kind kind = rows_[static_cast<size_t>(row)].kind;
+                if (kind == Row::Kind::Item || kind == Row::Kind::AddItem) {
+                    HandleItemClick(row, x);
+                    return 0;
+                }
                 if (ApplyPointer(row, x, false)) {
                     CommitChange();
                 }
@@ -696,6 +921,20 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 ReleaseCapture();
             }
             return 0;
+
+        case WM_MOUSEWHEEL: {
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(hwnd, &point);
+            const float x = static_cast<float>(point.x) / scale;
+            if (itemScrollMax_ > 0.0f && x >= itemsClip_.left && x <= itemsClip_.right) {
+                const float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+                itemScroll_ = std::clamp(itemScroll_ - delta * layout::kItemHeight, 0.0f,
+                                         itemScrollMax_);
+                LayoutRows();
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
 
         case WM_KEYDOWN:
             if (wParam == VK_ESCAPE) {

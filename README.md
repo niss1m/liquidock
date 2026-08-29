@@ -40,9 +40,13 @@ Early. See the milestones below for where things stand.
 | M4 | Settings UI | done |
 | M5 | Portable / Microsoft Store / Steam packaging | |
 
-## The items file
+## Items
 
-The dock reads its contents from `%LOCALAPPDATA%\LiquiDock\items.txt`, one item per line:
+Right-click the dock for *Add app…*, *Preferences…*, and — on an icon — *Open* and *Remove from
+Dock*. The preferences window has the whole list, with reordering and removal per row.
+
+The list is stored in `%LOCALAPPDATA%\LiquiDock\items.txt`, one item per line, and editing it by
+hand still works:
 
 ```
 group | path | label
@@ -53,9 +57,7 @@ group | path | label
 moniker for a packaged app, or a `::{guid}` parsing name. Environment variables are expanded.
 
 On a first run there is no file, so the list is seeded from whatever is pinned to your taskbar, plus
-Downloads and the Recycle Bin, and then written out for you to edit. Right-clicking an icon offers
-Open, Remove from Dock, and a shortcut to the file itself. Reordering is a drag in Notepad until the
-preferences UI lands in M4.
+Downloads and the Recycle Bin.
 
 ## Settings
 

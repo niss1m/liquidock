@@ -1,6 +1,8 @@
 #include "model/ItemStore.h"
 
 #include <shlobj.h>
+#include <shobjidl_core.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -12,6 +14,8 @@
 
 namespace liquidock {
 namespace {
+
+using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kFileName[] = L"items.txt";
 
@@ -212,6 +216,83 @@ bool ItemStore::Remove(size_t index) {
     }
     items_.erase(items_.begin() + static_cast<ptrdiff_t>(index));
     Save();
+    return true;
+}
+
+bool ItemStore::Add(DockItem item) {
+    if (static_cast<int>(items_.size()) >= design::kMaxItems) {
+        LogWarn("The dock is full ({} items); not adding another", design::kMaxItems);
+        return false;
+    }
+    if (item.label.empty()) {
+        item.label = LabelFromPath(item.path);
+    }
+    // At the end of its own group, so a new app does not land on the far side of
+    // the hairline among the folders.
+    const size_t at = (item.group == ItemGroup::Main) ? static_cast<size_t>(MainCount())
+                                                      : items_.size();
+    items_.insert(items_.begin() + static_cast<ptrdiff_t>(at), std::move(item));
+    Save();
+    return true;
+}
+
+int ItemStore::Move(size_t index, int direction) {
+    if (index >= items_.size() || direction == 0) {
+        return -1;
+    }
+    const ptrdiff_t target = static_cast<ptrdiff_t>(index) + (direction > 0 ? 1 : -1);
+    if (target < 0 || target >= static_cast<ptrdiff_t>(items_.size())) {
+        return -1;
+    }
+    // Groups are contiguous and the hairline sits between them, so refusing to
+    // swap across a group boundary is what keeps the two runs meaningful.
+    if (items_[static_cast<size_t>(target)].group != items_[index].group) {
+        return -1;
+    }
+    std::swap(items_[index], items_[static_cast<size_t>(target)]);
+    Save();
+    return static_cast<int>(target);
+}
+
+bool ItemStore::PickProgram(HWND owner, DockItem* out) {
+    if (!out) {
+        return false;
+    }
+    ComPtr<IFileOpenDialog> dialog;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&dialog)))) {
+        return false;
+    }
+
+    static const COMDLG_FILTERSPEC kTypes[] = {
+        {L"Programs and shortcuts", L"*.lnk;*.exe;*.url"},
+        {L"All files", L"*.*"},
+    };
+    dialog->SetFileTypes(ARRAYSIZE(kTypes), kTypes);
+    dialog->SetTitle(L"Add to the dock");
+
+    FILEOPENDIALOGOPTIONS options = 0;
+    dialog->GetOptions(&options);
+    // NODEREFERENCELINKS keeps a shortcut a shortcut: a .lnk carries the
+    // arguments and working directory its target needs, and resolving it here
+    // would quietly throw both away.
+    dialog->SetOptions(options | FOS_FILEMUSTEXIST | FOS_NODEREFERENCELINKS |
+                       FOS_FORCEFILESYSTEM);
+
+    if (FAILED(dialog->Show(owner))) {
+        return false; // cancelled
+    }
+
+    ComPtr<IShellItem> result;
+    PWSTR path = nullptr;
+    if (FAILED(dialog->GetResult(&result)) ||
+        FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &path)) || !path) {
+        return false;
+    }
+    out->path = path;
+    out->group = ItemGroup::Main;
+    out->label = LabelFromPath(out->path);
+    CoTaskMemFree(path);
     return true;
 }
 
