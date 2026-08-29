@@ -127,13 +127,20 @@ float4 PSMain(Varyings input) : SV_Target
     const float scale = max(PIXEL_SCALE, 0.5);
 
     // --- The edge band -----------------------------------------------------
-    // `edge` is 1 at the rim and falls to 0 a few pixels in. Splay controls how
-    // fast: the exponent goes *down* as splay goes up, so high splay means the
-    // bending fans further inward. The max() keeps the pow base positive, since
-    // fxc's X3571 is fatal under warnings-as-errors.
-    const float band = lerp(kMinBandPx, kMaxBandPx, saturate(DEPTH)) * scale;
+    // Two parameters, two jobs. Depth is how thick the glass is: it sets the
+    // base width of the band and, further down, how hard the rim bends light.
+    // Splay is how far that bending fans inward from the rim, which means it
+    // has to scale the band's *width* - not merely reshape the profile inside
+    // it. Splay used to do only the latter, and inside a seven-pixel band an
+    // exponent change is invisible: sweeping it end to end moved the render by
+    // 0.6 of 765, which is to say the control did nothing.
+    //
+    // `edge` is 1 at the rim and falls to 0 across the band. The max() keeps the
+    // pow base positive, since fxc's X3571 is fatal under warnings-as-errors.
+    const float baseBand = lerp(kMinBandPx, kMaxBandPx, saturate(DEPTH)) * scale;
+    const float band = baseBand * lerp(0.55, 3.2, saturate(SPLAY));
     const float inset = saturate(-dist / band);
-    const float edge = pow(max(1.0 - inset, 1e-5), lerp(6.0, 1.5, saturate(SPLAY)));
+    const float edge = pow(max(1.0 - inset, 1e-5), lerp(3.5, 1.4, saturate(SPLAY)));
 
     // The SDF gradient points outward, and the bevel tilts its normal the same
     // way: outward at the rim, straight at the viewer across the flat middle.
@@ -146,7 +153,11 @@ float4 PSMain(Varyings input) : SV_Target
     // of the refraction offset: at the full offset the blur smears visibly along
     // the rim, and the point of a blur is that it has no detail worth smearing.
     const float2 monitorPx = windowPx + gWindowOrigin.xy;
-    const float2 offset = normal.xy * (REFRACTION * kRefractionReach * band * edge);
+    // How far a sample is displaced follows the glass's thickness, not its
+    // splay: a thicker edge bends light harder, a wider splay spreads the same
+    // bend over more of the face. Scaling the displacement by the splayed band
+    // instead would compound the two and warp the whole panel at high splay.
+    const float2 offset = normal.xy * (REFRACTION * kRefractionReach * baseBand * edge);
     const float2 frostUv = (windowPx + offset * 0.3) / max(VIEWPORT, 1.0);
 
     float3 body = gFrost.SampleLevel(gLinearClamp, frostUv, 0).rgb;
