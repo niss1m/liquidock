@@ -101,6 +101,9 @@ void Settings::Load() {
     influencePx = design::magnify::kInfluencePx;
     iconBulge = false;
 
+    monitorIndex = 0;
+    reserveSpace = false;
+
     autoHide = true;
     dwellSeconds = design::kDwellSeconds;
     slideSeconds = design::kSlideSeconds;
@@ -165,6 +168,14 @@ bool Settings::ReadFile(const std::wstring& path) {
             influencePx = ParseFloat(value, influencePx, 16.0f, 600.0f);
         } else if (key == L"icon-bulge") {
             iconBulge = ParseBool(value, iconBulge);
+        } else if (key == L"monitor") {
+            if (_wcsicmp(value.c_str(), L"primary") == 0) {
+                monitorIndex = 0;
+            } else {
+                monitorIndex = static_cast<int>(ParseFloat(value, 0.0f, 0.0f, 16.0f));
+            }
+        } else if (key == L"reserve-space") {
+            reserveSpace = ParseBool(value, reserveSpace);
         } else if (key == L"auto-hide") {
             autoHide = ParseBool(value, autoHide);
         } else if (key == L"dwell-seconds") {
@@ -187,8 +198,16 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
         return false;
     }
 
-    // Text mode turns every \n into CRLF on the way out, so this opens cleanly
-    // in Notepad without the source here being littered with \r.
+    wchar_t monitorBuffer[16];
+    const wchar_t* monitorText = L"primary";
+    if (monitorIndex > 0) {
+        wsprintfW(monitorBuffer, L"%d", monitorIndex);
+        monitorText = monitorBuffer;
+    }
+
+    // Text mode turns every newline into a CRLF on the way out, so the file
+    // opens cleanly in Notepad without the source here being littered with
+    // carriage returns.
     fwprintf(file,
              L"# LiquiDock settings. `key = value`, one per line; # starts a comment.\n"
              L"# Delete a line to go back to its default. LiquiDock picks up changes\n"
@@ -249,6 +268,16 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# to them rather than as a pane of glass.\n"
              L"icon-bulge = %s\n"
              L"\n"
+             L"# --- Placement -----------------------------------------------------\n"
+             L"# Which monitor to live on: `primary`, or a 1-based number. An index\n"
+             L"# that does not exist falls back to the primary one.\n"
+             L"monitor = %s\n"
+             L"\n"
+             L"# Reserve screen space so maximised windows stop above the dock, the\n"
+             L"# way the taskbar does. Ignored while auto-hide is on, where a dock\n"
+             L"# that is not on screen has no business holding room.\n"
+             L"reserve-space = %s\n"
+             L"\n"
              L"# --- Auto-hide -----------------------------------------------------\n"
              L"auto-hide = %s\n"
              L"\n"
@@ -259,7 +288,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
              tintAlpha, backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
              magnification ? L"on" : L"off", maxScale, influencePx,
-             iconBulge ? L"on" : L"off", autoHide ? L"on" : L"off", dwellSeconds, slideSeconds);
+             iconBulge ? L"on" : L"off", monitorText, reserveSpace ? L"on" : L"off",
+             autoHide ? L"on" : L"off", dwellSeconds, slideSeconds);
 
     fclose(file);
     LogInfo("Wrote a default settings file");

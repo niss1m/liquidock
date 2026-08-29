@@ -16,8 +16,10 @@ specular edge driven by a light angle you control.
   polling it, so tuning costs nothing when you are not tuning.
 - **The macOS magnification wave** — icons swell under the cursor on a critically damped spring, and
   the glass body bulges with them.
-- **Zero idle cost** — the dock is event-driven. Nothing moving means no frames presented, no GPU
-  work, no wakeups.
+- **Zero idle cost** — the dock is event-driven throughout. Nothing moving means no frames
+  presented, no GPU work, no wakeups. Screen capture waits on the desktop's own change
+  notifications and ignores changes that miss the dock; running indicators wait on a window event
+  hook; the settings file is watched on a waitable handle, not polled.
 - **Preferences that were designed**, not accumulated over fifteen years of checkboxes.
 
 ## Status
@@ -29,7 +31,7 @@ Early. See the milestones below for where things stand.
 | M0 | Build system, D3D11 + DirectComposition transparent window | done |
 | M1 | The liquid glass shader and backdrop pipeline | done |
 | M2 | Item model, icons, layout, launching, magnification | done |
-| M3 | Multi-monitor, appbar, running indicators, live-capture backdrop | in progress |
+| M3 | Multi-monitor, appbar, running indicators, live-capture backdrop | done |
 | M4 | Settings UI | |
 | M5 | Portable / Microsoft Store / Steam packaging | |
 
@@ -59,7 +61,12 @@ calls about how something looks and the only way to settle one is to see it.
 
 Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
 `light-intensity`, `tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`,
-`icon-bulge`. Auto-hide: `auto-hide`, `dwell-seconds`, `slide-seconds`.
+`icon-bulge`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `dwell-seconds`,
+`slide-seconds`.
+
+`reserve-space` makes the dock an appbar, so maximised windows stop above it the way they do above
+the taskbar. It is off by default and ignored while auto-hide is on, where a dock that is not on
+screen has no business holding room.
 
 `backdrop` decides what the glass refracts. `wallpaper` (the default) decodes your desktop
 background once and costs nothing after that — it is exactly right whenever nothing is behind the

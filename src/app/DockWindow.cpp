@@ -1,6 +1,7 @@
 #include "app/DockWindow.h"
 
 #include <shellapi.h>
+#include <shellscalingapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -26,6 +27,10 @@ constexpr UINT_PTR kHideTimer = 2;
 // still showing while duplication was starting up.
 constexpr UINT_PTR kDumpTimer = 3;
 constexpr UINT kDumpDelayMs = 2500;
+// Debounces the running-indicator rescan. Opening a folder creates a burst of
+// windows and one scan afterwards answers for all of them.
+constexpr UINT_PTR kRunningTimer = 4;
+constexpr UINT kRunningDebounceMs = 250;
 
 // Posted to ourselves after presenting an animation frame. Present blocks on
 // vblank, so this self-paces at the monitor's refresh rate without a timer -
@@ -35,6 +40,10 @@ constexpr UINT kAnimateMessage = WM_APP + 1;
 constexpr UINT kIconMessage = WM_APP + 2;
 // Posted by the capture thread when the screen behind the dock changed.
 constexpr UINT kCaptureMessage = WM_APP + 3;
+// Posted by the WinEvent hook when a top-level window appeared or vanished.
+constexpr UINT kRunningMessage = WM_APP + 4;
+// The shell's appbar notifications - another appbar appeared, the taskbar moved.
+constexpr UINT kAppBarMessage = WM_APP + 5;
 
 enum ItemMenuCommand : UINT {
     kCommandOpen = 1,
@@ -143,6 +152,7 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
 
     StartIconLoad();
     ApplyBackdropSource();
+    running_.Initialize(hwnd_, kRunningMessage);
     if (dumpBackdrop_) {
         SetTimer(hwnd_, kDumpTimer, kDumpDelayMs, nullptr);
     }
@@ -329,11 +339,17 @@ void DockWindow::Destroy() {
     // to this HWND, so they have to be stopped while the handle is still valid.
     iconLoader_.Stop();
     capture_.reset();
+    running_.Shutdown();
+    // Before anything else: an appbar registration that outlives its window
+    // leaves the work area permanently short with nothing on screen to explain
+    // why, until the user logs out.
+    appBar_.Unregister();
     trigger_.Destroy();
     if (hwnd_) {
         KillTimer(hwnd_, kShaderWatchTimer);
         KillTimer(hwnd_, kHideTimer);
         KillTimer(hwnd_, kDumpTimer);
+        KillTimer(hwnd_, kRunningTimer);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
@@ -366,12 +382,23 @@ void DockWindow::DrainLoadedIcons() {
         if (icon.slot < 0 || icon.slot >= static_cast<int>(store_.items().size())) {
             continue; // the list changed while this one was being extracted
         }
+        DockItem& item = store_.items()[static_cast<size_t>(icon.slot)];
+        item.executable = icon.target;
         if (icon.size == atlasCell_ && atlas_.Upload(icon.slot, icon.pixels)) {
-            store_.items()[static_cast<size_t>(icon.slot)].atlasSlot = icon.slot;
+            item.atlasSlot = icon.slot;
         }
     }
     // One mip regeneration for the whole batch, not one per icon.
     atlas_.FinishUpdates();
+
+    std::vector<std::wstring> executables;
+    executables.reserve(store_.items().size());
+    for (const DockItem& item : store_.items()) {
+        executables.push_back(item.executable);
+    }
+    running_.SetTargets(std::move(executables));
+    running_.Refresh();
+
     RequestRedraw();
 }
 
@@ -580,7 +607,45 @@ void DockWindow::ShowItemMenu(int itemIndex, POINT screen) {
     RequestRedraw();
 }
 
+HMONITOR DockWindow::TargetMonitor() const {
+    if (settings_.monitorIndex <= 0) {
+        return MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    }
+
+    struct Search {
+        int wanted;
+        int seen;
+        HMONITOR found;
+    } search{settings_.monitorIndex, 0, nullptr};
+
+    EnumDisplayMonitors(
+        nullptr, nullptr,
+        [](HMONITOR monitor, HDC, LPRECT, LPARAM param) -> BOOL {
+            auto* state = reinterpret_cast<Search*>(param);
+            if (++state->seen == state->wanted) {
+                state->found = monitor;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&search));
+
+    // An index that no longer exists - a monitor was unplugged - falls back to
+    // the primary rather than leaving the dock on a screen that is not there.
+    return search.found ? search.found : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+}
+
 void DockWindow::UpdatePlacement() {
+    // The monitor is resolved first and the DPI is read from *it*, not from the
+    // window. Asking the window would answer for wherever it currently is,
+    // which on a mixed-DPI desktop is the wrong scale to size it for the screen
+    // it is about to move to.
+    HMONITOR monitor = TargetMonitor();
+    UINT dpiX = 96;
+    UINT dpiY = 96;
+    if (SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY))) {
+        dpi_ = dpiX;
+    }
     const float scale = static_cast<float>(dpi_) / 96.0f;
 
     // The window has to be wide enough for the dock at its widest, which is the
@@ -598,19 +663,31 @@ void DockWindow::UpdatePlacement() {
 
     layout_.SetWindowWidth(static_cast<float>(width) / scale);
 
-    HMONITOR monitor = hwnd_ ? MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY)
-                             : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO info{sizeof(info)};
     if (!GetMonitorInfoW(monitor, &info)) {
         return;
     }
 
-    // Position against the work area rather than the monitor bounds so the dock
-    // does not sit underneath the taskbar before M3 teaches it to reserve its
-    // own space.
-    const RECT& work = info.rcWork;
-    const int x = work.left + ((work.right - work.left) - width) / 2;
-    const int y = work.bottom - height;
+    // Reserving space and being positioned by it are the same decision: an
+    // appbar's own band is carved out of the work area, so a dock that both
+    // reserved a band and then positioned itself against the work area would
+    // walk up the screen a little further on every placement.
+    const bool reserve = settings_.reserveSpace && !autoHide_;
+    RECT area = info.rcWork;
+    if (reserve) {
+        appBar_.Register(hwnd_, kAppBarMessage);
+        const int band = static_cast<int>(
+            std::lround((design::kBarHeight + design::kScreenMargin) * scale));
+        RECT reserved{};
+        if (appBar_.Reserve(info.rcMonitor, band, &reserved)) {
+            area = reserved;
+        }
+    } else {
+        appBar_.Release();
+    }
+
+    const int x = area.left + ((area.right - area.left) - width) / 2;
+    const int y = area.bottom - height;
 
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW);
@@ -620,7 +697,7 @@ void DockWindow::UpdatePlacement() {
     // extends well past the visible bar feels like the dock is being summoned
     // by nothing.
     const int barWidth = static_cast<int>(std::lround(layout_.RestingBarWidth() * scale));
-    trigger_.SetBounds(x + (width - barWidth) / 2, work.bottom - kTriggerThicknessPx, barWidth,
+    trigger_.SetBounds(x + (width - barWidth) / 2, area.bottom - kTriggerThicknessPx, barWidth,
                        kTriggerThicknessPx);
 
     // Moving the dock invalidates the cached frost even at an unchanged size:
@@ -656,7 +733,7 @@ void DockWindow::Render() {
     // frost chain re-runs only when something it depends on moved. Both return
     // immediately in the common case, which is why a static desktop presents no
     // frames at all.
-    HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+    HMONITOR monitor = TargetMonitor();
 
     // The capture source only copies the part of the screen the dock covers,
     // and only wakes for changes that land in it, so it has to be told where
@@ -902,6 +979,29 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
         ++instances;
     }
 
+    // Running indicators. They sit on the resting icon row while the icon above
+    // them magnifies, which is what keeps the row of dots reading as a row.
+    const float indicatorY = design::kBleed + design::kBarHeight - design::kPaddingY +
+                             design::kIndicatorGap + design::kIndicatorDiameter * 0.5f;
+    for (const PlacedIcon& icon : layout_.icons()) {
+        if (instances >= kMaxIconInstances) {
+            break;
+        }
+        const size_t index = static_cast<size_t>(icon.itemIndex);
+        if (index >= store_.items().size() || !running_.IsRunning(index)) {
+            continue;
+        }
+        const float half = design::kIndicatorDiameter * 0.5f * scale;
+        constants.rect[instances][0] = icon.centerX * scale;
+        constants.rect[instances][1] = (indicatorY + slideLogical) * scale;
+        constants.rect[instances][2] = half;
+        constants.rect[instances][3] = half;
+
+        constants.source[instances][2] = design::kIndicatorTint[3];
+        constants.source[instances][3] = 2.0f; // solid, clipped to a disc
+        ++instances;
+    }
+
     for (const PlacedIcon& hairline : layout_.separators()) {
         if (instances >= kMaxIconInstances) {
             break;
@@ -1090,6 +1190,20 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
 
+        case kAppBarMessage:
+            // ABN_POSCHANGED: the taskbar moved or another appbar appeared, so
+            // the band we were given may no longer be where we think it is.
+            if (wParam == ABN_POSCHANGED || wParam == ABN_FULLSCREENAPP) {
+                UpdatePlacement();
+            }
+            return 0;
+
+        case kRunningMessage:
+            // Debounced rather than acted on directly: a single app launch can
+            // fire this a dozen times as its windows appear.
+            SetTimer(hwnd_, kRunningTimer, kRunningDebounceMs, nullptr);
+            return 0;
+
         case kCaptureMessage:
             // The screen behind the dock changed. The frost is a blur of it, so
             // it is stale; the glass samples the capture texture directly and
@@ -1109,6 +1223,13 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     // blur would otherwise keep the old radius until the dock
                     // happened to move.
                     frostDirty_ = true;
+                    RequestRedraw();
+                }
+            } else if (wParam == kRunningTimer) {
+                KillTimer(hwnd_, kRunningTimer);
+                // Only redraw if the answer actually changed; most window
+                // events are something else opening and closing.
+                if (running_.Refresh()) {
                     RequestRedraw();
                 }
             } else if (wParam == kDumpTimer) {

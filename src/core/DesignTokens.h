@@ -22,6 +22,15 @@ inline constexpr float kScreenMargin = 20.0f;  // node 3:5, pb-[20px]
 inline constexpr float kSeparatorWidth = 1.0f;   // node 2:148, w-px
 inline constexpr float kSeparatorHeight = 48.0f; // node 2:148, h-[48px]
 
+// Running indicator: a dot in the bar's bottom padding, under the icon. Not in
+// the Figma file - the design has no "running" state - so these are chosen to
+// sit inside the 10 px of padding that is already there rather than to make the
+// bar taller. It stays on the resting row while the icon above it magnifies,
+// the way the macOS one does.
+inline constexpr float kIndicatorDiameter = 4.0f;
+inline constexpr float kIndicatorGap = 3.0f; // between the icon row and the dot
+inline constexpr float kIndicatorTint[4] = {1.0f, 1.0f, 1.0f, 0.75f};
+
 // dock-bar fill, Figma rgba(255,255,255,0.05), raised a little. Still almost
 // nothing: the dock reads as glass because of what the shader does to the
 // backdrop behind it, not because of this fill. Raising it further is how the

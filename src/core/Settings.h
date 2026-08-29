@@ -51,6 +51,16 @@ struct Settings {
     // this dock is going for.
     bool iconBulge = false;
 
+    // --- Placement --------------------------------------------------------
+    // Which monitor the dock lives on. 0 means the primary one; otherwise it is
+    // a 1-based index into the display order, and an index that no longer
+    // exists falls back to the primary rather than putting the dock nowhere.
+    int monitorIndex = 0;
+
+    // Whether to reserve screen space so maximised windows stop above the dock.
+    // Ignored while auto-hide is on, where it would make no sense.
+    bool reserveSpace = false;
+
     // --- Auto-hide --------------------------------------------------------
     bool autoHide = true;
     float dwellSeconds = 0.0f;

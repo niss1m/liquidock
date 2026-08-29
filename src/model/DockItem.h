@@ -24,6 +24,12 @@ struct DockItem {
     // Index of this item's cell in the icon atlas, or -1 while its icon is
     // still being extracted on the loader thread.
     int atlasSlot = -1;
+
+    // The executable a running indicator watches for, resolved from `path` on
+    // the loader thread - a .lnk has to be opened to find out what it points
+    // at. Empty for anything that cannot be "running": a folder, the recycle
+    // bin, a document.
+    std::wstring executable;
 };
 
 } // namespace liquidock

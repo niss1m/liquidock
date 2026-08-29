@@ -193,8 +193,9 @@ bool ItemStore::Save() const {
         return false;
     }
 
-    // Text mode turns every \n into a CRLF on the way out, so the file opens
-    // cleanly in Notepad without the source here being littered with \r.
+    // Text mode turns every newline into a CRLF on the way out, so the file
+    // opens cleanly in Notepad without the source here being littered with
+    // carriage returns.
     fputws(kFileHeader, file);
     for (const DockItem& item : items_) {
         fwprintf(file, L"%s | %s | %s\n",

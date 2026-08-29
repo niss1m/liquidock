@@ -12,8 +12,9 @@
 
 #include "Common.hlsli"
 
-// design::kMaxItems, plus the hairline.
-#define MAX_INSTANCES 33
+// design::kMaxItems icons, the same again for running indicators, plus the
+// hairline. Matches kMaxIconInstances in DockWindow.h.
+#define MAX_INSTANCES 65
 
 cbuffer IconConstants : register(b0)
 {
@@ -21,7 +22,8 @@ cbuffer IconConstants : register(b0)
     float4 gCell;     // xy = one atlas cell in uv, zw unused
     // xy = centre (px), zw = half size (px)
     float4 gRect[MAX_INSTANCES];
-    // xy = atlas cell origin in uv, z = opacity, w = 1 for a solid fill
+    // xy = atlas cell origin in uv, z = opacity,
+    // w = 0 atlas sample, 1 solid rect, 2 solid circle
     float4 gSource[MAX_INSTANCES];
 };
 
@@ -35,7 +37,8 @@ struct IconVaryings
     // HLSL has no `flat` qualifier, so the instance's own scalars ride along
     // per vertex. They are constant across the triangle, so interpolating them
     // is exact rather than merely close.
-    float2 fill : TEXCOORD1; // x = opacity, y = solid flag
+    float2 fill : TEXCOORD1;  // x = opacity, y = mode
+    float2 local : TEXCOORD2; // 0..1 across the quad, for the circle mode
 };
 
 IconVaryings VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
@@ -60,6 +63,7 @@ IconVaryings VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID
         float4(pixel * gViewport.zw * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
     output.uv = source.xy + unit * gCell.xy;
     output.fill = float2(source.z, source.w);
+    output.local = unit;
     return output;
 }
 
@@ -70,8 +74,19 @@ float4 PSMain(IconVaryings input) : SV_Target
     float4 colour = gIcons.Sample(gLinearClamp, input.uv);
 
     // Solid instances ignore the atlas entirely: white, with the opacity
-    // carrying the tint's alpha. The only one of these is the hairline.
-    colour = lerp(colour, float4(1.0, 1.0, 1.0, 1.0), input.fill.y);
+    // carrying the tint's alpha. The hairline and the running indicators.
+    colour = lerp(colour, float4(1.0, 1.0, 1.0, 1.0), saturate(input.fill.y));
+
+    // Mode 2 clips that solid fill to a disc. A four-pixel square would read as
+    // a speck of dirt rather than as a light under the icon, and a dot is not
+    // worth its own shader.
+    if (input.fill.y > 1.5)
+    {
+        const float2 offset = input.local * 2.0 - 1.0;
+        const float radius = length(offset);
+        const float aa = max(fwidth(radius), 1e-4);
+        colour *= 1.0 - smoothstep(1.0 - aa, 1.0, radius);
+    }
 
     return colour * input.fill.x;
 }

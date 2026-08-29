@@ -6,6 +6,7 @@
 #include <optional>
 #include <vector>
 
+#include "app/AppBar.h"
 #include "app/DockLayout.h"
 #include "app/EdgeTrigger.h"
 #include "core/DesignTokens.h"
@@ -19,6 +20,7 @@
 #include "glass/WallpaperBackdrop.h"
 #include "model/IconLoader.h"
 #include "model/ItemStore.h"
+#include "model/RunningState.h"
 
 namespace liquidock {
 
@@ -38,9 +40,10 @@ struct GlassConstants {
 static_assert(sizeof(GlassConstants) == 256, "GlassConstants must match the HLSL cbuffer");
 static_assert(sizeof(GlassConstants) % 16 == 0, "Constant buffers must be 16-byte aligned");
 
-// Mirrors IconConstants in shaders/Icon.hlsl. One instance per icon, plus the
-// hairline between the two groups.
-inline constexpr int kMaxIconInstances = design::kMaxItems + 1;
+// Mirrors IconConstants in shaders/Icon.hlsl. Worst case is every item drawn
+// with a running indicator under it, plus the hairline between the two groups -
+// all of it one instanced draw.
+inline constexpr int kMaxIconInstances = design::kMaxItems * 2 + 1;
 struct IconConstants {
     float viewport[4];                     // xy = viewport size (px), zw = 1 / size
     float cell[4];                         // xy = one atlas cell in uv
@@ -92,6 +95,8 @@ private:
     LRESULT WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     bool CreateResources();
+    // Which screen the dock lives on, from the settings.
+    HMONITOR TargetMonitor() const;
     void UpdatePlacement();
     void Render();
     void RenderIcons(float scale, float slideLogical);
@@ -155,6 +160,7 @@ private:
     DockLayout layout_;
     IconLoader iconLoader_;
     IconAtlas atlas_;
+    RunningState running_;
     std::vector<IconBitmap> loadedIcons_;
     int atlasCell_ = 0;
     int pressedItem_ = -1;
@@ -166,6 +172,7 @@ private:
     // slides out, dwells, and slides back.
     enum class RevealState { Hidden, Revealing, Shown, Hiding };
     EdgeTrigger trigger_;
+    AppBar appBar_;
     RevealState revealState_ = RevealState::Shown;
     float revealProgress_ = 1.0f; // 0 = tucked away, 1 = fully out
     bool autoHide_ = true;

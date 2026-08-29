@@ -16,6 +16,11 @@ struct IconBitmap {
     int slot = -1; // which item asked for it
     int size = 0;
     std::vector<uint32_t> pixels;
+    // The executable this item ultimately launches, for the running indicator.
+    // Resolved here because it is the same question the icon asks - "what does
+    // this shortcut actually point at" - answered on the same thread, against
+    // the same possibly-slow shell.
+    std::wstring target;
 };
 
 // Pulls icons out of the shell, off the UI thread.

@@ -129,6 +129,44 @@ void DrawPlaceholder(int size, std::vector<uint32_t>& out) {
     }
 }
 
+bool EndsWith(const std::wstring& text, const wchar_t* suffix) {
+    const size_t length = wcslen(suffix);
+    return text.size() >= length &&
+           _wcsicmp(text.c_str() + text.size() - length, suffix) == 0;
+}
+
+// What a dock item ultimately runs, for the running indicator to watch for.
+// Only executables can be "running": a folder or the recycle bin has no answer,
+// and saying so with an empty string is better than guessing.
+std::wstring ResolveExecutable(const std::wstring& path) {
+    if (EndsWith(path, L".exe")) {
+        return path;
+    }
+    if (!EndsWith(path, L".lnk")) {
+        return {};
+    }
+
+    ComPtr<IShellLinkW> link;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&link)))) {
+        return {};
+    }
+    ComPtr<IPersistFile> file;
+    if (FAILED(link.As(&file)) || FAILED(file->Load(path.c_str(), STGM_READ))) {
+        return {};
+    }
+
+    wchar_t target[MAX_PATH]{};
+    // RAWPATH returns what the shortcut stores without trying to chase a moved
+    // or offline target, which is what IShellLink::Resolve does - and that can
+    // block for seconds on a network path.
+    if (FAILED(link->GetPath(target, static_cast<int>(std::size(target)), nullptr, SLGP_RAWPATH))) {
+        return {};
+    }
+    const std::wstring expanded = ItemStore::ExpandPath(target);
+    return EndsWith(expanded, L".exe") ? expanded : std::wstring{};
+}
+
 bool ExtractIcon(const std::wstring& path, int size, std::vector<uint32_t>& out) {
     ComPtr<IShellItemImageFactory> factory;
     // Parsing names cover every kind of entry the config file accepts - files,
@@ -212,6 +250,7 @@ void IconLoader::Run(std::vector<std::wstring> paths, int size, HWND notify, UIN
         icon.size = size;
 
         const std::wstring expanded = ItemStore::ExpandPath(paths[index]);
+        icon.target = ResolveExecutable(expanded);
         if (!ExtractIcon(expanded, size, icon.pixels)) {
             LogWarn("No icon for dock item {}; drawing a placeholder", index);
             DrawPlaceholder(size, icon.pixels);
