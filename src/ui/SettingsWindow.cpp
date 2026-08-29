@@ -182,6 +182,10 @@ void SettingsWindow::BuildRows() {
     slider(L"Tint", L"The white the glass is tinted with",
            &settings_.tintAlpha, 0.0f, 0.4f, 2, 0);
 
+    section(L"Size", 1);
+    slider(L"Icon size", L"Everything else scales with it", &settings_.iconSize,
+           design::kMinIconSize, design::kMaxIconSize, 0, 1, L" px");
+
     section(L"Magnification", 1);
     toggle(L"Magnify under the cursor", L"The macOS swell", &settings_.magnification, 1);
     slider(L"Maximum size", L"How big the hovered icon gets", &settings_.maxScale, 1.0f,

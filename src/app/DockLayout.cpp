@@ -62,12 +62,31 @@ void DockLayout::SetMagnification(bool enabled, float maxScale, float influenceP
     bulge_ = bulge;
 }
 
-float DockLayout::bar_center_y() {
-    return kBleed + kBarHeight * 0.5f;
+void DockLayout::SetIconScale(float userScale) {
+    userScale_ = std::clamp(userScale, kMinIconSize / kIconSize, kMaxIconSize / kIconSize);
 }
 
-float DockLayout::bar_half_height() {
-    return kBarHeight * 0.5f;
+float DockLayout::bar_bottom() const {
+    // Pinned. Scaling the dock down should leave it sitting exactly where it
+    // was against the screen edge and take the difference off the top, not
+    // float it upward.
+    return kBleed + kBarHeight;
+}
+
+float DockLayout::bar_center_y() const {
+    return bar_bottom() - kBarHeight * scale() * 0.5f;
+}
+
+float DockLayout::bar_half_height() const {
+    return kBarHeight * scale() * 0.5f;
+}
+
+float DockLayout::corner_radius() const {
+    return kCornerRadius * scale();
+}
+
+float DockLayout::icon_row_bottom() const {
+    return bar_bottom() - kPaddingY * scale();
 }
 
 void DockLayout::SetItems(const std::vector<DockItem>& items) {
@@ -133,13 +152,13 @@ float DockLayout::ContentWidth() const {
     for (const Element& element : elements_) {
         total += element.gapBefore + element.baseWidth * element.scale;
     }
-    return total * itemScale_;
+    return total * scale();
 }
 
 float DockLayout::FitWithin(float availableLogical) {
-    itemScale_ = 1.0f;
+    fitScale_ = 1.0f;
     if (availableLogical <= 0.0f || elements_.empty()) {
-        return itemScale_;
+        return fitScale_;
     }
     // MaxBarWidth scales linearly with the factor - every width and gap in it
     // does - so the ratio is exact and one division settles it.
@@ -147,9 +166,9 @@ float DockLayout::FitWithin(float availableLogical) {
     if (needed > availableLogical) {
         // Floored: past about a third the icons stop being recognisable, and a
         // dock that has to be that small is telling the user something.
-        itemScale_ = std::max(0.35f, availableLogical / needed);
+        fitScale_ = std::max(0.35f, availableLogical / needed);
     }
-    return itemScale_;
+    return fitScale_;
 }
 
 float DockLayout::TargetScale(const Element& element, float baseCenterX) const {
@@ -164,7 +183,7 @@ float DockLayout::RestingBarWidth() const {
     for (const Element& element : elements_) {
         total += element.gapBefore + element.baseWidth;
     }
-    return (total + 2.0f * kPaddingX) * itemScale_;
+    return (total + 2.0f * kPaddingX) * scale();
 }
 
 float DockLayout::MaxBarWidth() const {
@@ -190,19 +209,19 @@ float DockLayout::MaxBarWidth() const {
     // The sweep runs in screen space, because the wave's reach is quoted there:
     // shrinking the icons must not also shrink how far the swell carries.
     float widest = restingContent;
-    for (float cursor = -influencePx_; cursor <= restingContent * itemScale_ + influencePx_;
+    for (float cursor = -influencePx_; cursor <= restingContent * scale() + influencePx_;
          cursor += 2.0f) {
         float total = 0.0f;
         for (size_t i = 0; i < elements_.size(); ++i) {
-            const float scale =
+            const float magnified =
                 (elements_[i].itemIndex < 0)
                     ? 1.0f
-                    : WaveScale(std::fabs(cursor - centers[i] * itemScale_));
-            total += elements_[i].gapBefore + elements_[i].baseWidth * scale;
+                    : WaveScale(std::fabs(cursor - centers[i] * scale()));
+            total += elements_[i].gapBefore + elements_[i].baseWidth * magnified;
         }
         widest = std::max(widest, total);
     }
-    return (widest + 2.0f * kPaddingX) * itemScale_;
+    return (widest + 2.0f * kPaddingX) * scale();
 }
 
 bool DockLayout::Advance(float deltaSeconds) {
@@ -223,9 +242,9 @@ bool DockLayout::Advance(float deltaSeconds) {
     {
         float x = restLeft;
         for (const Element& element : elements_) {
-            x += element.gapBefore * itemScale_;
-            restCenters.push_back(x + element.baseWidth * 0.5f * itemScale_);
-            x += element.baseWidth * itemScale_;
+            x += element.gapBefore * scale();
+            restCenters.push_back(x + element.baseWidth * 0.5f * scale());
+            x += element.baseWidth * scale();
         }
     }
 
@@ -292,14 +311,14 @@ void DockLayout::Place() {
     barCenterX_ = left + content * 0.5f;
     barHalfWidth_ = content * 0.5f + kPaddingX;
 
-    const float rowBottom = kBleed + kBarHeight - kPaddingY;
-    const float barTop = kBleed;
-    const float barBottom = kBleed + kBarHeight;
+    const float rowBottom = icon_row_bottom();
+    const float barBottom = bar_bottom();
+    const float barTop = barBottom - kBarHeight * scale();
 
     float x = left;
     for (const Element& element : elements_) {
-        x += element.gapBefore * itemScale_;
-        const float width = element.baseWidth * element.scale * itemScale_;
+        x += element.gapBefore * scale();
+        const float width = element.baseWidth * element.scale * scale();
         const float centerX = x + width * 0.5f;
         x += width;
 
@@ -308,7 +327,7 @@ void DockLayout::Place() {
             hairline.itemIndex = -1;
             hairline.centerX = centerX;
             hairline.centerY = bar_center_y();
-            hairline.size = kSeparatorHeight; // the drawing code takes width from the design
+            hairline.size = kSeparatorHeight * scale(); // width comes from the design
             hairline.scale = 1.0f;
             separators_.push_back(hairline);
             continue;
@@ -316,7 +335,7 @@ void DockLayout::Place() {
 
         // Icons keep their bottom edge on the icon row and grow upward, so a
         // magnified icon rises out of the bar rather than swelling through it.
-        const float iconSize = kIconSize * element.scale * itemScale_;
+        const float iconSize = kIconSize * element.scale * scale();
         const float lift = BounceOffset(element.bounceTime);
 
         PlacedIcon icon;
@@ -333,11 +352,11 @@ void DockLayout::Place() {
             // it contributes nothing until the icon actually lifts - which is
             // what keeps the resting silhouette the plain rounded rectangle the
             // design specifies.
-            const float top = barTop - (element.scale - 1.0f) * kIconSize * magnify::kBulge;
+            const float top = barTop - (element.scale - 1.0f) * kIconSize * scale() * magnify::kBulge;
             GlassLens lens;
             lens.centerX = centerX;
             lens.centerY = (top + barBottom) * 0.5f;
-            lens.halfWidth = iconSize * 0.5f + kIconGap * itemScale_;
+            lens.halfWidth = iconSize * 0.5f + kIconGap * scale();
             lens.halfHeight = (barBottom - top) * 0.5f;
             lens.radius = std::min(lens.halfWidth, lens.halfHeight);
             lenses_.push_back(lens);
@@ -349,8 +368,8 @@ bool DockLayout::Contains(float x, float y) const {
     if (barHalfWidth_ <= 0.0f) {
         return false;
     }
-    const float barTop = kBleed;
-    const float barBottom = kBleed + kBarHeight;
+    const float barBottom = bar_bottom();
+    const float barTop = barBottom - kBarHeight * scale();
     if (y >= barTop && y <= barBottom && std::fabs(x - barCenterX_) <= barHalfWidth_) {
         return true;
     }
@@ -368,8 +387,8 @@ bool DockLayout::Contains(float x, float y) const {
 }
 
 int DockLayout::ItemAt(float x, float y) const {
-    const float barTop = kBleed;
-    const float barBottom = kBleed + kBarHeight;
+    const float barBottom = bar_bottom();
+    const float barTop = barBottom - kBarHeight * scale();
 
     int best = -1;
     float bestDistance = 0.0f;
@@ -377,7 +396,7 @@ int DockLayout::ItemAt(float x, float y) const {
         // The hit slab is the icon's column, from the top of whichever is
         // higher - the icon or the bar - down to the bar's bottom edge. Clicking
         // the padding under an icon activates it, the way the macOS dock does.
-        const float half = icon.size * 0.5f + kIconGap * itemScale_ * 0.5f;
+        const float half = icon.size * 0.5f + kIconGap * scale() * 0.5f;
         const float top = std::min(barTop, icon.centerY - icon.size * 0.5f);
         if (y < top || y > barBottom) {
             continue;

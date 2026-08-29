@@ -11,7 +11,18 @@ namespace liquidock::design {
 // Logical pixels at 96 DPI. Everything is multiplied by the monitor's scale
 // factor at use, never baked.
 
-inline constexpr float kIconSize = 48.0f;      // node 2:107, size-[48px]
+// node 2:107, size-[48px]. This is the design's own icon size and the unit the
+// rest of the layout is expressed in; the size actually drawn is this times the
+// `icon-size` setting's share of it, so every other measurement scales with it
+// rather than having to be restated.
+inline constexpr float kIconSize = 48.0f;
+// What the dock actually draws at by default. Nexus runs at 32 and it is a
+// better size for a dock that holds forty things.
+inline constexpr float kDefaultIconSize = 32.0f;
+// The range the setting allows. The ceiling is what the window's height is
+// reserved for, so raising it costs everyone a taller window.
+inline constexpr float kMinIconSize = 20.0f;
+inline constexpr float kMaxIconSize = 48.0f;
 inline constexpr float kIconGap = 4.0f;        // node 3:7 main-apps, gap-[4px]
 inline constexpr float kGroupGap = 8.0f;       // node 3:6 dock-bar, gap-[8px]
 inline constexpr float kPaddingX = 16.0f;      // node 3:6, px-[16px]
@@ -68,20 +79,24 @@ inline constexpr float kSplay = 1.00f;
 // the thing everyone is actually comparing this to.
 namespace magnify {
 
-// How big the icon under the cursor gets. macOS's own slider tops out near 2x;
-// this sits just under it, because the dock also has to stay a reasonable
-// height on a 1080p screen.
-inline constexpr float kMaxScale = 1.75f;
+// How big the icon under the cursor gets. Nexus's own amplitude sits about
+// here, and it is enough: past this the swell starts shoving its neighbours
+// around more than it magnifies the thing you are pointing at.
+inline constexpr float kMaxScale = 1.60f;
 
-// Half-width of the wave in logical pixels. At the 52 px icon pitch this reaches
-// about two and a half icons either side, which is what makes it read as a
-// swell rather than one icon popping.
-inline constexpr float kInfluencePx = 132.0f;
+// Half-width of the wave in logical pixels - Nexus's DockMagPixels, which is
+// worth copying exactly. It was 132 here, which at any icon size reaches so far
+// either side that the wave feels slow and vague: the cursor arrives somewhere
+// and half the dock is already moving. Sixty is about two icons, and that is
+// what makes the swell feel attached to the pointer.
+inline constexpr float kInfluencePx = 60.0f;
 
-// Critically damped spring, in the usual w^2 form. w = sqrt(430) = 20.7 rad/s,
-// so a step settles in roughly 4/w = 0.19 s: quick enough to feel attached to
-// the cursor, slow enough to read as mass rather than a jump cut.
-inline constexpr float kStiffness = 430.0f;
+// Critically damped spring, in the usual w^2 form. w = sqrt(1250) = 35.4 rad/s,
+// so a step settles in roughly 4/w = 0.11 s. It was 430, settling in 0.19 s,
+// which reads as the dock catching up with the cursor rather than following it.
+// Still a spring rather than a jump cut - the mass is what stops a fast sweep
+// looking like a strobe - just a much lighter one.
+inline constexpr float kStiffness = 1250.0f;
 
 // A magnified icon keeps its bottom edge on the icon row and grows upward, the
 // way the macOS dock does. The glass follows it by this fraction of the growth,

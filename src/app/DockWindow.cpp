@@ -209,6 +209,14 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
 
     LogInfo("Dock window created at {} DPI, auto-hide {}, icon bulge {}, {} items", dpi_,
             autoHide_ ? "on" : "off", settings_.iconBulge ? "on" : "off", store_.items().size());
+    // The bar's own measurements, which are otherwise only checkable with a
+    // screenshot - and a screenshot of a dock is exactly what another dock
+    // sitting on the same screen edge will quietly ruin.
+    LogInfo("Bar {:.0f}x{:.0f} logical at {:.0f}% of design size, icons {:.0f} px, "
+            "bottom {:.0f} px above the edge",
+            layout_.RestingBarWidth(), layout_.bar_half_height() * 2.0f,
+            layout_.scale() * 100.0f, design::kIconSize * layout_.scale(),
+            design::kScreenMargin);
     return true;
 }
 
@@ -489,6 +497,7 @@ void DockWindow::ApplySettings() {
     // The command line wins over the file, so a reload cannot turn auto-hide
     // back on under someone who started the dock with --no-autohide.
     autoHide_ = autoHideOverride_.value_or(settings_.autoHide);
+    layout_.SetIconScale(settings_.iconSize / design::kIconSize);
     layout_.SetMagnification(settings_.magnification, settings_.maxScale, settings_.influencePx,
                              settings_.iconBulge);
     // The frost is a cached blur at a particular radius, and the radius is a
@@ -509,6 +518,7 @@ void DockWindow::ReloadSettings() {
     }
     const float previousScale = settings_.maxScale;
     const float previousInfluence = settings_.influencePx;
+    const float previousIconSize = settings_.iconSize;
     const bool previousAutoHide = autoHide_;
 
     settings_.Load();
@@ -519,7 +529,8 @@ void DockWindow::ReloadSettings() {
     // How wide the dock can get is a function of the magnification, and the
     // window is sized for that once rather than resized per frame - so these two
     // are the only settings that have to reach all the way back to the window.
-    if (settings_.maxScale != previousScale || settings_.influencePx != previousInfluence) {
+    if (settings_.maxScale != previousScale || settings_.influencePx != previousInfluence ||
+        settings_.iconSize != previousIconSize) {
         UpdatePlacement();
     }
 
@@ -1052,10 +1063,10 @@ void DockWindow::Render() {
     constants.viewportCenter[0] = viewWidth;
     constants.viewportCenter[1] = viewHeight;
     constants.viewportCenter[2] = layout_.bar_center_x() * scale;
-    constants.viewportCenter[3] = (DockLayout::bar_center_y() + slide) * scale;
+    constants.viewportCenter[3] = (layout_.bar_center_y() + slide) * scale;
     constants.shape[0] = layout_.bar_half_width() * scale;
-    constants.shape[1] = DockLayout::bar_half_height() * scale;
-    constants.shape[2] = kCornerRadius * scale;
+    constants.shape[1] = layout_.bar_half_height() * scale;
+    constants.shape[2] = layout_.corner_radius() * scale;
     constants.shape[3] = elapsed;
 
     constants.light[0] = Radians(settings_.lightAngleDegrees);
@@ -1299,8 +1310,9 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
 
     // Running indicators. They sit on the resting icon row while the icon above
     // them magnifies, which is what keeps the row of dots reading as a row.
-    const float indicatorY = design::kBleed + design::kBarHeight - design::kPaddingY +
-                             design::kIndicatorGap + design::kIndicatorDiameter * 0.5f;
+    const float indicatorY = layout_.icon_row_bottom() +
+                             (design::kIndicatorGap + design::kIndicatorDiameter * 0.5f) *
+                                 layout_.scale();
     for (const PlacedIcon& icon : layout_.icons()) {
         if (instances >= kMaxIconInstances) {
             break;
@@ -1309,7 +1321,7 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
         if (index >= store_.items().size() || !running_.IsRunning(index)) {
             continue;
         }
-        const float half = design::kIndicatorDiameter * 0.5f * scale;
+        const float half = design::kIndicatorDiameter * 0.5f * layout_.scale() * scale;
         constants.rect[instances][0] = icon.centerX * scale;
         constants.rect[instances][1] = (indicatorY + slideLogical) * scale;
         constants.rect[instances][2] = half;
@@ -1332,7 +1344,7 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
         constants.rect[instances][0] = left + width * 0.5f;
         constants.rect[instances][1] = (hairline.centerY + slideLogical) * scale;
         constants.rect[instances][2] = width * 0.5f;
-        constants.rect[instances][3] = design::kSeparatorHeight * 0.5f * scale;
+        constants.rect[instances][3] = hairline.size * 0.5f * scale;
 
         constants.source[instances][2] = design::kSeparatorTint[3];
         constants.source[instances][3] = 1.0f; // solid fill, not an atlas sample

@@ -45,6 +45,11 @@ struct Settings {
     float maxScale = 0.0f;
     float influencePx = 0.0f;
 
+    // The icon size the dock draws at, in logical pixels. Everything else in
+    // the layout is proportional to it, so this is the one number that makes
+    // the whole dock bigger or smaller.
+    float iconSize = 0.0f;
+
     // Whether the glass swells around a raised icon. Off by default: it fuses
     // the bar's silhouette to the icons, which reads as liquid clinging to them
     // rather than as a pane of glass, and that is a much stronger effect than

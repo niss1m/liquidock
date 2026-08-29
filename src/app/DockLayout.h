@@ -58,7 +58,14 @@ public:
     // applied. A dock of forty-odd items is wider than a screen at full size,
     // and a dock running off both edges is worse than a slightly smaller one.
     float FitWithin(float availableLogical);
-    float item_scale() const { return itemScale_; }
+
+    // The size the user asked for, as a fraction of the design's own icon size.
+    void SetIconScale(float userScale);
+
+    // Everything the layout draws is this times the design's measurements: the
+    // size asked for, reduced further if the row would not fit the screen. One
+    // factor rather than two so nothing can scale by only one of them.
+    float scale() const { return userScale_ * fitScale_; }
 
     // The magnification the user asked for. `bulge` is what makes the glass
     // swell around a raised icon; with it off the bar keeps the plain rounded
@@ -83,8 +90,14 @@ public:
 
     float bar_center_x() const { return barCenterX_; }
     float bar_half_width() const { return barHalfWidth_; }
-    static float bar_center_y();
-    static float bar_half_height();
+    // The bar's bottom edge is fixed, so scaling the dock down keeps it the same
+    // distance from the screen edge and takes the height off the top.
+    float bar_bottom() const;
+    float bar_center_y() const;
+    float bar_half_height() const;
+    float corner_radius() const;
+    // Where the running indicators sit, and where icons rest their bottom edge.
+    float icon_row_bottom() const;
 
     const std::vector<PlacedIcon>& icons() const { return icons_; }
     const std::vector<GlassLens>& lenses() const { return lenses_; }
@@ -127,8 +140,9 @@ private:
     float maxScale_ = 1.0f;
     float influencePx_ = 1.0f;
     bool bulge_ = false;
+    float userScale_ = 1.0f;
     // 1 until the row would not fit the screen.
-    float itemScale_ = 1.0f;
+    float fitScale_ = 1.0f;
     float barCenterX_ = 0.0f;
     float barHalfWidth_ = 0.0f;
 };

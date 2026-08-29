@@ -100,6 +100,7 @@ void Settings::Load() {
     magnification = true;
     maxScale = design::magnify::kMaxScale;
     influencePx = design::magnify::kInfluencePx;
+    iconSize = design::kDefaultIconSize;
     iconBulge = false;
 
     monitorIndex = 0;
@@ -165,6 +166,8 @@ bool Settings::ReadFile(const std::wstring& path) {
             magnification = ParseBool(value, magnification);
         } else if (key == L"max-scale") {
             maxScale = ParseFloat(value, maxScale, 1.0f, design::kMaxConfigurableScale);
+        } else if (key == L"icon-size") {
+            iconSize = ParseFloat(value, iconSize, design::kMinIconSize, design::kMaxIconSize);
         } else if (key == L"influence") {
             influencePx = ParseFloat(value, influencePx, 16.0f, 600.0f);
         } else if (key == L"icon-bulge") {
@@ -211,6 +214,7 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"magnification") return magnification ? L"on" : L"off";
     if (key == L"max-scale") return number(L"%.2f", maxScale);
     if (key == L"influence") return number(L"%.0f", influencePx);
+    if (key == L"icon-size") return number(L"%.0f", iconSize);
     if (key == L"icon-bulge") return iconBulge ? L"on" : L"off";
     if (key == L"monitor") {
         if (monitorIndex <= 0) {
@@ -279,7 +283,7 @@ bool Settings::Save() const {
     static const wchar_t* const kAllKeys[] = {
         L"refraction", L"depth",        L"dispersion",    L"frost",         L"splay",
         L"light-angle", L"light-intensity", L"tint-alpha", L"backdrop",     L"magnification",
-        L"max-scale",  L"influence",    L"icon-bulge",    L"monitor",       L"reserve-space",
+        L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"dwell-seconds", L"slide-seconds",
     };
     for (const wchar_t* key : kAllKeys) {
@@ -366,6 +370,10 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# --- Magnification -------------------------------------------------\n"
              L"magnification = %s\n"
              L"\n"
+             L"# How big the icons are, in pixels. Everything else in the dock is\n"
+             L"# proportional to this, so it is the one number that resizes the lot.\n"
+             L"icon-size = %.0f\n"
+             L"\n"
              L"# How big the icon under the cursor gets (2.00 is the ceiling - the\n"
              L"# window reserves headroom for it at startup), and how far either side\n"
              L"# of it the swell reaches, in pixels.\n"
@@ -396,7 +404,7 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
              tintAlpha, backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
-             magnification ? L"on" : L"off", maxScale, influencePx,
+             magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
              iconBulge ? L"on" : L"off", monitorText, reserveSpace ? L"on" : L"off",
              autoHide ? L"on" : L"off", dwellSeconds, slideSeconds);
 
