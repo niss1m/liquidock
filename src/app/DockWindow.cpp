@@ -28,6 +28,11 @@ constexpr float kBottomMargin = design::kScreenMargin;
 // have somewhere to land.
 constexpr float kBleed = 40.0f;
 
+// Blur radius at frost = 1.0, in logical pixels. The design's frost of 0.04
+// lands near a pixel and a half, which is the barely-there scattering the
+// Figma render shows rather than a milky panel.
+constexpr float kMaxFrostSigmaPx = 40.0f;
+
 float Radians(float degrees) {
     return degrees * std::numbers::pi_v<float> / 180.0f;
 }
@@ -100,7 +105,22 @@ bool DockWindow::CreateResources() {
     desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     LD_CHECK(device_->d3d()->CreateBuffer(&desc, nullptr, &constantBuffer_));
-    return true;
+
+    // Clamp rather than wrap: refraction pushes samples past the dock's own
+    // footprint, and near a screen edge that can land outside the wallpaper.
+    // Tiled wallpapers are handled with frac() in the shader instead.
+    D3D11_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.MaxLOD = D3D11_FLOAT32_MAX;
+    LD_CHECK(device_->d3d()->CreateSamplerState(&sampler, &sampler_));
+
+    if (!backdrop_.Initialize(*device_) || !frost_.Initialize(*device_, *shaders_)) {
+        return false;
+    }
+    return frost_.Resize(target_.width(), target_.height());
 }
 
 void DockWindow::Destroy() {
@@ -140,8 +160,13 @@ void DockWindow::UpdatePlacement() {
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW);
 
+    // Moving the dock invalidates the cached frost even at an unchanged size:
+    // it is a crop of the wallpaper at a particular position.
+    frostDirty_ = true;
+
     if (target_.width() > 0) {
         target_.Resize(static_cast<UINT>(width), static_cast<UINT>(height));
+        frost_.Resize(static_cast<UINT>(width), static_cast<UINT>(height));
         RequestRedraw();
     }
 }
@@ -163,6 +188,29 @@ void DockWindow::Render() {
     ID3D11DeviceContext1* ctx = device_->context();
 
     const float scale = static_cast<float>(dpi_) / 96.0f;
+
+    // The backdrop reloads only when the wallpaper actually changes, and the
+    // frost chain re-runs only when something it depends on moved. Both return
+    // immediately in the common case, which is why a static desktop presents no
+    // frames at all.
+    HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+    if (backdrop_.Update(monitor)) {
+        frostDirty_ = true;
+    }
+
+    RECT windowRect{};
+    GetWindowRect(hwnd_, &windowRect);
+    const RECT monitorRect = backdrop_.monitor_rect();
+    const POINT windowOrigin{windowRect.left - monitorRect.left, windowRect.top - monitorRect.top};
+    const SIZE windowSize{static_cast<LONG>(target_.width()),
+                          static_cast<LONG>(target_.height())};
+
+    const float frostSigma = design::glass::kFrost * kMaxFrostSigmaPx * scale;
+    if (frostDirty_ || !frost_.ready()) {
+        if (frost_.Build(backdrop_, windowOrigin, windowSize, frostSigma)) {
+            frostDirty_ = false;
+        }
+    }
     const float viewWidth = static_cast<float>(target_.width());
     const float viewHeight = static_cast<float>(target_.height());
 
@@ -185,10 +233,24 @@ void DockWindow::Render() {
     constants.light[1] = design::glass::kLightIntensity;
     constants.light[2] = design::glass::kRefraction;  // consumed in M1
     constants.light[3] = design::glass::kDepth;
-    constants.material[0] = design::glass::kDispersion; // consumed in M1
-    constants.material[1] = design::glass::kFrost;      // consumed in M1
+    constants.material[0] = design::glass::kDispersion;
+    constants.material[1] = design::glass::kFrost;
     constants.material[2] = design::glass::kSplay;
-    constants.material[3] = 0.0f;
+    constants.material[3] = backdrop_.tiled() ? 1.0f : 0.0f;
+
+    constants.windowOrigin[0] = static_cast<float>(windowOrigin.x);
+    constants.windowOrigin[1] = static_cast<float>(windowOrigin.y);
+    constants.windowOrigin[2] = static_cast<float>(monitorRect.right - monitorRect.left);
+    constants.windowOrigin[3] = static_cast<float>(monitorRect.bottom - monitorRect.top);
+
+    float uvScale[2]{};
+    float uvOffset[2]{};
+    backdrop_.uv_scale(uvScale);
+    backdrop_.uv_offset(uvOffset);
+    constants.backdropUv[0] = uvScale[0];
+    constants.backdropUv[1] = uvScale[1];
+    constants.backdropUv[2] = uvOffset[0];
+    constants.backdropUv[3] = uvOffset[1];
 
     if (diagnostic_) {
         constants.tint[0] = 1.0f;
@@ -224,6 +286,12 @@ void DockWindow::Render() {
     ID3D11Buffer* cb = constantBuffer_.Get();
     ctx->VSSetConstantBuffers(0, 1, &cb);
     ctx->PSSetConstantBuffers(0, 1, &cb);
+
+    ID3D11ShaderResourceView* resources[2] = {backdrop_.srv(), frost_.srv()};
+    ctx->PSSetShaderResources(0, 2, resources);
+    ID3D11SamplerState* samplers[1] = {sampler_.Get()};
+    ctx->PSSetSamplers(0, 1, samplers);
+
     // No blend state: the target was just cleared to zero and the shader writes
     // premultiplied colour, so blending would only cost bandwidth.
     ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
@@ -231,6 +299,8 @@ void DockWindow::Render() {
 
     ID3D11RenderTargetView* nullRtv = nullptr;
     ctx->OMSetRenderTargets(1, &nullRtv, nullptr);
+    ID3D11ShaderResourceView* nullResources[2] = {nullptr, nullptr};
+    ctx->PSSetShaderResources(0, 2, nullResources);
 
     if (!target_.EndFrame()) {
         // A TDR or a driver update removed the adapter. Everything device-bound
@@ -285,16 +355,22 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
 
         case WM_SETTINGCHANGE:
-            // Only the work area matters here. Reacting to every broadcast
-            // setting change would repeatedly resize the swap chain for things
-            // like a theme or locale change.
+            // Only two settings matter here. Reacting to every broadcast would
+            // resize the swap chain for things like a theme or locale change.
             if (wParam == SPI_SETWORKAREA) {
                 UpdatePlacement();
+            } else if (wParam == SPI_SETDESKWALLPAPER) {
+                backdrop_.Invalidate();
+                frostDirty_ = true;
+                RequestRedraw();
             }
             return 0;
 
         case WM_TIMER:
             if (wParam == kShaderWatchTimer && shaders_ && shaders_->PollForChanges()) {
+                // A shader edit can change the frost amount, and the cached
+                // blur would otherwise keep the old radius until the dock moved.
+                frostDirty_ = true;
                 RequestRedraw();
             }
             return 0;

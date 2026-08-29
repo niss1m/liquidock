@@ -25,8 +25,8 @@ Early. See the milestones below for where things stand.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M0 | Build system, D3D11 + DirectComposition transparent window | in progress |
-| M1 | The liquid glass shader and backdrop pipeline | |
+| M0 | Build system, D3D11 + DirectComposition transparent window | done |
+| M1 | The liquid glass shader and backdrop pipeline | done |
 | M2 | Item model, icons, layout, launching, magnification | |
 | M3 | Multi-monitor, auto-hide, appbar, running indicators | |
 | M4 | Settings UI | |

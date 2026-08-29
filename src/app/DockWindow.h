@@ -7,6 +7,8 @@
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
 #include "gfx/ShaderCache.h"
+#include "glass/FrostChain.h"
+#include "glass/WallpaperBackdrop.h"
 
 namespace liquidock {
 
@@ -16,10 +18,12 @@ struct GlassConstants {
     float viewportCenter[4]; // xy = viewport size (px), zw = rect centre (px)
     float shape[4];          // xy = rect half size (px), z = corner radius (px), w = time (s)
     float light[4];          // x = angle (rad), y = intensity, z = refraction, w = depth
-    float material[4];       // x = dispersion, y = frost, z = splay, w = reserved
+    float material[4];       // x = dispersion, y = frost, z = splay, w = tiled flag
     float tint[4];           // straight alpha
+    float windowOrigin[4];   // xy = window origin (monitor px), zw = monitor size (px)
+    float backdropUv[4];     // xy = uv scale, zw = uv offset
 };
-static_assert(sizeof(GlassConstants) == 80, "GlassConstants must match the HLSL cbuffer");
+static_assert(sizeof(GlassConstants) == 112, "GlassConstants must match the HLSL cbuffer");
 static_assert(sizeof(GlassConstants) % 16 == 0, "Constant buffers must be 16-byte aligned");
 
 // The dock's own window: a click-through, always-on-top, per-pixel-alpha
@@ -60,9 +64,15 @@ private:
     GraphicsDevice* device_ = nullptr;
     std::unique_ptr<ShaderCache> shaders_;
     CompositionTarget target_;
+    WallpaperBackdrop backdrop_;
+    FrostChain frost_;
 
     HWND hwnd_ = nullptr;
     ComPtr<ID3D11Buffer> constantBuffer_;
+    ComPtr<ID3D11SamplerState> sampler_;
+    // Set whenever the cached frost is stale: the dock moved or resized, the
+    // wallpaper changed, or a shader edit may have changed the frost amount.
+    bool frostDirty_ = true;
     UINT dpi_ = 96;
     bool diagnostic_ = false;
     bool deviceLost_ = false;

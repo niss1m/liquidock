@@ -54,6 +54,8 @@ add_executable(liquidock WIN32
     src/gfx/GraphicsDevice.cpp
     src/gfx/CompositionTarget.cpp
     src/gfx/ShaderCache.cpp
+    src/glass/WallpaperBackdrop.cpp
+    src/glass/FrostChain.cpp
     "${EMBEDDED_SHADERS}"
     # CMake collects .manifest sources and feeds them to mt.exe through
     # `cmake -E vs_link_exe --manifests`. Passing /MANIFEST:EMBED and
