@@ -1,9 +1,13 @@
 #include "app/DockWindow.h"
 
+#include <shellapi.h>
+#include <windowsx.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <numbers>
+#include <thread>
 
 #include "core/Check.h"
 #include "core/DesignTokens.h"
@@ -20,26 +24,24 @@ constexpr UINT_PTR kHideTimer = 2;
 // vblank, so this self-paces at the monitor's refresh rate without a timer -
 // and unlike a timer it stops the instant the animation settles.
 constexpr UINT kAnimateMessage = WM_APP + 1;
+// Posted by the icon loader thread as each icon becomes available.
+constexpr UINT kIconMessage = WM_APP + 2;
 
-// TODO(M2): these belong in the config file once it exists, and in the
-// preferences UI in M4. They are the numbers a user actually wants to change.
+enum ItemMenuCommand : UINT {
+    kCommandOpen = 1,
+    kCommandRemove = 2,
+    kCommandEditFile = 3,
+};
+
+// TODO(M4): these belong in the preferences UI. They are the numbers a user
+// actually wants to change.
 constexpr float kDwellSeconds = 3.0f;  // how long the dock stays out
 constexpr float kSlideSeconds = 0.22f; // how long the slide itself takes
 constexpr int kTriggerThicknessPx = 2; // the strip that notices the cursor
 
-// M0 has no item list yet, so the bar is sized as the design's own dock: ten
-// main icons, a separator, two utility icons. That makes an M0 screenshot
-// directly comparable against Figma frame 3:5 instead of merely dock-shaped.
-// M2 replaces this with the real item count.
-constexpr float kDockWidth = design::BarWidth(10, 2);
-constexpr float kDockHeight = design::kBarHeight;
 constexpr float kCornerRadius = design::kCornerRadius;
 constexpr float kBottomMargin = design::kScreenMargin;
-
-// The window is grown past the glass on every side so the rim highlight, and
-// later the drop shadow and the icons that overshoot the bar while magnified,
-// have somewhere to land.
-constexpr float kBleed = 40.0f;
+constexpr float kBleed = design::kBleed;
 
 // Blur radius at frost = 1.0, in logical pixels. The design's frost of 0.04
 // lands near a pixel and a half, which is the barely-there scattering the
@@ -58,6 +60,16 @@ float Eased(float t) {
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
+// Icons are stored at the size a fully magnified one needs, so that the resting
+// size is always a minification and the mip chain has something to work with.
+// Two sizes rather than a continuum: the atlas is reallocated when this changes,
+// and there is no visible difference between 128 and, say, 144.
+int CellForDpi(UINT dpi) {
+    const float scale = static_cast<float>(dpi) / 96.0f;
+    const float needed = design::kIconSize * design::magnify::kMaxScale * scale;
+    return (needed <= 128.0f) ? 128 : 256;
+}
+
 } // namespace
 
 DockWindow::~DockWindow() {
@@ -72,6 +84,11 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) 
 
     QueryPerformanceFrequency(&frequency_);
     QueryPerformanceCounter(&startTime_);
+
+    // The item list has to exist before the window is placed: how wide the dock
+    // can get under magnification is what decides how wide the window must be.
+    store_.Load();
+    layout_.SetItems(store_.items());
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -88,6 +105,10 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) 
         // NOREDIRECTIONBITMAP is the load-bearing flag: without it DWM
         // allocates an opaque redirection surface and the window can never be
         // per-pixel translucent no matter what the swap chain does.
+        //
+        // NOACTIVATE is what lets the dock take clicks without stealing focus
+        // from whatever the user is working in - launching an app from the dock
+        // must not first deactivate the app they were reading.
         WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
         kWindowClass, L"LiquiDock", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, wc.hInstance, this);
 
@@ -109,6 +130,8 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) 
         return false;
     }
 
+    StartIconLoad();
+
 #ifdef LIQUIDOCK_DEBUG
     shaders_->PollForChanges(); // establish the baseline stamp
     SetTimer(hwnd_, kShaderWatchTimer, 250, nullptr);
@@ -128,7 +151,8 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) 
     // looks indistinguishable from launching into a broken one.
     StartHideCountdown();
 
-    LogInfo("Dock window created at {} DPI, auto-hide {}", dpi_, autoHide_ ? "on" : "off");
+    LogInfo("Dock window created at {} DPI, auto-hide {}, {} items", dpi_,
+            autoHide_ ? "on" : "off", store_.items().size());
     return true;
 }
 
@@ -161,11 +185,10 @@ void DockWindow::StartHideCountdown() {
     }
     revealState_ = (revealProgress_ >= 1.0f) ? RevealState::Shown : revealState_;
     SetTimer(hwnd_, kHideTimer, static_cast<UINT>(kDwellSeconds * 1000.0f), nullptr);
-    LogDebug("dwell timer armed ({} s)", kDwellSeconds);
 }
 
 void DockWindow::BeginHiding() {
-    if (!autoHide_ || revealState_ == RevealState::Hidden) {
+    if (!autoHide_ || menuOpen_ || revealState_ == RevealState::Hidden) {
         return;
     }
     revealState_ = RevealState::Hiding;
@@ -186,7 +209,6 @@ float DockWindow::AdvanceReveal(float deltaSeconds) {
         if (revealProgress_ >= 1.0f) {
             revealState_ = RevealState::Shown;
             animating_ = false;
-            LogDebug("slide out complete");
             StartHideCountdown();
         }
     } else if (revealState_ == RevealState::Hiding) {
@@ -205,6 +227,33 @@ float DockWindow::AdvanceReveal(float deltaSeconds) {
     return Eased(revealProgress_);
 }
 
+float DockWindow::SlideOffset(float reveal) const {
+    const float scale = static_cast<float>(dpi_) / 96.0f;
+    const float viewHeight = static_cast<float>(target_.height()) / scale;
+    if (viewHeight <= 0.0f) {
+        return 0.0f;
+    }
+    // At reveal 0 the bar's centre sits one half-height below the bottom of the
+    // window, which is the bottom of the screen; at 1 it sits at kBleed. The
+    // whole slide is this one offset applied to every piece of the dock, so the
+    // window itself never moves and DWM never has to redo its layout.
+    return (1.0f - reveal) * (viewHeight - kBleed);
+}
+
+bool DockWindow::CursorToLayout(POINT screen, float* x, float* y) const {
+    if (!hwnd_) {
+        return false;
+    }
+    POINT client = screen;
+    if (!ScreenToClient(hwnd_, &client)) {
+        return false;
+    }
+    const float scale = static_cast<float>(dpi_) / 96.0f;
+    *x = static_cast<float>(client.x) / scale;
+    *y = static_cast<float>(client.y) / scale - SlideOffset(Eased(revealProgress_));
+    return true;
+}
+
 bool DockWindow::CreateResources() {
     D3D11_BUFFER_DESC desc{};
     desc.ByteWidth = sizeof(GlassConstants);
@@ -212,6 +261,9 @@ bool DockWindow::CreateResources() {
     desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     LD_CHECK(device_->d3d()->CreateBuffer(&desc, nullptr, &constantBuffer_));
+
+    desc.ByteWidth = sizeof(IconConstants);
+    LD_CHECK(device_->d3d()->CreateBuffer(&desc, nullptr, &iconConstantBuffer_));
 
     // Clamp rather than wrap: refraction pushes samples past the dock's own
     // footprint, and near a screen edge that can land outside the wallpaper.
@@ -224,6 +276,25 @@ bool DockWindow::CreateResources() {
     sampler.MaxLOD = D3D11_FLOAT32_MAX;
     LD_CHECK(device_->d3d()->CreateSamplerState(&sampler, &sampler_));
 
+    // Premultiplied source-over. The icons are the only thing in the dock that
+    // blends: the glass writes an opaque reconstruction into a cleared target,
+    // and the icons land on top of it.
+    D3D11_BLEND_DESC blend{};
+    blend.RenderTarget[0].BlendEnable = TRUE;
+    blend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    blend.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    blend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    LD_CHECK(device_->d3d()->CreateBlendState(&blend, &iconBlend_));
+
+    atlasCell_ = CellForDpi(dpi_);
+    if (!atlas_.Initialize(*device_, atlasCell_, design::kMaxItems)) {
+        return false;
+    }
+
     if (!backdrop_.Initialize(*device_) || !frost_.Initialize(*device_, *shaders_)) {
         return false;
     }
@@ -231,6 +302,9 @@ bool DockWindow::CreateResources() {
 }
 
 void DockWindow::Destroy() {
+    // Before the window goes: the loader posts to this HWND, so it has to be
+    // stopped while the handle is still valid.
+    iconLoader_.Stop();
     trigger_.Destroy();
     if (hwnd_) {
         KillTimer(hwnd_, kShaderWatchTimer);
@@ -246,15 +320,154 @@ void DockWindow::RequestRedraw() {
     }
 }
 
+void DockWindow::StartIconLoad() {
+    std::vector<std::wstring> paths;
+    paths.reserve(store_.items().size());
+    for (DockItem& item : store_.items()) {
+        item.atlasSlot = -1;
+        paths.push_back(item.path);
+    }
+    iconLoader_.Start(paths, atlasCell_, hwnd_, kIconMessage);
+}
+
+void DockWindow::DrainLoadedIcons() {
+    loadedIcons_.clear();
+    iconLoader_.Collect(loadedIcons_);
+    if (loadedIcons_.empty()) {
+        return;
+    }
+
+    for (const IconBitmap& icon : loadedIcons_) {
+        if (icon.slot < 0 || icon.slot >= static_cast<int>(store_.items().size())) {
+            continue; // the list changed while this one was being extracted
+        }
+        if (icon.size == atlasCell_ && atlas_.Upload(icon.slot, icon.pixels)) {
+            store_.items()[static_cast<size_t>(icon.slot)].atlasSlot = icon.slot;
+        }
+    }
+    // One mip regeneration for the whole batch, not one per icon.
+    atlas_.FinishUpdates();
+    RequestRedraw();
+}
+
+void DockWindow::ReloadItems() {
+    layout_.SetItems(store_.items());
+    UpdatePlacement(); // the dock's width depends on how many items it holds
+    StartIconLoad();
+    RequestRedraw();
+}
+
+void DockWindow::Launch(int itemIndex) {
+    if (itemIndex < 0 || itemIndex >= static_cast<int>(store_.items().size())) {
+        return;
+    }
+    const DockItem& item = store_.items()[static_cast<size_t>(itemIndex)];
+    const std::wstring path = ItemStore::ExpandPath(item.path);
+    LogInfo("Launching item {}", itemIndex);
+
+    layout_.Bounce(itemIndex);
+    StartHideCountdown();
+    RequestRedraw();
+
+    // ShellExecuteEx can block for a noticeable time - it may load a shell
+    // extension, resolve a stale shortcut, or wait on a slow network path - and
+    // blocking here would freeze the magnification mid-wave. The thread is
+    // detached because it touches nothing of ours and needs no result.
+    std::thread([path] {
+        if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
+            return;
+        }
+        SHELLEXECUTEINFOW info{};
+        info.cbSize = sizeof(info);
+        // NOASYNC matters on a thread that is about to exit: without it the
+        // shell may hand the work to this thread's apartment and then find it
+        // gone. NO_UI keeps a bad path in the config file from putting a modal
+        // error box on screen.
+        info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        info.lpVerb = L"open";
+        info.lpFile = path.c_str();
+        info.nShow = SW_SHOWNORMAL;
+        if (!ShellExecuteExW(&info)) {
+            LogWarn("Could not launch a dock item: {}", GetLastError());
+        }
+        CoUninitialize();
+    }).detach();
+}
+
+void DockWindow::ShowItemMenu(int itemIndex, POINT screen) {
+    if (itemIndex < 0 || itemIndex >= static_cast<int>(store_.items().size())) {
+        return;
+    }
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+        return;
+    }
+    const std::wstring label = store_.items()[static_cast<size_t>(itemIndex)].label;
+    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, label.c_str());
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kCommandOpen, L"Open");
+    AppendMenuW(menu, MF_STRING, kCommandRemove, L"Remove from Dock");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kCommandEditFile, L"Edit the items file…");
+
+    // The dwell timer must not fire while a menu is up, or the dock slides away
+    // from underneath the thing the user is choosing from.
+    menuOpen_ = true;
+    KillTimer(hwnd_, kHideTimer);
+
+    SetForegroundWindow(hwnd_);
+    const int command = TrackPopupMenuEx(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                         screen.x, screen.y, hwnd_, nullptr);
+    PostMessageW(hwnd_, WM_NULL, 0, 0);
+    DestroyMenu(menu);
+
+    menuOpen_ = false;
+    StartHideCountdown();
+
+    switch (command) {
+        case kCommandOpen:
+            Launch(itemIndex);
+            break;
+        case kCommandRemove:
+            if (store_.Remove(static_cast<size_t>(itemIndex))) {
+                // Every item after this one shifted down, and atlas slots are
+                // item indices, so the icons are re-extracted rather than
+                // shuffled. It costs a few tens of milliseconds on a thread
+                // nobody is waiting on.
+                ReloadItems();
+            }
+            break;
+        case kCommandEditFile: {
+            const std::wstring path = ItemStore::ConfigPath();
+            if (!path.empty()) {
+                ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    RequestRedraw();
+}
+
 void DockWindow::UpdatePlacement() {
     const float scale = static_cast<float>(dpi_) / 96.0f;
-    const int width = static_cast<int>(std::lround((kDockWidth + 2.0f * kBleed) * scale));
+
+    // The window has to be wide enough for the dock at its widest, which is the
+    // magnification wave sitting wherever produces the largest total. Sizing it
+    // to the resting width and growing it per frame would mean a SetWindowPos
+    // on every animation frame, and DWM redoing its layout each time.
+    const float maxBar = layout_.MaxBarWidth();
+    const int width = static_cast<int>(std::lround((maxBar + 2.0f * kBleed) * scale));
     // The window reaches from above the bar's resting position all the way down
     // to the screen edge, so the bar can slide entirely out of sight *within*
     // it. That makes the animation a constant fed to the shader rather than a
-    // SetWindowPos on every frame, which would make DWM redo its work each time.
+    // SetWindowPos on every frame.
     const int height =
-        static_cast<int>(std::lround((kBottomMargin + kDockHeight + kBleed) * scale));
+        static_cast<int>(std::lround((kBottomMargin + design::kBarHeight + kBleed) * scale));
+
+    layout_.SetWindowWidth(static_cast<float>(width) / scale);
 
     HMONITOR monitor = hwnd_ ? MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY)
                              : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
@@ -273,9 +486,13 @@ void DockWindow::UpdatePlacement() {
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW);
 
-    // The trigger strip spans the dock's full width so the cursor does not have
-    // to find the bar exactly, only the right stretch of the edge.
-    trigger_.SetBounds(x, work.bottom - kTriggerThicknessPx, width, kTriggerThicknessPx);
+    // The trigger strip spans the resting bar rather than the whole window: the
+    // window is much wider than the dock looks, and an edge trigger that
+    // extends well past the visible bar feels like the dock is being summoned
+    // by nothing.
+    const int barWidth = static_cast<int>(std::lround(layout_.RestingBarWidth() * scale));
+    trigger_.SetBounds(x + (width - barWidth) / 2, work.bottom - kTriggerThicknessPx, barWidth,
+                       kTriggerThicknessPx);
 
     // Moving the dock invalidates the cached frost even at an unchanged size:
     // it is a crop of the wallpaper at a particular position.
@@ -343,22 +560,36 @@ void DockWindow::Render() {
     deltaSeconds = std::clamp(deltaSeconds, 0.0f, 0.1f);
 
     const float reveal = AdvanceReveal(deltaSeconds);
-    const float shownCentreY = (kBleed + kDockHeight * 0.5f) * scale;
-    const float hiddenCentreY = viewHeight + kDockHeight * 0.5f * scale;
+    const float slide = SlideOffset(reveal);
+
+    // The cursor is read here rather than tracked from WM_MOUSEMOVE. A move
+    // message says where the cursor *was* when it was posted, and the dock also
+    // moves underneath a stationary cursor during the slide - so the honest
+    // question every frame is "where is the cursor now, relative to the dock as
+    // it is being drawn".
+    POINT cursor{};
+    float cursorX = 0.0f;
+    float cursorY = 0.0f;
+    bool hovered = false;
+    if (!menuOpen_ && GetCursorPos(&cursor) && CursorToLayout(cursor, &cursorX, &cursorY)) {
+        hovered = layout_.Contains(cursorX, cursorY);
+    }
+    layout_.SetCursor(cursorX, hovered);
+    const bool layoutMoving = layout_.Advance(deltaSeconds);
 
     GlassConstants constants{};
     constants.viewportCenter[0] = viewWidth;
     constants.viewportCenter[1] = viewHeight;
-    constants.viewportCenter[2] = viewWidth * 0.5f;
-    constants.viewportCenter[3] = hiddenCentreY + (shownCentreY - hiddenCentreY) * reveal;
-    constants.shape[0] = kDockWidth * 0.5f * scale;
-    constants.shape[1] = kDockHeight * 0.5f * scale;
+    constants.viewportCenter[2] = layout_.bar_center_x() * scale;
+    constants.viewportCenter[3] = (DockLayout::bar_center_y() + slide) * scale;
+    constants.shape[0] = layout_.bar_half_width() * scale;
+    constants.shape[1] = DockLayout::bar_half_height() * scale;
     constants.shape[2] = kCornerRadius * scale;
     constants.shape[3] = elapsed;
 
     constants.light[0] = Radians(design::glass::kLightAngleDegrees);
     constants.light[1] = design::glass::kLightIntensity;
-    constants.light[2] = design::glass::kRefraction;  // consumed in M1
+    constants.light[2] = design::glass::kRefraction;
     constants.light[3] = design::glass::kDepth;
     constants.material[0] = design::glass::kDispersion;
     constants.material[1] = design::glass::kFrost;
@@ -378,6 +609,20 @@ void DockWindow::Render() {
     constants.backdropUv[1] = uvScale[1];
     constants.backdropUv[2] = uvOffset[0];
     constants.backdropUv[3] = uvOffset[1];
+
+    // The bulges under raised icons. At rest there are none, and the shader's
+    // loop does not run at all.
+    const auto& lenses = layout_.lenses();
+    const int lensCount =
+        std::min(static_cast<int>(lenses.size()), static_cast<int>(design::kMaxLenses));
+    constants.lensInfo[0] = static_cast<float>(lensCount);
+    constants.lensInfo[1] = design::magnify::kFuse * scale;
+    for (int i = 0; i < lensCount; ++i) {
+        constants.lens[i][0] = lenses[static_cast<size_t>(i)].centerX * scale;
+        constants.lens[i][1] = (lenses[static_cast<size_t>(i)].centerY + slide) * scale;
+        constants.lens[i][2] = lenses[static_cast<size_t>(i)].halfWidth * scale;
+        constants.lens[i][3] = lenses[static_cast<size_t>(i)].halfHeight * scale;
+    }
 
     if (diagnostic_) {
         constants.tint[0] = 1.0f;
@@ -424,9 +669,13 @@ void DockWindow::Render() {
     ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
     ctx->Draw(3, 0);
 
+    ID3D11ShaderResourceView* nullResources[2] = {nullptr, nullptr};
+    ctx->PSSetShaderResources(0, 2, nullResources);
+
+    RenderIcons(scale, slide);
+
     ID3D11RenderTargetView* nullRtv = nullptr;
     ctx->OMSetRenderTargets(1, &nullRtv, nullptr);
-    ID3D11ShaderResourceView* nullResources[2] = {nullptr, nullptr};
     ctx->PSSetShaderResources(0, 2, nullResources);
 
     if (!target_.EndFrame()) {
@@ -441,11 +690,102 @@ void DockWindow::Render() {
     }
 
     // Drive the next animation frame. Present blocked on vblank, so this paces
-    // itself at the refresh rate; when the slide settles animating_ goes false
-    // and the dock falls silent again.
-    if (animating_ && !deviceLost_) {
+    // itself at the refresh rate; when the slide and the springs have both
+    // settled the dock falls silent again and presents nothing at all.
+    if ((animating_ || layoutMoving) && !deviceLost_) {
         PostMessageW(hwnd_, kAnimateMessage, 0, 0);
     }
+}
+
+void DockWindow::RenderIcons(float scale, float slideLogical) {
+    ComPtr<ID3D11VertexShader> vs = shaders_->VertexShader("Icon", "VSMain");
+    ComPtr<ID3D11PixelShader> ps = shaders_->PixelShader("Icon", "PSMain");
+    if (!vs || !ps || !atlas_.srv()) {
+        return;
+    }
+
+    IconConstants constants{};
+    const float viewWidth = static_cast<float>(target_.width());
+    const float viewHeight = static_cast<float>(target_.height());
+    constants.viewport[0] = viewWidth;
+    constants.viewport[1] = viewHeight;
+    constants.viewport[2] = 1.0f / std::max(viewWidth, 1.0f);
+    constants.viewport[3] = 1.0f / std::max(viewHeight, 1.0f);
+    constants.cell[0] = static_cast<float>(atlas_.cell()) / static_cast<float>(atlas_.width());
+    constants.cell[1] = static_cast<float>(atlas_.cell()) / static_cast<float>(atlas_.height());
+
+    int instances = 0;
+    for (const PlacedIcon& icon : layout_.icons()) {
+        if (instances >= kMaxIconInstances) {
+            break;
+        }
+        const size_t index = static_cast<size_t>(icon.itemIndex);
+        if (index >= store_.items().size()) {
+            continue;
+        }
+        const int slot = store_.items()[index].atlasSlot;
+        if (slot < 0) {
+            continue; // still being extracted; the dock draws without it
+        }
+
+        const float half = icon.size * 0.5f * scale;
+        constants.rect[instances][0] = icon.centerX * scale;
+        constants.rect[instances][1] = (icon.centerY + slideLogical) * scale;
+        constants.rect[instances][2] = half;
+        constants.rect[instances][3] = half;
+
+        constants.source[instances][0] =
+            static_cast<float>((slot % atlas_.columns()) * atlas_.cell()) /
+            static_cast<float>(atlas_.width());
+        constants.source[instances][1] =
+            static_cast<float>((slot / atlas_.columns()) * atlas_.cell()) /
+            static_cast<float>(atlas_.height());
+        constants.source[instances][2] = 1.0f;
+        constants.source[instances][3] = 0.0f;
+        ++instances;
+    }
+
+    for (const PlacedIcon& hairline : layout_.separators()) {
+        if (instances >= kMaxIconInstances) {
+            break;
+        }
+        // A one-logical-pixel rule has to be snapped to the physical grid or it
+        // lands across two columns and renders as two half-lit ones, which at
+        // 20% white is a line that looks like it failed to draw.
+        const float width = std::max(1.0f, std::round(design::kSeparatorWidth * scale));
+        const float left = std::round(hairline.centerX * scale - width * 0.5f);
+        constants.rect[instances][0] = left + width * 0.5f;
+        constants.rect[instances][1] = (hairline.centerY + slideLogical) * scale;
+        constants.rect[instances][2] = width * 0.5f;
+        constants.rect[instances][3] = design::kSeparatorHeight * 0.5f * scale;
+
+        constants.source[instances][2] = design::kSeparatorTint[3];
+        constants.source[instances][3] = 1.0f; // solid fill, not an atlas sample
+        ++instances;
+    }
+
+    if (instances == 0) {
+        return;
+    }
+
+    ID3D11DeviceContext1* ctx = device_->context();
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(ctx->Map(iconConstantBuffer_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        return;
+    }
+    memcpy(mapped.pData, &constants, sizeof(constants));
+    ctx->Unmap(iconConstantBuffer_.Get(), 0);
+
+    ctx->VSSetShader(vs.Get(), nullptr, 0);
+    ctx->PSSetShader(ps.Get(), nullptr, 0);
+    ID3D11Buffer* cb = iconConstantBuffer_.Get();
+    ctx->VSSetConstantBuffers(0, 1, &cb);
+    ctx->PSSetConstantBuffers(0, 1, &cb);
+
+    ID3D11ShaderResourceView* resources[1] = {atlas_.srv()};
+    ctx->PSSetShaderResources(0, 1, resources);
+    ctx->OMSetBlendState(iconBlend_.Get(), nullptr, 0xFFFFFFFF);
+    ctx->DrawInstanced(6, static_cast<UINT>(instances), 0, 0);
 }
 
 LRESULT CALLBACK DockWindow::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -474,15 +814,108 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
-        case WM_NCHITTEST:
-            // M0 has nothing to click. Passing every hit through keeps the dock
-            // from swallowing desktop input while it is only a backdrop test.
+        case WM_NCHITTEST: {
+            // The window is far larger than the dock looks - it carries bleed on
+            // every side for the rim, the bulge and raised icons - so anything
+            // outside the dock's actual silhouette has to fall through to
+            // whatever is underneath, or the dock would swallow desktop clicks
+            // across a band the user cannot see.
+            if (revealState_ == RevealState::Hidden) {
+                return HTTRANSPARENT;
+            }
+            const POINT screen{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            float x = 0.0f;
+            float y = 0.0f;
+            if (CursorToLayout(screen, &x, &y) && layout_.Contains(x, y)) {
+                return HTCLIENT;
+            }
             return HTTRANSPARENT;
+        }
 
-        case WM_DPICHANGED:
+        case WM_MOUSEACTIVATE:
+            // Take the click, but do not become the active window and do not
+            // eat the click doing it. WS_EX_NOACTIVATE already stops the
+            // activation; saying so here is what stops the system trying, which
+            // otherwise flickers focus away from whatever the user is in.
+            return MA_NOACTIVATE;
+
+        case WM_MOUSEMOVE: {
+            if (!mouseTracking_) {
+                TRACKMOUSEEVENT track{sizeof(track)};
+                track.dwFlags = TME_LEAVE;
+                track.hwndTrack = hwnd;
+                mouseTracking_ = TrackMouseEvent(&track) != 0;
+            }
+            // The move message is only a nudge: Render reads the cursor's
+            // actual position. What matters here is that something changed and
+            // a frame is now worth presenting.
+            RequestRedraw();
+            return 0;
+        }
+
+        case WM_MOUSELEAVE:
+            mouseTracking_ = false;
+            pressedItem_ = -1;
+            StartHideCountdown();
+            RequestRedraw();
+            return 0;
+
+        case WM_LBUTTONDOWN: {
+            float x = 0.0f;
+            float y = 0.0f;
+            POINT screen{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ClientToScreen(hwnd, &screen);
+            pressedItem_ = CursorToLayout(screen, &x, &y) ? layout_.ItemAt(x, y) : -1;
+            return 0;
+        }
+
+        case WM_LBUTTONUP: {
+            float x = 0.0f;
+            float y = 0.0f;
+            POINT screen{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ClientToScreen(hwnd, &screen);
+            const int released = CursorToLayout(screen, &x, &y) ? layout_.ItemAt(x, y) : -1;
+            // Press and release have to agree, so dragging off an icon cancels
+            // the launch the way a button does.
+            if (released >= 0 && released == pressedItem_) {
+                Launch(released);
+            }
+            pressedItem_ = -1;
+            return 0;
+        }
+
+        case WM_RBUTTONUP: {
+            float x = 0.0f;
+            float y = 0.0f;
+            POINT screen{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ClientToScreen(hwnd, &screen);
+            if (CursorToLayout(screen, &x, &y)) {
+                const int item = layout_.ItemAt(x, y);
+                if (item >= 0) {
+                    ShowItemMenu(item, screen);
+                }
+            }
+            return 0;
+        }
+
+        case kIconMessage:
+            DrainLoadedIcons();
+            return 0;
+
+        case WM_DPICHANGED: {
             dpi_ = HIWORD(wParam);
             UpdatePlacement();
+            // Icons are stored at the size a magnified one needs, so a DPI
+            // change can mean a different atlas and a fresh extraction.
+            const int cell = CellForDpi(dpi_);
+            if (cell != atlasCell_) {
+                atlasCell_ = cell;
+                if (atlas_.Initialize(*device_, atlasCell_, design::kMaxItems)) {
+                    StartIconLoad();
+                }
+            }
             return 0;
+        }
 
         case WM_DISPLAYCHANGE:
             UpdatePlacement();
@@ -518,15 +951,12 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 // One cursor check when the dwell expires, rather than polling
                 // for the whole three seconds to learn the same thing.
                 POINT cursor{};
-                RECT bounds{};
-                const bool haveCursor = GetCursorPos(&cursor) != 0;
-                const bool haveBounds = GetWindowRect(hwnd, &bounds) != 0;
-                const bool hovering = haveCursor && haveBounds && PtInRect(&bounds, cursor);
-                LogDebug("dwell expired: cursor ({},{}) bounds ({},{})-({},{}) hovering={}",
-                         cursor.x, cursor.y, bounds.left, bounds.top, bounds.right, bounds.bottom,
-                         hovering ? 1 : 0);
-                if (hovering) {
-                    StartHideCountdown(); // still hovering, so stay out
+                float x = 0.0f;
+                float y = 0.0f;
+                const bool hovering = !menuOpen_ && GetCursorPos(&cursor) &&
+                                      CursorToLayout(cursor, &x, &y) && layout_.Contains(x, y);
+                if (hovering || menuOpen_) {
+                    StartHideCountdown(); // still in use, so stay out
                 } else {
                     BeginHiding();
                 }

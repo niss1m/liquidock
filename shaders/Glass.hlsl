@@ -13,6 +13,11 @@
 #include "Common.hlsli"
 #include "Sdf.hlsli"
 
+// Matches design::kMaxLenses. Only raised icons get one, and the wave reaches
+// about five icons wide, so the loop below is short in practice however many
+// items the dock holds.
+#define MAX_LENSES 8
+
 cbuffer GlassConstants : register(b0)
 {
     // float4s throughout: HLSL pushes a float4 to the next 16-byte boundary,
@@ -24,6 +29,11 @@ cbuffer GlassConstants : register(b0)
     float4 gTint;           // straight alpha
     float4 gWindowOrigin;   // xy = window origin (monitor px), zw = monitor size (px)
     float4 gBackdropUv;     // xy = uv scale, zw = uv offset
+    float4 gLensInfo;       // x = lens count, y = smooth-min radius (px)
+    // xy = centre (px), z = half width (px), w = half height (px). The corner
+    // radius is min(z, w) - a lens is always as round as it can be - so it does
+    // not need a slot of its own.
+    float4 gLens[MAX_LENSES];
 };
 
 Texture2D gBackdrop : register(t0);
@@ -42,6 +52,8 @@ SamplerState gLinearClamp : register(s0);
 #define FROST           gMaterial.y
 #define SPLAY           gMaterial.z
 #define TILED           gMaterial.w
+#define LENS_COUNT      gLensInfo.x
+#define LENS_FUSE       gLensInfo.y
 
 // How far, in pixels, refraction can displace a sample at full strength. Tuned
 // against the Figma render: much beyond this and the rim smears rather than
@@ -67,7 +79,25 @@ float4 PSMain(Varyings input) : SV_Target
     const float2 windowPx = input.position.xy;
     const float2 p = windowPx - RECT_CENTER;
     // Not named `distance`: that shadows the HLSL intrinsic.
-    const float dist = SdRoundedBox(p, HALF_SIZE, CORNER_RADIUS);
+    float dist = SdRoundedBox(p, HALF_SIZE, CORNER_RADIUS);
+
+    // Each raised icon adds a lens, fused into the body with a smooth minimum
+    // rather than a plain union. A union would leave a visible crease where the
+    // two shapes cross; the smooth minimum blends them into one surface, so the
+    // bevel, the normal, the refraction and the highlight all flow over the
+    // bulge continuously - the glass swells around a lifted icon instead of
+    // having a second shape stuck to it.
+    //
+    // At rest a lens is exactly inscribed in the bar, so it contributes nothing
+    // and the silhouette is the plain rounded rectangle the design specifies.
+    const int lensCount = (int)LENS_COUNT;
+    [loop]
+    for (int i = 0; i < lensCount; ++i)
+    {
+        const float lens =
+            SdRoundedBox(windowPx - gLens[i].xy, gLens[i].zw, min(gLens[i].z, gLens[i].w));
+        dist = SmoothMin(dist, lens, LENS_FUSE);
+    }
 
     // Derivatives must be taken before any discard. Once a lane in the quad is
     // killed its neighbours' derivatives are undefined, which shows up as a

@@ -27,10 +27,27 @@ Early. See the milestones below for where things stand.
 |---|---|---|
 | M0 | Build system, D3D11 + DirectComposition transparent window | done |
 | M1 | The liquid glass shader and backdrop pipeline | done |
-| M2 | Item model, icons, layout, launching, magnification | |
+| M2 | Item model, icons, layout, launching, magnification | done |
 | M3 | Multi-monitor, appbar, running indicators, live-capture backdrop | |
 | M4 | Settings UI | |
 | M5 | Portable / Microsoft Store / Steam packaging | |
+
+## The items file
+
+The dock reads its contents from `%LOCALAPPDATA%\LiquiDock\items.txt`, one item per line:
+
+```
+group | path | label
+```
+
+`group` is `main` or `utility` — utility items sit to the right of the hairline. `label` is optional.
+`path` is anything the shell can open: a program, a shortcut, a folder, a `shell:AppsFolder\...`
+moniker for a packaged app, or a `::{guid}` parsing name. Environment variables are expanded.
+
+On a first run there is no file, so the list is seeded from whatever is pinned to your taskbar, plus
+Downloads and the Recycle Bin, and then written out for you to edit. Right-clicking an icon offers
+Open, Remove from Dock, and a shortcut to the file itself. Reordering is a drag in Notepad until the
+preferences UI lands in M4.
 
 ## Building
 

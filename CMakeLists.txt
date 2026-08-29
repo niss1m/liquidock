@@ -48,15 +48,19 @@ add_custom_target(liquidock_shaders DEPENDS "${EMBEDDED_SHADERS}")
 # ---------------------------------------------------------------------------
 add_executable(liquidock WIN32
     src/app/main.cpp
+    src/app/DockLayout.cpp
     src/app/DockWindow.cpp
     src/app/EdgeTrigger.cpp
     src/app/TrayIcon.cpp
     src/core/Log.cpp
     src/gfx/GraphicsDevice.cpp
     src/gfx/CompositionTarget.cpp
+    src/gfx/IconAtlas.cpp
     src/gfx/ShaderCache.cpp
     src/glass/WallpaperBackdrop.cpp
     src/glass/FrostChain.cpp
+    src/model/IconLoader.cpp
+    src/model/ItemStore.cpp
     "${EMBEDDED_SHADERS}"
     # CMake collects .manifest sources and feeds them to mt.exe through
     # `cmake -E vs_link_exe --manifests`. Passing /MANIFEST:EMBED and

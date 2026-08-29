@@ -3,13 +3,19 @@
 #include <windows.h>
 
 #include <memory>
+#include <vector>
 
+#include "app/DockLayout.h"
 #include "app/EdgeTrigger.h"
+#include "core/DesignTokens.h"
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
+#include "gfx/IconAtlas.h"
 #include "gfx/ShaderCache.h"
 #include "glass/FrostChain.h"
 #include "glass/WallpaperBackdrop.h"
+#include "model/IconLoader.h"
+#include "model/ItemStore.h"
 
 namespace liquidock {
 
@@ -23,13 +29,25 @@ struct GlassConstants {
     float tint[4];           // straight alpha
     float windowOrigin[4];   // xy = window origin (monitor px), zw = monitor size (px)
     float backdropUv[4];     // xy = uv scale, zw = uv offset
+    float lensInfo[4];       // x = lens count, y = smooth-min radius (px)
+    float lens[design::kMaxLenses][4]; // xy = centre (px), zw = half size (px)
 };
-static_assert(sizeof(GlassConstants) == 112, "GlassConstants must match the HLSL cbuffer");
+static_assert(sizeof(GlassConstants) == 256, "GlassConstants must match the HLSL cbuffer");
 static_assert(sizeof(GlassConstants) % 16 == 0, "Constant buffers must be 16-byte aligned");
 
-// The dock's own window: a click-through, always-on-top, per-pixel-alpha
-// surface that owns nothing but the glass. Items, input and animation arrive in
-// M2; for now this exists to prove the composition path works on real hardware.
+// Mirrors IconConstants in shaders/Icon.hlsl. One instance per icon, plus the
+// hairline between the two groups.
+inline constexpr int kMaxIconInstances = design::kMaxItems + 1;
+struct IconConstants {
+    float viewport[4];                     // xy = viewport size (px), zw = 1 / size
+    float cell[4];                         // xy = one atlas cell in uv
+    float rect[kMaxIconInstances][4];      // xy = centre (px), zw = half size (px)
+    float source[kMaxIconInstances][4];    // xy = uv origin, z = opacity, w = solid
+};
+static_assert(sizeof(IconConstants) % 16 == 0, "Constant buffers must be 16-byte aligned");
+
+// The dock's own window: an always-on-top, per-pixel-alpha surface that owns
+// the glass, the icon row and the input that drives both.
 class DockWindow {
 public:
     DockWindow() = default;
@@ -65,12 +83,26 @@ private:
     bool CreateResources();
     void UpdatePlacement();
     void Render();
+    void RenderIcons(float scale, float slideLogical);
 
     // Advances the slide animation. Returns the eased 0..1 position, where 0 is
     // fully tucked below the screen edge and 1 is fully out.
     float AdvanceReveal(float deltaSeconds);
     void StartHideCountdown();
     void BeginHiding();
+
+    // How far, in logical pixels, the dock is currently pushed below its
+    // revealed position. 0 when fully out.
+    float SlideOffset(float reveal) const;
+    // Screen point to logical dock space, with the slide taken back out, so
+    // hit tests are against the layout's own coordinates.
+    bool CursorToLayout(POINT screen, float* x, float* y) const;
+
+    void ReloadItems();
+    void StartIconLoad();
+    void DrainLoadedIcons();
+    void Launch(int itemIndex);
+    void ShowItemMenu(int itemIndex, POINT screen);
 
     GraphicsDevice* device_ = nullptr;
     std::unique_ptr<ShaderCache> shaders_;
@@ -80,13 +112,28 @@ private:
 
     HWND hwnd_ = nullptr;
     ComPtr<ID3D11Buffer> constantBuffer_;
+    ComPtr<ID3D11Buffer> iconConstantBuffer_;
     ComPtr<ID3D11SamplerState> sampler_;
+    // Premultiplied source-over. The glass writes straight into a cleared
+    // target and needs no blending; the icons land on top of it and do.
+    ComPtr<ID3D11BlendState> iconBlend_;
     // Set whenever the cached frost is stale: the dock moved or resized, the
     // wallpaper changed, or a shader edit may have changed the frost amount.
     bool frostDirty_ = true;
     UINT dpi_ = 96;
     bool diagnostic_ = false;
     bool deviceLost_ = false;
+
+    // Items, their icons and their geometry.
+    ItemStore store_;
+    DockLayout layout_;
+    IconLoader iconLoader_;
+    IconAtlas atlas_;
+    std::vector<IconBitmap> loadedIcons_;
+    int atlasCell_ = 0;
+    int pressedItem_ = -1;
+    bool menuOpen_ = false;
+    bool mouseTracking_ = false;
 
     // Auto-hide. The dock is a window that is mostly not there: it sits tucked
     // below the screen edge until EdgeTrigger reports the cursor arriving, then
