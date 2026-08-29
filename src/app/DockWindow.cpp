@@ -359,6 +359,10 @@ bool DockWindow::CreateResources() {
     blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     LD_CHECK(device_->d3d()->CreateBlendState(&blend, &iconBlend_));
 
+    if (!text_.Initialize(*device_, design::label::kFontSize)) {
+        return false;
+    }
+
     atlasCell_ = CellForDpi(dpi_);
     if (!atlas_.Initialize(*device_, atlasCell_, design::kMaxItems)) {
         return false;
@@ -510,6 +514,7 @@ void DockWindow::ReleaseDeviceResources() {
     // before anything is released rather than merely told to stop.
     capture_.reset();
 
+    text_.Reset();
     frost_.Reset();
     atlas_.Reset();
     wallpaper_.Reset();
@@ -852,6 +857,7 @@ void DockWindow::UpdatePlacement() {
 
     if (target_.width() > 0) {
         target_.Resize(static_cast<UINT>(width), static_cast<UINT>(height));
+        text_.Invalidate();
         frost_.Resize(static_cast<UINT>(width), static_cast<UINT>(height));
         RequestRedraw();
     }
@@ -1109,6 +1115,11 @@ void DockWindow::Render() {
 
     RenderIcons(scale, slide);
 
+    // Text last, straight onto the finished frame with Direct2D. The pipeline
+    // state is not restored afterwards because nothing else draws before the
+    // present, and every stage sets what it needs on the way in.
+    const bool labelMoving = RenderHoverLabel(scale, slide, deltaSeconds);
+
     ID3D11RenderTargetView* nullRtv = nullptr;
     ctx->OMSetRenderTargets(1, &nullRtv, nullptr);
     ctx->PSSetShaderResources(0, 2, nullResources);
@@ -1182,7 +1193,7 @@ void DockWindow::Render() {
     // Drive the next animation frame. Present blocked on vblank, so this paces
     // itself at the refresh rate; when the slide and the springs have both
     // settled the dock falls silent again and presents nothing at all.
-    if ((animating_ || layoutMoving) && !deviceLost_) {
+    if ((animating_ || layoutMoving || labelMoving) && !deviceLost_) {
         PostMessageW(hwnd_, kAnimateMessage, 0, 0);
     }
 }
@@ -1299,6 +1310,86 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
     ctx->PSSetShaderResources(0, 1, resources);
     ctx->OMSetBlendState(iconBlend_.Get(), nullptr, 0xFFFFFFFF);
     ctx->DrawInstanced(6, static_cast<UINT>(instances), 0, 0);
+}
+
+bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSeconds) {
+    // Which icon is under the cursor, decided from the same placement the frame
+    // was just drawn with rather than from a mouse message, so the label cannot
+    // point at where an icon used to be.
+    int wanted = -1;
+    POINT cursor{};
+    float x = 0.0f;
+    float y = 0.0f;
+    if (!menuOpen_ && revealState_ != RevealState::Hidden && GetCursorPos(&cursor) &&
+        CursorToLayout(cursor, &x, &y)) {
+        wanted = layout_.ItemAt(x, y);
+    }
+
+    // A different icon takes the label over immediately if nothing is showing,
+    // and otherwise waits for the old one to fade out - which is what stops a
+    // sweep along the row from strobing a different name every few frames.
+    if (wanted != labelItem_) {
+        if (labelAlpha_ <= 0.0f) {
+            labelItem_ = wanted;
+        } else {
+            wanted = -1;
+        }
+    }
+
+    const float target = (labelItem_ >= 0 && wanted == labelItem_) ? 1.0f : 0.0f;
+    const float step = (design::label::kFadeSeconds > 0.0f)
+                           ? deltaSeconds / design::label::kFadeSeconds
+                           : 1.0f;
+    if (labelAlpha_ < target) {
+        labelAlpha_ = std::min(target, labelAlpha_ + step);
+    } else if (labelAlpha_ > target) {
+        labelAlpha_ = std::max(target, labelAlpha_ - step);
+    }
+
+    const bool moving = (labelAlpha_ != target);
+    if (labelAlpha_ <= 0.001f || labelItem_ < 0 ||
+        labelItem_ >= static_cast<int>(store_.items().size()) || !text_.ready()) {
+        return moving;
+    }
+
+    // The icon this label belongs to, as placed in the frame just drawn.
+    const PlacedIcon* icon = nullptr;
+    for (const PlacedIcon& placed : layout_.icons()) {
+        if (placed.itemIndex == labelItem_) {
+            icon = &placed;
+            break;
+        }
+    }
+    if (!icon) {
+        return moving;
+    }
+
+    const std::wstring& name = store_.items()[static_cast<size_t>(labelItem_)].label;
+    if (!text_.Begin(target_.swap_chain(), scale)) {
+        return moving;
+    }
+
+    const float width = text_.MeasureWidth(name) + 2.0f * design::label::kPaddingX;
+    const float height = design::kLabelHeight;
+    const float iconTop = icon->centerY - icon->size * 0.5f + slideLogical;
+
+    const float viewWidth = static_cast<float>(target_.width()) / scale;
+    float left = icon->centerX - width * 0.5f;
+    // Kept inside the window: an icon at either end would otherwise have half
+    // its name clipped away by the swap chain.
+    left = std::clamp(left, 4.0f, std::max(4.0f, viewWidth - width - 4.0f));
+    const float bottom = iconTop - design::label::kGap;
+    const D2D1_RECT_F pill = D2D1::RectF(left, bottom - height, left + width, bottom);
+
+    auto colour = [](const float rgba[4], float alpha) {
+        return D2D1::ColorF(rgba[0], rgba[1], rgba[2], rgba[3] * alpha);
+    };
+    text_.FillRounded(pill, design::label::kRadius, colour(design::label::kFill, labelAlpha_));
+    text_.StrokeRounded(pill, design::label::kRadius, colour(design::label::kEdge, labelAlpha_));
+    text_.Draw(name, pill, colour(design::label::kText, labelAlpha_));
+    text_.End();
+
+    return moving;
 }
 
 LRESULT CALLBACK DockWindow::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {

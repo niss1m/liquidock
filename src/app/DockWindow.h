@@ -15,6 +15,7 @@
 #include "gfx/GraphicsDevice.h"
 #include "gfx/IconAtlas.h"
 #include "gfx/ShaderCache.h"
+#include "gfx/TextLayer.h"
 #include "glass/CaptureBackdrop.h"
 #include "glass/FrostChain.h"
 #include "glass/WallpaperBackdrop.h"
@@ -105,6 +106,10 @@ private:
     void UpdatePlacement();
     void Render();
     void RenderIcons(float scale, float slideLogical);
+    // The name of the icon under the cursor, drawn above it. Returns true while
+    // the fade is still running, so the dock keeps presenting frames until it
+    // has settled.
+    bool RenderHoverLabel(float scale, float slideLogical, float deltaSeconds);
 
     // Advances the slide animation. Returns the eased 0..1 position, where 0 is
     // fully tucked below the screen edge and 1 is fully out.
@@ -161,6 +166,12 @@ private:
     // Premultiplied source-over. The glass writes straight into a cleared
     // target and needs no blending; the icons land on top of it and do.
     ComPtr<ID3D11BlendState> iconBlend_;
+    TextLayer text_;
+    // Which item the label is for, and how far it has faded in. The index is
+    // held through the fade-out so the name does not vanish the instant the
+    // cursor leaves the icon.
+    int labelItem_ = -1;
+    float labelAlpha_ = 0.0f;
     // Set whenever the cached frost is stale: the dock moved or resized, the
     // wallpaper changed, or a shader edit may have changed the frost amount.
     bool frostDirty_ = true;

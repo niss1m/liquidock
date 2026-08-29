@@ -114,6 +114,26 @@ inline constexpr float kBounceHeightPx = 16.0f;
 inline constexpr float kDwellSeconds = 3.0f;  // how long the dock stays out
 inline constexpr float kSlideSeconds = 0.22f; // how long the slide itself takes
 
+// The name that appears above the icon under the cursor. Not in the Figma
+// file - the design has no hover state - so these follow the macOS dock, which
+// is what everyone will compare it to: a small dark pill directly above the
+// icon, close enough to belong to it.
+namespace label {
+inline constexpr float kFontSize = 12.5f;
+inline constexpr float kPaddingX = 9.0f;
+inline constexpr float kPaddingY = 4.5f;
+inline constexpr float kRadius = 7.0f;
+// Between the top of the icon and the bottom of the pill.
+inline constexpr float kGap = 9.0f;
+// A short fade rather than an instant appearance, so sweeping the cursor along
+// the row does not strobe a different name every few milliseconds.
+inline constexpr float kFadeSeconds = 0.09f;
+
+inline constexpr float kFill[4] = {0.07f, 0.07f, 0.08f, 0.92f};
+inline constexpr float kEdge[4] = {1.0f, 1.0f, 1.0f, 0.13f};
+inline constexpr float kText[4] = {1.0f, 1.0f, 1.0f, 0.95f};
+} // namespace label
+
 // Hard ceiling on dock items. The magnified layout and the glass lenses both
 // travel to the GPU in constant buffers, which want a fixed size; 32 is far
 // past any dock a person would actually use and still only 1 KB of constants.
@@ -166,11 +186,15 @@ inline constexpr float kMaxIconRise =
 // bulge and the raised icons all have somewhere to land. Derived rather than
 // picked, so raising the scale ceiling or the bounce cannot silently start
 // clipping icons against the top of the window.
-inline constexpr float kBleed = kMaxIconRise + magnify::kBounceHeightPx + 20.0f;
+// The hover label sits above the icon, and the icon is at its highest exactly
+// when the label is showing, so this is the case the window has to fit.
+inline constexpr float kLabelHeight = label::kFontSize + 2.0f * label::kPaddingY;
+inline constexpr float kBleed =
+    kMaxIconRise + magnify::kBounceHeightPx + label::kGap + kLabelHeight + 8.0f;
 
 static_assert(kMaxConfigurableScale >= magnify::kMaxScale,
               "The ceiling has to admit the default magnification");
-static_assert(kBleed > kMaxIconRise + magnify::kBounceHeightPx,
-              "The window must contain a raised icon at the top of its bounce");
+static_assert(kBleed > kMaxIconRise + magnify::kBounceHeightPx + kLabelHeight,
+              "The window must contain a raised icon, its bounce, and its label");
 
 } // namespace liquidock::design

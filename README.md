@@ -14,8 +14,8 @@ specular edge driven by a light angle you control.
 - **Real liquid glass** — refraction, depth, dispersion, frost, splay and light, all live and all
   tweakable. Save the settings file and the dock re-renders; it watches the file rather than
   polling it, so tuning costs nothing when you are not tuning.
-- **The macOS magnification wave** — icons swell under the cursor on a critically damped spring, and
-  the glass body bulges with them.
+- **The macOS magnification wave** — icons swell under the cursor on a critically damped spring,
+  and the one under it names itself.
 - **Survives a driver reset** — a TDR or a graphics driver updating itself mid-session rebuilds the
   device and every resource on it, rather than leaving a dock that has to be restarted.
 - **Zero idle cost** — the dock is event-driven throughout. Nothing moving means no frames
