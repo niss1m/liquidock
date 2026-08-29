@@ -42,6 +42,12 @@ bool WallpaperBackdrop::Initialize(GraphicsDevice& device) {
     return true;
 }
 
+void WallpaperBackdrop::Reset() {
+    srv_.Reset();
+    texture_.Reset();
+    loadedKey_.clear();
+}
+
 bool WallpaperBackdrop::Update(HMONITOR monitor) {
     MONITORINFO info{sizeof(info)};
     if (!GetMonitorInfoW(monitor, &info)) {

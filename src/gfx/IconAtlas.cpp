@@ -34,6 +34,12 @@ bool IconAtlas::Initialize(GraphicsDevice& device, int cell, int capacity) {
     return true;
 }
 
+void IconAtlas::Reset() {
+    srv_.Reset();
+    texture_.Reset();
+    dirty_ = false;
+}
+
 bool IconAtlas::Upload(int slot, const std::vector<uint32_t>& pixels) {
     if (!texture_ || slot < 0 || slot >= columns_ * rows_) {
         return false;

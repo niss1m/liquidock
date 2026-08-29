@@ -20,6 +20,12 @@ public:
 
     bool Initialize();
 
+    // Drops every interface so the adapter can go away cleanly. Initialize()
+    // may then be called again on the same object, which is what lets the dock
+    // survive a driver reset without every holder of a GraphicsDevice& having
+    // to be rebuilt around a new address.
+    void Reset();
+
     ID3D11Device1* d3d() const { return d3d_.Get(); }
     ID3D11DeviceContext1* context() const { return context_.Get(); }
     IDXGIDevice* dxgi() const { return dxgi_.Get(); }

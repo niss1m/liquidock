@@ -8,7 +8,26 @@
 
 namespace liquidock {
 
+void GraphicsDevice::Reset() {
+    // Order matters only in that the context must not outlive the device it
+    // came from; releasing in reverse creation order keeps the debug layer
+    // quiet about live objects at shutdown.
+    infoQueue_.Reset();
+    composition_.Reset();
+    factory_.Reset();
+    dxgi_.Reset();
+    if (context_) {
+        context_->ClearState();
+        context_->Flush();
+    }
+    context_.Reset();
+    d3d_.Reset();
+    multithreadSafe_ = true;
+}
+
 bool GraphicsDevice::Initialize() {
+    Reset();
+
     // BGRA support is required for the Direct2D interop the settings UI needs in
     // M4. SINGLETHREADED is deliberately not set: the capture thread touches the
     // device context, and a device created single-threaded turns that into rare,

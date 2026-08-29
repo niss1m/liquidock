@@ -38,7 +38,8 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-int Run(bool diagnostic, std::optional<bool> autoHideOverride, bool dumpBackdrop) {
+int Run(bool diagnostic, std::optional<bool> autoHideOverride, bool dumpBackdrop,
+        bool simulateDeviceLoss) {
     InstallCrashHandler();
     InitLogFile();
     LogInfo("LiquiDock {} starting{}", LIQUIDOCK_VERSION,
@@ -54,7 +55,7 @@ int Run(bool diagnostic, std::optional<bool> autoHideOverride, bool dumpBackdrop
     }
 
     DockWindow dock;
-    if (!dock.Create(device, diagnostic, autoHideOverride, dumpBackdrop)) {
+    if (!dock.Create(device, diagnostic, autoHideOverride, dumpBackdrop, simulateDeviceLoss)) {
         MessageBoxW(nullptr, L"LiquiDock could not create its window.", L"LiquiDock",
                     MB_ICONERROR | MB_OK);
         return 1;
@@ -133,6 +134,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLin
     // Live capture excludes the dock from screen capture, so this is the only
     // way to see what it is actually sampling.
     const bool dumpBackdrop = wcsstr(commandLine, L"--dump-backdrop") != nullptr;
+    // Exercises the device-lost recovery path. A real TDR cannot be provoked
+    // without hanging the whole GPU.
+    const bool simulateDeviceLoss = wcsstr(commandLine, L"--simulate-device-loss") != nullptr;
 
     liquidock::SingleInstanceGuard guard;
     if (!guard.Acquire()) {
@@ -146,7 +150,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLin
         return 1;
     }
 
-    const int result = liquidock::Run(diagnostic, autoHideOverride, dumpBackdrop);
+    const int result =
+        liquidock::Run(diagnostic, autoHideOverride, dumpBackdrop, simulateDeviceLoss);
     CoUninitialize();
     return result;
 }

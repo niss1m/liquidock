@@ -26,6 +26,10 @@ public:
     // `cell` is the edge of one icon in pixels; `capacity` how many fit.
     bool Initialize(GraphicsDevice& device, int cell, int capacity);
 
+    // Drops the texture. The icons themselves are re-extracted afterwards, so
+    // there is nothing here worth trying to preserve across a device loss.
+    void Reset();
+
     // Copies one icon into its cell. `pixels` must be cell*cell premultiplied
     // BGRA. Mips are regenerated, so batch a frame's worth of icons and call
     // FinishUpdates once rather than calling this in a loop.

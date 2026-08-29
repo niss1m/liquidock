@@ -31,6 +31,13 @@ constexpr UINT kDumpDelayMs = 2500;
 // windows and one scan afterwards answers for all of them.
 constexpr UINT_PTR kRunningTimer = 4;
 constexpr UINT kRunningDebounceMs = 250;
+// Retries after the graphics adapter goes away. A driver reset (a TDR, or an
+// update installing while the dock runs) takes a couple of seconds to come
+// back, so the first few attempts are close together and then it gives up
+// rather than spinning a timer for the rest of the session.
+constexpr UINT_PTR kDeviceRetryTimer = 5;
+constexpr UINT kDeviceRetryMs = 1500;
+constexpr int kMaxDeviceRetries = 10;
 
 // Posted to ourselves after presenting an animation frame. Present blocks on
 // vblank, so this self-paces at the monitor's refresh rate without a timer -
@@ -44,6 +51,10 @@ constexpr UINT kCaptureMessage = WM_APP + 3;
 constexpr UINT kRunningMessage = WM_APP + 4;
 // The shell's appbar notifications - another appbar appeared, the taskbar moved.
 constexpr UINT kAppBarMessage = WM_APP + 5;
+// --simulate-device-loss, posted once at startup.
+constexpr UINT kSimulateDeviceLossMessage = WM_APP + 6;
+constexpr UINT_PTR kSimulateLossTimer = 6;
+constexpr UINT kSimulateLossDelayMs = 3000;
 
 enum ItemMenuCommand : UINT {
     kCommandOpen = 1,
@@ -92,11 +103,13 @@ DockWindow::~DockWindow() {
 }
 
 bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
-                        std::optional<bool> autoHideOverride, bool dumpBackdrop) {
+                        std::optional<bool> autoHideOverride, bool dumpBackdrop,
+                        bool simulateDeviceLoss) {
     device_ = &device;
     diagnostic_ = diagnostic;
     autoHideOverride_ = autoHideOverride;
     dumpBackdrop_ = dumpBackdrop;
+    simulateDeviceLoss_ = simulateDeviceLoss;
     shaders_ = std::make_unique<ShaderCache>(device.d3d());
 
     QueryPerformanceFrequency(&frequency_);
@@ -155,6 +168,9 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
     running_.Initialize(hwnd_, kRunningMessage);
     if (dumpBackdrop_) {
         SetTimer(hwnd_, kDumpTimer, kDumpDelayMs, nullptr);
+    }
+    if (simulateDeviceLoss_) {
+        SetTimer(hwnd_, kSimulateLossTimer, kSimulateLossDelayMs, nullptr);
     }
 
 #ifdef LIQUIDOCK_DEBUG
@@ -350,6 +366,8 @@ void DockWindow::Destroy() {
         KillTimer(hwnd_, kHideTimer);
         KillTimer(hwnd_, kDumpTimer);
         KillTimer(hwnd_, kRunningTimer);
+        KillTimer(hwnd_, kDeviceRetryTimer);
+        KillTimer(hwnd_, kSimulateLossTimer);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
@@ -455,6 +473,67 @@ void DockWindow::ReloadSettings() {
     }
 
     RequestRedraw();
+}
+
+void DockWindow::ReleaseDeviceResources() {
+    // The capture thread holds the device context, so it has to be stopped
+    // before anything is released rather than merely told to stop.
+    capture_.reset();
+
+    frost_.Reset();
+    atlas_.Reset();
+    wallpaper_.Reset();
+    target_.Reset();
+    iconBlend_.Reset();
+    sampler_.Reset();
+    iconConstantBuffer_.Reset();
+    constantBuffer_.Reset();
+    // Compiled shaders belong to the dead device; the cache is rebuilt against
+    // the new one, which also re-reads the .hlsl files.
+    shaders_.reset();
+}
+
+void DockWindow::HandleDeviceLost() {
+    if (deviceLost_) {
+        return;
+    }
+    deviceLost_ = true;
+    deviceRetries_ = 0;
+    animating_ = false;
+    LogWarn("Graphics device lost; the dock will keep trying to rebuild it");
+    ReleaseDeviceResources();
+    SetTimer(hwnd_, kDeviceRetryTimer, kDeviceRetryMs, nullptr);
+}
+
+bool DockWindow::RecoverDevice() {
+    if (!device_->Initialize()) {
+        return false;
+    }
+
+    // Everything below is exactly what Create does after the window exists. The
+    // window itself survives - it is the one thing that was never the device's.
+    shaders_ = std::make_unique<ShaderCache>(device_->d3d());
+
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    if (!target_.Initialize(*device_, hwnd_, static_cast<UINT>(std::max<LONG>(client.right, 1)),
+                            static_cast<UINT>(std::max<LONG>(client.bottom, 1)))) {
+        return false;
+    }
+    if (!CreateResources()) {
+        return false;
+    }
+
+    // The atlas is gone, so the icons have to be extracted again. They come
+    // back over the next fraction of a second, exactly as at startup.
+    StartIconLoad();
+    ApplyBackdropSource();
+
+    frostDirty_ = true;
+    deviceLost_ = false;
+    LogInfo("Graphics device rebuilt after {} attempt(s)", deviceRetries_);
+    RequestRedraw();
+    return true;
 }
 
 Backdrop& DockWindow::ActiveBackdrop() {
@@ -913,14 +992,11 @@ void DockWindow::Render() {
     device_->DrainDebugMessages();
 
     if (!target_.EndFrame()) {
-        // A TDR or a driver update removed the adapter. Everything device-bound
-        // is now invalid, so stop rendering rather than repainting a dead swap
-        // chain on every message.
-        // TODO(M3): rebuild the device and every device-bound resource instead
-        // of parking here. Needs the recreate path GraphicsDevice does not have
-        // yet, and is the same plumbing a monitor hot-plug will want.
-        deviceLost_ = true;
-        LogError("Device lost - the dock will stay blank until it is restarted");
+        // A TDR, or a driver updating itself while the dock runs. Everything
+        // device-bound is invalid now, so tear it down and start trying to
+        // build it again rather than repainting a dead swap chain forever.
+        HandleDeviceLost();
+        return;
     }
 
     // Drive the next animation frame. Present blocked on vblank, so this paces
@@ -1190,6 +1266,15 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
 
+        case kSimulateDeviceLossMessage:
+            // --simulate-device-loss. A real TDR cannot be provoked without
+            // hanging the whole GPU, which is not something to do on someone's
+            // desktop, so the recovery path is exercised by taking the same
+            // branch the failed Present takes.
+            LogInfo("Simulating a lost graphics device");
+            HandleDeviceLost();
+            return 0;
+
         case kAppBarMessage:
             // ABN_POSCHANGED: the taskbar moved or another appbar appeared, so
             // the band we were given may no longer be where we think it is.
@@ -1224,6 +1309,22 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     // happened to move.
                     frostDirty_ = true;
                     RequestRedraw();
+                }
+            } else if (wParam == kSimulateLossTimer) {
+                KillTimer(hwnd_, kSimulateLossTimer);
+                PostMessageW(hwnd_, kSimulateDeviceLossMessage, 0, 0);
+            } else if (wParam == kDeviceRetryTimer) {
+                if (RecoverDevice()) {
+                    KillTimer(hwnd_, kDeviceRetryTimer);
+                } else if (++deviceRetries_ >= kMaxDeviceRetries) {
+                    KillTimer(hwnd_, kDeviceRetryTimer);
+                    LogError("Giving up on the graphics device after {} attempts; "
+                             "the dock will stay blank until it is restarted",
+                             deviceRetries_);
+                } else {
+                    // Initialize() leaves a partly-built device behind when it
+                    // fails partway, and the next attempt has to start clean.
+                    device_->Reset();
                 }
             } else if (wParam == kRunningTimer) {
                 KillTimer(hwnd_, kRunningTimer);

@@ -26,6 +26,9 @@ public:
 
     bool Initialize(GraphicsDevice& device, ShaderCache& shaders);
 
+    // Drops every target and the constant buffer, for a device rebuild.
+    void Reset();
+
     // Reallocates the intermediate targets. Safe to call with an unchanged size.
     bool Resize(UINT windowWidth, UINT windowHeight);
 

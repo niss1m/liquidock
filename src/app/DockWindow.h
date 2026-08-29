@@ -70,7 +70,8 @@ public:
     // settings file decides. Kept, so a settings reload cannot quietly turn
     // auto-hide back on under someone who launched with --no-autohide.
     bool Create(GraphicsDevice& device, bool diagnostic = false,
-                std::optional<bool> autoHideOverride = std::nullopt, bool dumpBackdrop = false);
+                std::optional<bool> autoHideOverride = std::nullopt, bool dumpBackdrop = false,
+                bool simulateDeviceLoss = false);
     void Destroy();
 
     HWND hwnd() const { return hwnd_; }
@@ -114,6 +115,13 @@ private:
     // hit tests are against the layout's own coordinates.
     bool CursorToLayout(POINT screen, float* x, float* y) const;
 
+    // Drops everything bound to the graphics device, rebuilds the device, and
+    // builds it all again. Returns false while the adapter is still gone.
+    void ReleaseDeviceResources();
+    bool RecoverDevice();
+    // Called when the adapter goes away: parks rendering and starts retrying.
+    void HandleDeviceLost();
+
     // Pushes the current settings into everything that caches them.
     void ApplySettings();
     // Starts or stops live screen capture to match the settings.
@@ -149,9 +157,16 @@ private:
     UINT dpi_ = 96;
     bool diagnostic_ = false;
     bool deviceLost_ = false;
+    // How many times we have tried to get the device back. A driver reset takes
+    // a few seconds; a driver that is gone for good should not be retried
+    // forever, or the dock spins a timer for the rest of the session.
+    int deviceRetries_ = 0;
     // --dump-backdrop: write the backdrop texture out once, then stop. The only
     // way to inspect a live capture, which by construction cannot be screenshot.
     bool dumpBackdrop_ = false;
+    // --simulate-device-loss: takes the device-lost branch a few seconds in, so
+    // the recovery path can be tested without provoking a real TDR.
+    bool simulateDeviceLoss_ = false;
 
     // Items, their icons and their geometry.
     Settings settings_;

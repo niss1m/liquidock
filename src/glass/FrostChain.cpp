@@ -41,6 +41,16 @@ bool FrostChain::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
     return true;
 }
 
+void FrostChain::Reset() {
+    quarter_.Reset();
+    temp_.Reset();
+    frost_.Reset();
+    sampler_.Reset();
+    constantBuffer_.Reset();
+    width_ = 0;
+    height_ = 0;
+}
+
 bool FrostChain::CreateTarget(Target& target, UINT width, UINT height) {
     target.Reset();
 

@@ -16,6 +16,8 @@ specular edge driven by a light angle you control.
   polling it, so tuning costs nothing when you are not tuning.
 - **The macOS magnification wave** — icons swell under the cursor on a critically damped spring, and
   the glass body bulges with them.
+- **Survives a driver reset** — a TDR or a graphics driver updating itself mid-session rebuilds the
+  device and every resource on it, rather than leaving a dock that has to be restarted.
 - **Zero idle cost** — the dock is event-driven throughout. Nothing moving means no frames
   presented, no GPU work, no wakeups. Screen capture waits on the desktop's own change
   notifications and ignores changes that miss the dock; running indicators wait on a window event

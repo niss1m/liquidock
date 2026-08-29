@@ -31,6 +31,10 @@ public:
 
     bool Initialize(GraphicsDevice& device);
 
+    // Drops the texture and forgets what was loaded, so the next Update decodes
+    // the wallpaper again against a freshly created device.
+    void Reset();
+
     // Loads the wallpaper for `monitor` if it is not already loaded. Returns
     // true when the backdrop changed and dependent caches (the frost blur) must
     // be rebuilt.
