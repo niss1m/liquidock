@@ -54,7 +54,12 @@ add_executable(liquidock WIN32
     src/gfx/GraphicsDevice.cpp
     src/gfx/CompositionTarget.cpp
     src/gfx/ShaderCache.cpp
-    "${EMBEDDED_SHADERS}")
+    "${EMBEDDED_SHADERS}"
+    # CMake collects .manifest sources and feeds them to mt.exe through
+    # `cmake -E vs_link_exe --manifests`. Passing /MANIFEST:EMBED and
+    # /MANIFESTINPUT by hand instead leaves that list empty, and mt.exe fails
+    # with c10100a7 "No manifest inputs were specified".
+    src/app/liquidock.manifest)
 
 add_dependencies(liquidock liquidock_shaders)
 
@@ -95,14 +100,11 @@ if(MSVC)
     target_compile_options(liquidock PRIVATE
         /W4 /permissive- /utf-8 /Zc:__cplusplus /MP
         $<$<CONFIG:Release>:/O2 /GL /Gy>)
-    # Embed the manifest explicitly rather than relying on the generator to pick
-    # up a .manifest source file, which only some generators do. MANIFESTUAC:NO
-    # stops the linker synthesising a second trustInfo block that would collide
-    # with the one in our manifest.
+    # MANIFESTUAC:NO stops the linker synthesising its own trustInfo block, so
+    # the requestedExecutionLevel in liquidock.manifest is the only one and
+    # mt.exe has nothing to reconcile.
     target_link_options(liquidock PRIVATE
-        "/MANIFEST:EMBED"
         "/MANIFESTUAC:NO"
-        "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/app/liquidock.manifest"
         $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>)
 
     # Static CRT keeps the portable build a single file with no redistributable.

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <share.h>
 #include <string>
 
 namespace liquidock {
@@ -49,7 +50,21 @@ void InitLogFile() {
     }
     // Truncate on each launch; a dock that has been running for a week should
     // not have accumulated an unbounded log.
-    _wfopen_s(&g_file, path.c_str(), L"w, ccs=UTF-8");
+    //
+    // _wfsopen rather than _wfopen_s: the secure variants open a file for
+    // *exclusive* access, so nothing can tail the log while the dock is
+    // running - which is precisely when the log is worth reading.
+    //
+    // Binary mode with raw UTF-8 bytes rather than "ccs=UTF-8": that mode puts
+    // the stream into Unicode translation, where narrow fwrite output comes
+    // back out as mojibake.
+    g_file = _wfsopen(path.c_str(), L"wb", _SH_DENYWR);
+    if (g_file) {
+        // Explicit BOM so Windows PowerShell's Get-Content decodes the file as
+        // UTF-8 rather than guessing the active code page.
+        static constexpr unsigned char kBom[] = {0xEF, 0xBB, 0xBF};
+        fwrite(kBom, 1, sizeof(kBom), g_file);
+    }
 }
 
 void ShutdownLogFile() {
