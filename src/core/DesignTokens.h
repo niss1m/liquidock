@@ -22,23 +22,39 @@ inline constexpr float kScreenMargin = 20.0f;  // node 3:5, pb-[20px]
 inline constexpr float kSeparatorWidth = 1.0f;   // node 2:148, w-px
 inline constexpr float kSeparatorHeight = 48.0f; // node 2:148, h-[48px]
 
-// dock-bar fill, rgba(255,255,255,0.05). Deliberately almost nothing: the dock
-// reads as glass because of what the shader does to the backdrop behind it, not
-// because of this fill. Raising it is how the design gets muddy.
-inline constexpr float kBarTint[4] = {1.0f, 1.0f, 1.0f, 0.05f};
+// dock-bar fill, Figma rgba(255,255,255,0.05), raised a little. Still almost
+// nothing: the dock reads as glass because of what the shader does to the
+// backdrop behind it, not because of this fill. Raising it further is how the
+// design gets muddy.
+inline constexpr float kBarTint[4] = {1.0f, 1.0f, 1.0f, 0.08f};
 
 // separator, rgba(255,255,255,0.2)
 inline constexpr float kSeparatorTint[4] = {1.0f, 1.0f, 1.0f, 0.20f};
 
-// The Figma glass panel, normalised to 0..1 from the 0..100 the panel shows.
+// The glass, normalised to 0..1 from the 0..100 the Figma panel shows.
+//
+// These are the *shipping* defaults, not the panel's own numbers. The panel was
+// authored against a flat grey artboard; on a real desktop, over a photograph,
+// the same values turn the whole bar into a lens - the wallpaper is hauled
+// across the pane rather than bending at its edge, and the dock reads as a blob
+// of liquid instead of a sheet of glass. Each departure is noted with the value
+// it replaced, so the design can still be argued with rather than guessed at.
+//
+// Every one of these is overridable in settings.txt, which is the honest place
+// for a judgement call about how something looks.
 namespace glass {
-inline constexpr float kLightAngleDegrees = -45.0f;
-inline constexpr float kLightIntensity = 0.80f;
-inline constexpr float kRefraction = 0.80f;
-inline constexpr float kDepth = 0.20f;
-inline constexpr float kDispersion = 0.50f;
-inline constexpr float kFrost = 0.04f;
-inline constexpr float kSplay = 1.00f;
+inline constexpr float kLightAngleDegrees = -45.0f; // Figma
+inline constexpr float kLightIntensity = 0.55f;     // Figma 0.80; the specular blew out
+inline constexpr float kRefraction = 0.45f;         // Figma 0.80; the rim should bend, not smear
+inline constexpr float kDepth = 0.35f;              // Figma 0.20; a wider bevel reads as thicker
+inline constexpr float kDispersion = 0.20f;         // Figma 0.50; the fringing was rainbow-bright
+// Figma 0.04, which is essentially clear glass. Frosting is what separates the
+// dock from the photograph behind it, and without it the bar has no surface of
+// its own on a busy wallpaper.
+inline constexpr float kFrost = 0.65f;
+// Figma 1.00, which fans the bending all the way to the middle of the pane.
+// Keeping it near the rim is what leaves the interior flat.
+inline constexpr float kSplay = 0.60f;
 } // namespace glass
 
 // --- Magnification --------------------------------------------------------
@@ -79,6 +95,10 @@ inline constexpr float kBounceHeightPx = 16.0f;
 
 } // namespace magnify
 
+// Auto-hide timings. Both are overridable in settings.txt.
+inline constexpr float kDwellSeconds = 3.0f;  // how long the dock stays out
+inline constexpr float kSlideSeconds = 0.22f; // how long the slide itself takes
+
 // Hard ceiling on dock items. The magnified layout and the glass lenses both
 // travel to the GPU in constant buffers, which want a fixed size; 32 is far
 // past any dock a person would actually use and still only 1 KB of constants.
@@ -112,18 +132,29 @@ constexpr float BarWidth(int mainCount, int utilityCount) {
 static_assert(BarWidth(10, 2) == 665.0f, "Layout no longer matches Figma frame 3:5");
 static_assert(kBarHeight == 68.0f, "Bar height no longer matches Figma node 3:6");
 
-// How far a fully magnified icon rises above the top of the bar. The icon keeps
+// The largest magnification settings.txt will accept.
+//
+// The window's vertical bleed is a compile-time constant - the window is sized
+// once and never resized to animate - so the headroom has to be reserved for
+// the largest magnification a user could ask for, not for the default. Raising
+// this ceiling costs a taller window for everybody, which is why it stops at
+// twice size rather than at whatever the parser would swallow.
+inline constexpr float kMaxConfigurableScale = 2.0f;
+
+// How far an icon at that ceiling rises above the top of the bar. The icon keeps
 // its bottom edge on the icon row, so all of its growth goes upward, and the
 // row already starts kPaddingY below the bar top.
 inline constexpr float kMaxIconRise =
-    kIconSize * (magnify::kMaxScale - 1.0f) - kPaddingY;
+    kIconSize * (kMaxConfigurableScale - 1.0f) - kPaddingY;
 
 // The window is grown past the glass on every side so the rim highlight, the
 // bulge and the raised icons all have somewhere to land. Derived rather than
-// picked, so raising the magnification or the bounce cannot silently start
+// picked, so raising the scale ceiling or the bounce cannot silently start
 // clipping icons against the top of the window.
 inline constexpr float kBleed = kMaxIconRise + magnify::kBounceHeightPx + 20.0f;
 
+static_assert(kMaxConfigurableScale >= magnify::kMaxScale,
+              "The ceiling has to admit the default magnification");
 static_assert(kBleed > kMaxIconRise + magnify::kBounceHeightPx,
               "The window must contain a raised icon at the top of its bounce");
 

@@ -147,8 +147,11 @@ float4 PSMain(Varyings input) : SV_Target
     // the two would visibly slide apart at the rim.
     const float2 frostUv = (windowPx + offset) / max(VIEWPORT, 1.0);
     const float3 frosted = gFrost.SampleLevel(gLinearClamp, frostUv, 0).rgb;
-    // Thicker glass scatters more, so frost leans on the bevel.
-    const float frostMix = saturate(FROST * (0.65 + 0.85 * edge));
+    // Thicker glass scatters more, so frost leans on the bevel - but only
+    // slightly. The ramp used to run 0.65 to 1.5, which was tuned when frost was
+    // 0.04 and only the rim could show it; at a frost that actually frosts, that
+    // spread made the pane look like a ring rather than a sheet.
+    const float frostMix = saturate(FROST * (0.78 + 0.22 * edge));
 
     float3 colour = lerp(refracted, frosted, frostMix);
     colour = lerp(colour, gTint.rgb, saturate(gTint.a));

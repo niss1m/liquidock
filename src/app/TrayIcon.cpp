@@ -5,6 +5,7 @@
 #include <cwchar>
 
 #include "core/Log.h"
+#include "core/Settings.h"
 
 namespace liquidock {
 namespace {
@@ -101,7 +102,7 @@ void TrayIcon::ShowMenu() {
 
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"LiquiDock " LIQUIDOCK_VERSION_W);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING | MF_GRAYED, kCommandSettings, L"Preferences…");
+    AppendMenuW(menu, MF_STRING, kCommandSettings, L"Preferences…");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCommandExit, L"Quit LiquiDock");
 
@@ -120,6 +121,14 @@ void TrayIcon::ShowMenu() {
 
     if (command == kCommandExit) {
         PostQuitMessage(0);
+    } else if (command == kCommandSettings) {
+        // Until the preferences UI lands in M4, the settings file is the
+        // preferences UI. The dock watches it, so saving takes effect without
+        // a restart and this is a complete answer rather than a placeholder.
+        const std::wstring path = Settings::FilePath();
+        if (!path.empty()) {
+            ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
     }
 }
 

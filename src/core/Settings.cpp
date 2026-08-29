@@ -1,0 +1,246 @@
+#include "core/Settings.h"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <cwchar>
+#include <filesystem>
+
+#include "core/ConfigPaths.h"
+#include "core/DesignTokens.h"
+#include "core/Log.h"
+
+namespace liquidock {
+namespace {
+
+constexpr wchar_t kFileName[] = L"settings.txt";
+
+std::wstring Trim(std::wstring_view text) {
+    size_t begin = 0;
+    size_t end = text.size();
+    while (begin < end && (text[begin] == L' ' || text[begin] == L'\t')) {
+        ++begin;
+    }
+    while (end > begin && (text[end - 1] == L' ' || text[end - 1] == L'\t' ||
+                           text[end - 1] == L'\r' || text[end - 1] == L'\n')) {
+        --end;
+    }
+    return std::wstring(text.substr(begin, end - begin));
+}
+
+bool ParseBool(const std::wstring& value, bool fallback) {
+    if (_wcsicmp(value.c_str(), L"on") == 0 || _wcsicmp(value.c_str(), L"true") == 0 ||
+        _wcsicmp(value.c_str(), L"yes") == 0 || value == L"1") {
+        return true;
+    }
+    if (_wcsicmp(value.c_str(), L"off") == 0 || _wcsicmp(value.c_str(), L"false") == 0 ||
+        _wcsicmp(value.c_str(), L"no") == 0 || value == L"0") {
+        return false;
+    }
+    LogWarn("Unrecognised on/off value in settings.txt; keeping the default");
+    return fallback;
+}
+
+// Clamped on the way in rather than at every use. A typo in the file should
+// give a dock that looks wrong, not one that allocates a window the width of
+// three monitors or divides by zero in the wave.
+float ParseFloat(const std::wstring& value, float fallback, float low, float high) {
+    wchar_t* end = nullptr;
+    const float parsed = std::wcstof(value.c_str(), &end);
+    if (end == value.c_str()) {
+        LogWarn("Unrecognised number in settings.txt; keeping the default");
+        return fallback;
+    }
+    return std::clamp(parsed, low, high);
+}
+
+} // namespace
+
+std::wstring Settings::FilePath() {
+    return ConfigFilePath(kFileName);
+}
+
+bool Settings::PollForChanges() {
+    static unsigned long long lastStamp = 0;
+
+    const std::wstring path = FilePath();
+    if (path.empty()) {
+        return false;
+    }
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) {
+        return false;
+    }
+    const auto stamp = (static_cast<unsigned long long>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+                       data.ftLastWriteTime.dwLowDateTime;
+
+    const bool first = (lastStamp == 0);
+    if (stamp == lastStamp) {
+        return false;
+    }
+    lastStamp = stamp;
+    return !first; // the first poll only establishes the baseline
+}
+
+void Settings::Load() {
+    // Start from the design tokens every time, so a key deleted from the file
+    // goes back to its default rather than keeping whatever was loaded before.
+    refraction = design::glass::kRefraction;
+    depth = design::glass::kDepth;
+    dispersion = design::glass::kDispersion;
+    frost = design::glass::kFrost;
+    splay = design::glass::kSplay;
+    lightAngleDegrees = design::glass::kLightAngleDegrees;
+    lightIntensity = design::glass::kLightIntensity;
+    tintAlpha = design::kBarTint[3];
+
+    magnification = true;
+    maxScale = design::magnify::kMaxScale;
+    influencePx = design::magnify::kInfluencePx;
+    iconBulge = false;
+
+    autoHide = true;
+    dwellSeconds = design::kDwellSeconds;
+    slideSeconds = design::kSlideSeconds;
+
+    const std::wstring path = FilePath();
+    if (path.empty()) {
+        return;
+    }
+    if (!ReadFile(path)) {
+        WriteDefaults(path);
+    }
+}
+
+bool Settings::ReadFile(const std::wstring& path) {
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path.c_str(), L"rt, ccs=UTF-8") != 0 || !file) {
+        return false;
+    }
+
+    wchar_t line[1024];
+    while (fgetws(line, static_cast<int>(std::size(line)), file)) {
+        const std::wstring text = Trim(line);
+        if (text.empty() || text[0] == L'#') {
+            continue;
+        }
+        const size_t equals = text.find(L'=');
+        if (equals == std::wstring::npos) {
+            continue;
+        }
+        const std::wstring key = Trim(text.substr(0, equals));
+        const std::wstring value = Trim(text.substr(equals + 1));
+
+        if (key == L"refraction") {
+            refraction = ParseFloat(value, refraction, 0.0f, 1.0f);
+        } else if (key == L"depth") {
+            depth = ParseFloat(value, depth, 0.0f, 1.0f);
+        } else if (key == L"dispersion") {
+            dispersion = ParseFloat(value, dispersion, 0.0f, 1.0f);
+        } else if (key == L"frost") {
+            frost = ParseFloat(value, frost, 0.0f, 1.0f);
+        } else if (key == L"splay") {
+            splay = ParseFloat(value, splay, 0.0f, 1.0f);
+        } else if (key == L"light-angle") {
+            lightAngleDegrees = ParseFloat(value, lightAngleDegrees, -360.0f, 360.0f);
+        } else if (key == L"light-intensity") {
+            lightIntensity = ParseFloat(value, lightIntensity, 0.0f, 1.0f);
+        } else if (key == L"tint-alpha") {
+            tintAlpha = ParseFloat(value, tintAlpha, 0.0f, 1.0f);
+        } else if (key == L"magnification") {
+            magnification = ParseBool(value, magnification);
+        } else if (key == L"max-scale") {
+            maxScale = ParseFloat(value, maxScale, 1.0f, design::kMaxConfigurableScale);
+        } else if (key == L"influence") {
+            influencePx = ParseFloat(value, influencePx, 16.0f, 600.0f);
+        } else if (key == L"icon-bulge") {
+            iconBulge = ParseBool(value, iconBulge);
+        } else if (key == L"auto-hide") {
+            autoHide = ParseBool(value, autoHide);
+        } else if (key == L"dwell-seconds") {
+            dwellSeconds = ParseFloat(value, dwellSeconds, 0.2f, 120.0f);
+        } else if (key == L"slide-seconds") {
+            slideSeconds = ParseFloat(value, slideSeconds, 0.0f, 2.0f);
+        } else {
+            LogWarn("Unknown key in settings.txt; ignoring it");
+        }
+    }
+
+    fclose(file);
+    return true;
+}
+
+bool Settings::WriteDefaults(const std::wstring& path) const {
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path.c_str(), L"wt, ccs=UTF-8") != 0 || !file) {
+        LogWarn("Could not write the settings file");
+        return false;
+    }
+
+    // Text mode turns every \n into CRLF on the way out, so this opens cleanly
+    // in Notepad without the source here being littered with \r.
+    fwprintf(file,
+             L"# LiquiDock settings. `key = value`, one per line; # starts a comment.\n"
+             L"# Delete a line to go back to its default. LiquiDock picks up changes\n"
+             L"# while it is running, so you can tune the glass by saving this file.\n"
+             L"\n"
+             L"# --- Glass ---------------------------------------------------------\n"
+             L"# How far the rim bends the desktop behind it. This is what makes the\n"
+             L"# edge read as a thick pane; past about 0.6 it starts to read as a\n"
+             L"# fisheye lens instead.\n"
+             L"refraction = %.2f\n"
+             L"\n"
+             L"# How wide the bevel is - how thick the glass looks.\n"
+             L"depth = %.2f\n"
+             L"\n"
+             L"# Colour fringing at the rim, where the bending splits by wavelength.\n"
+             L"dispersion = %.2f\n"
+             L"\n"
+             L"# Frosting. 0 is clear glass; this is the setting that decides whether\n"
+             L"# the desktop behind the dock is sharp or softened.\n"
+             L"frost = %.2f\n"
+             L"\n"
+             L"# How far inward from the rim the bending fans before the surface\n"
+             L"# flattens off. Lower keeps the middle of the pane calm.\n"
+             L"splay = %.2f\n"
+             L"\n"
+             L"# Where the light comes from, in degrees, and how hard it hits.\n"
+             L"light-angle = %.0f\n"
+             L"light-intensity = %.2f\n"
+             L"\n"
+             L"# The white the glass is tinted with. Small on purpose: the dock reads\n"
+             L"# as glass because of what the shader does to the backdrop, not\n"
+             L"# because of this. Raising it is how the design gets muddy.\n"
+             L"tint-alpha = %.2f\n"
+             L"\n"
+             L"# --- Magnification -------------------------------------------------\n"
+             L"magnification = %s\n"
+             L"\n"
+             L"# How big the icon under the cursor gets, and how far either side of\n"
+             L"# it the swell reaches, in pixels.\n"
+             L"max-scale = %.2f\n"
+             L"influence = %.0f\n"
+             L"\n"
+             L"# Whether the glass swells around a raised icon. Off by default: it\n"
+             L"# fuses the bar's outline to the icons, which reads as liquid clinging\n"
+             L"# to them rather than as a pane of glass.\n"
+             L"icon-bulge = %s\n"
+             L"\n"
+             L"# --- Auto-hide -----------------------------------------------------\n"
+             L"auto-hide = %s\n"
+             L"\n"
+             L"# How long the dock stays out once nothing is using it, and how long\n"
+             L"# the slide itself takes.\n"
+             L"dwell-seconds = %.1f\n"
+             L"slide-seconds = %.2f\n",
+             refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
+             tintAlpha, magnification ? L"on" : L"off", maxScale, influencePx,
+             iconBulge ? L"on" : L"off", autoHide ? L"on" : L"off", dwellSeconds, slideSeconds);
+
+    fclose(file);
+    LogInfo("Wrote a default settings file");
+    return true;
+}
+
+} // namespace liquidock

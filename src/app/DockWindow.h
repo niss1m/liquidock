@@ -3,11 +3,13 @@
 #include <windows.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "app/DockLayout.h"
 #include "app/EdgeTrigger.h"
 #include "core/DesignTokens.h"
+#include "core/Settings.h"
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
 #include "gfx/IconAtlas.h"
@@ -60,7 +62,11 @@ public:
     // own - so if the composition path were broken on a given driver, a normal
     // render would look much the same as a failed one. This makes the two
     // impossible to confuse.
-    bool Create(GraphicsDevice& device, bool diagnostic = false, bool autoHide = true);
+    // `autoHideOverride` is the command line having its say; empty means the
+    // settings file decides. Kept, so a settings reload cannot quietly turn
+    // auto-hide back on under someone who launched with --no-autohide.
+    bool Create(GraphicsDevice& device, bool diagnostic = false,
+                std::optional<bool> autoHideOverride = std::nullopt);
     void Destroy();
 
     HWND hwnd() const { return hwnd_; }
@@ -72,6 +78,10 @@ public:
     // Slides the dock into view and restarts its dwell timer. Called when the
     // cursor reaches the screen edge, and safe to call repeatedly.
     void Reveal();
+
+    // Re-reads settings.txt and applies it. Called from the message loop when
+    // the config directory watch reports the file was saved.
+    void ReloadSettings();
 
 private:
     static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
@@ -97,6 +107,9 @@ private:
     // Screen point to logical dock space, with the slide taken back out, so
     // hit tests are against the layout's own coordinates.
     bool CursorToLayout(POINT screen, float* x, float* y) const;
+
+    // Pushes the current settings into everything that caches them.
+    void ApplySettings();
 
     void ReloadItems();
     void StartIconLoad();
@@ -125,6 +138,8 @@ private:
     bool deviceLost_ = false;
 
     // Items, their icons and their geometry.
+    Settings settings_;
+    std::optional<bool> autoHideOverride_;
     ItemStore store_;
     DockLayout layout_;
     IconLoader iconLoader_;

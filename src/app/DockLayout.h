@@ -54,6 +54,11 @@ public:
     // Window width in logical pixels, used to centre the resting bar.
     void SetWindowWidth(float logicalWidth) { windowWidth_ = logicalWidth; }
 
+    // The magnification the user asked for. `bulge` is what makes the glass
+    // swell around a raised icon; with it off the bar keeps the plain rounded
+    // silhouette the design specifies, and icons simply rise out of it.
+    void SetMagnification(bool enabled, float maxScale, float influencePx, bool bulge);
+
     // `x` is in logical window space. `inside` false means the cursor is not
     // over the dock, which relaxes every icon back to rest.
     void SetCursor(float x, bool inside);
@@ -98,6 +103,7 @@ private:
     };
 
     float ContentWidth() const;
+    float WaveScale(float distance) const;
     float TargetScale(const Element& element, float baseCenterX) const;
     // Lays out at the current spring scales. Shared by Advance and by the
     // width probe that sizes the window.
@@ -111,6 +117,10 @@ private:
     float windowWidth_ = 0.0f;
     float cursorX_ = 0.0f;
     bool hovered_ = false;
+    bool magnification_ = true;
+    float maxScale_ = 1.0f;
+    float influencePx_ = 1.0f;
+    bool bulge_ = false;
     float barCenterX_ = 0.0f;
     float barHalfWidth_ = 0.0f;
 };

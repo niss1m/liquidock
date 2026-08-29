@@ -2,10 +2,13 @@
 #include <objbase.h>
 
 #include <cwchar>
+#include <optional>
 
 #include "app/DockWindow.h"
 #include "app/TrayIcon.h"
+#include "core/ConfigWatcher.h"
 #include "core/Log.h"
+#include "core/Settings.h"
 #include "gfx/GraphicsDevice.h"
 
 namespace liquidock {
@@ -34,7 +37,7 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-int Run(bool diagnostic, bool autoHide) {
+int Run(bool diagnostic, std::optional<bool> autoHideOverride) {
     InitLogFile();
     LogInfo("LiquiDock {} starting{}", LIQUIDOCK_VERSION,
             diagnostic ? " (diagnostic render)" : "");
@@ -49,7 +52,7 @@ int Run(bool diagnostic, bool autoHide) {
     }
 
     DockWindow dock;
-    if (!dock.Create(device, diagnostic, autoHide)) {
+    if (!dock.Create(device, diagnostic, autoHideOverride)) {
         MessageBoxW(nullptr, L"LiquiDock could not create its window.", L"LiquiDock",
                     MB_ICONERROR | MB_OK);
         return 1;
@@ -58,15 +61,53 @@ int Run(bool diagnostic, bool autoHide) {
     TrayIcon tray;
     tray.Create();
 
-    // Strictly event-driven. GetMessage blocks, so an idle dock costs no CPU,
-    // no GPU and no timer wakeups. The animation clock added in M2 pumps frames
-    // only while a spring is still settling.
+    // Watching the settings file rather than polling it. The wait below blocks
+    // on the message queue and the directory handle together, so an idle dock
+    // still costs no CPU, no GPU and no timer wakeups - it just has one more
+    // thing it can be woken by.
+    ConfigWatcher watcher;
+    watcher.Start();
+    Settings::PollForChanges(); // establish the baseline after the first write
+
+    // Strictly event-driven. The animation clock pumps frames only while a
+    // spring is still settling or a slide is still running.
     MSG message{};
-    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
+    bool running = true;
+    while (running) {
+        HANDLE handles[1] = {watcher.handle()};
+        const DWORD handleCount = watcher.valid() ? 1u : 0u;
+        // MWMO_INPUTAVAILABLE so a message that arrived between the last
+        // PeekMessage and this wait is not slept through.
+        const DWORD signalled = MsgWaitForMultipleObjectsEx(
+            handleCount, handleCount ? handles : nullptr, INFINITE, QS_ALLINPUT,
+            MWMO_INPUTAVAILABLE);
+
+        if (handleCount > 0 && signalled == WAIT_OBJECT_0) {
+            watcher.Acknowledge();
+            // The handle signals for any write in the config directory, the log
+            // file included, so ask whether the settings file itself moved
+            // before doing anything about it. Without this the dock reloads
+            // every time it writes its own log.
+            if (Settings::PollForChanges()) {
+                dock.ReloadSettings();
+            }
+            continue;
+        }
+
+        // PeekMessage rather than GetMessage: the wait has already told us the
+        // queue is non-empty, and GetMessage would block again if the only
+        // thing that woke us was the directory handle.
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) {
+                running = false;
+                break;
+            }
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
     }
 
+    watcher.Stop();
     tray.Destroy();
     dock.Destroy();
 
@@ -80,8 +121,12 @@ int Run(bool diagnostic, bool autoHide) {
 
 int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLine, _In_ int) {
     const bool diagnostic = wcsstr(commandLine, L"--diagnostic") != nullptr;
-    // TODO(M2): a config file setting, with the command line only overriding it.
-    const bool autoHide = wcsstr(commandLine, L"--no-autohide") == nullptr;
+    // Auto-hide lives in settings.txt. The command line only overrides it, and
+    // only in the one direction anybody needs while testing.
+    std::optional<bool> autoHideOverride;
+    if (wcsstr(commandLine, L"--no-autohide") != nullptr) {
+        autoHideOverride = false;
+    }
 
     liquidock::SingleInstanceGuard guard;
     if (!guard.Acquire()) {
@@ -95,7 +140,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLin
         return 1;
     }
 
-    const int result = liquidock::Run(diagnostic, autoHide);
+    const int result = liquidock::Run(diagnostic, autoHideOverride);
     CoUninitialize();
     return result;
 }

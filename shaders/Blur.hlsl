@@ -54,8 +54,13 @@ float4 PSBlur(Varyings input) : SV_Target
     float3 accumulated = 0.0;
     float weightSum = 0.0;
 
+    // +/- 16 taps covers three standard deviations at the largest frost the
+    // settings file allows, which is where a truncated Gaussian stops looking
+    // like a blur and starts looking like a box. This pass is cached - it runs
+    // when the wallpaper or the dock's position changes, not per frame - so the
+    // extra taps cost nothing anybody can measure.
     [unroll]
-    for (int i = -6; i <= 6; ++i)
+    for (int i = -16; i <= 16; ++i)
     {
         const float weight = exp(-(i * i) / denom);
         accumulated += gSource.SampleLevel(gLinearClamp, uv + i * gDirection.xy, 0).rgb * weight;

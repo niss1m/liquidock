@@ -52,7 +52,10 @@ add_executable(liquidock WIN32
     src/app/DockWindow.cpp
     src/app/EdgeTrigger.cpp
     src/app/TrayIcon.cpp
+    src/core/ConfigPaths.cpp
+    src/core/ConfigWatcher.cpp
     src/core/Log.cpp
+    src/core/Settings.cpp
     src/gfx/GraphicsDevice.cpp
     src/gfx/CompositionTarget.cpp
     src/gfx/IconAtlas.cpp

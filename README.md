@@ -12,7 +12,8 @@ it: refraction bending the backdrop through the bevel, chromatic dispersion at t
 specular edge driven by a light angle you control.
 
 - **Real liquid glass** — refraction, depth, dispersion, frost, splay and light, all live and all
-  tweakable.
+  tweakable. Save the settings file and the dock re-renders; it watches the file rather than
+  polling it, so tuning costs nothing when you are not tuning.
 - **The macOS magnification wave** — icons swell under the cursor on a critically damped spring, and
   the glass body bulges with them.
 - **Zero idle cost** — the dock is event-driven. Nothing moving means no frames presented, no GPU
@@ -48,6 +49,22 @@ On a first run there is no file, so the list is seeded from whatever is pinned t
 Downloads and the Recycle Bin, and then written out for you to edit. Right-clicking an icon offers
 Open, Remove from Dock, and a shortcut to the file itself. Reordering is a drag in Notepad until the
 preferences UI lands in M4.
+
+## Settings
+
+`%LOCALAPPDATA%\LiquiDock\settings.txt`, `key = value`, written with a comment on every setting the
+first time the dock runs. Reachable from *Preferences…* in the tray menu. The dock watches the file,
+so saving it takes effect immediately — which is the point, because half of these are judgement
+calls about how something looks and the only way to settle one is to see it.
+
+Glass: `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`, `light-intensity`,
+`tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`, `icon-bulge`. Auto-hide:
+`auto-hide`, `dwell-seconds`, `slide-seconds`.
+
+`icon-bulge` is **off** by default. With it on, the glass swells around a raised icon — the bar's
+outline fuses to the icons and reads as liquid clinging to them, which is a much stronger effect
+than this dock is going for. It is there because it is a good effect, not because it is the right
+default.
 
 ## Building
 

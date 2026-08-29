@@ -33,20 +33,17 @@ enum ItemMenuCommand : UINT {
     kCommandEditFile = 3,
 };
 
-// TODO(M4): these belong in the preferences UI. They are the numbers a user
-// actually wants to change.
-constexpr float kDwellSeconds = 3.0f;  // how long the dock stays out
-constexpr float kSlideSeconds = 0.22f; // how long the slide itself takes
 constexpr int kTriggerThicknessPx = 2; // the strip that notices the cursor
 
 constexpr float kCornerRadius = design::kCornerRadius;
 constexpr float kBottomMargin = design::kScreenMargin;
 constexpr float kBleed = design::kBleed;
 
-// Blur radius at frost = 1.0, in logical pixels. The design's frost of 0.04
-// lands near a pixel and a half, which is the barely-there scattering the
-// Figma render shows rather than a milky panel.
-constexpr float kMaxFrostSigmaPx = 40.0f;
+// Blur radius at frost = 1.0, in logical pixels. The default frost of 0.65
+// lands at 13 px, which softens the desktop behind the dock without erasing it -
+// you can still tell what is back there, which is the difference between
+// frosted glass and a grey rectangle.
+constexpr float kMaxFrostSigmaPx = 20.0f;
 
 float Radians(float degrees) {
     return degrees * std::numbers::pi_v<float> / 180.0f;
@@ -76,19 +73,23 @@ DockWindow::~DockWindow() {
     Destroy();
 }
 
-bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) {
+bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
+                        std::optional<bool> autoHideOverride) {
     device_ = &device;
     diagnostic_ = diagnostic;
-    autoHide_ = autoHide;
+    autoHideOverride_ = autoHideOverride;
     shaders_ = std::make_unique<ShaderCache>(device.d3d());
 
     QueryPerformanceFrequency(&frequency_);
     QueryPerformanceCounter(&startTime_);
 
-    // The item list has to exist before the window is placed: how wide the dock
-    // can get under magnification is what decides how wide the window must be.
+    // Settings before items before placement: the magnification the settings
+    // ask for and the number of items together decide how wide the dock can get,
+    // and that is what decides how wide the window must be.
+    settings_.Load();
     store_.Load();
     layout_.SetItems(store_.items());
+    ApplySettings();
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -137,11 +138,11 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) 
     SetTimer(hwnd_, kShaderWatchTimer, 250, nullptr);
 #endif
 
-    if (autoHide_) {
-        trigger_.Create([this] { Reveal(); });
-        trigger_.SetEnabled(false); // the dock starts on screen
-    }
-    UpdatePlacement(); // now that the trigger exists, give it its bounds
+    // Created whether or not auto-hide is on, so turning it on from the
+    // settings file while the dock is running has something to arm.
+    trigger_.Create([this] { Reveal(); });
+    trigger_.SetEnabled(false); // the dock starts on screen
+    UpdatePlacement();          // now that the trigger exists, give it its bounds
 
     QueryPerformanceCounter(&lastFrameTime_);
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
@@ -151,8 +152,8 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) 
     // looks indistinguishable from launching into a broken one.
     StartHideCountdown();
 
-    LogInfo("Dock window created at {} DPI, auto-hide {}, {} items", dpi_,
-            autoHide_ ? "on" : "off", store_.items().size());
+    LogInfo("Dock window created at {} DPI, auto-hide {}, icon bulge {}, {} items", dpi_,
+            autoHide_ ? "on" : "off", settings_.iconBulge ? "on" : "off", store_.items().size());
     return true;
 }
 
@@ -184,7 +185,7 @@ void DockWindow::StartHideCountdown() {
         return;
     }
     revealState_ = (revealProgress_ >= 1.0f) ? RevealState::Shown : revealState_;
-    SetTimer(hwnd_, kHideTimer, static_cast<UINT>(kDwellSeconds * 1000.0f), nullptr);
+    SetTimer(hwnd_, kHideTimer, static_cast<UINT>(settings_.dwellSeconds * 1000.0f), nullptr);
 }
 
 void DockWindow::BeginHiding() {
@@ -202,7 +203,8 @@ float DockWindow::AdvanceReveal(float deltaSeconds) {
         return 1.0f;
     }
 
-    const float step = (kSlideSeconds > 0.0f) ? (deltaSeconds / kSlideSeconds) : 1.0f;
+    const float step =
+        (settings_.slideSeconds > 0.0f) ? (deltaSeconds / settings_.slideSeconds) : 1.0f;
 
     if (revealState_ == RevealState::Revealing) {
         revealProgress_ = std::min(1.0f, revealProgress_ + step);
@@ -347,6 +349,58 @@ void DockWindow::DrainLoadedIcons() {
     }
     // One mip regeneration for the whole batch, not one per icon.
     atlas_.FinishUpdates();
+    RequestRedraw();
+}
+
+void DockWindow::ApplySettings() {
+    // The command line wins over the file, so a reload cannot turn auto-hide
+    // back on under someone who started the dock with --no-autohide.
+    autoHide_ = autoHideOverride_.value_or(settings_.autoHide);
+    layout_.SetMagnification(settings_.magnification, settings_.maxScale, settings_.influencePx,
+                             settings_.iconBulge);
+    // The frost is a cached blur at a particular radius, and the radius is a
+    // setting, so it is stale by definition after a reload.
+    frostDirty_ = true;
+}
+
+void DockWindow::ReloadSettings() {
+    if (!hwnd_) {
+        return;
+    }
+    const float previousScale = settings_.maxScale;
+    const float previousInfluence = settings_.influencePx;
+    const bool previousAutoHide = autoHide_;
+
+    settings_.Load();
+    ApplySettings();
+    LogInfo("Settings reloaded (frost {:.2f}, refraction {:.2f}, icon bulge {})", settings_.frost,
+            settings_.refraction, settings_.iconBulge ? "on" : "off");
+
+    // How wide the dock can get is a function of the magnification, and the
+    // window is sized for that once rather than resized per frame - so these two
+    // are the only settings that have to reach all the way back to the window.
+    if (settings_.maxScale != previousScale || settings_.influencePx != previousInfluence) {
+        UpdatePlacement();
+    }
+
+    if (autoHide_ != previousAutoHide) {
+        if (autoHide_) {
+            StartHideCountdown();
+        } else {
+            // Turning auto-hide off has to be able to rescue a dock that is
+            // already tucked away, or the setting appears to do nothing until
+            // the user goes and finds the screen edge.
+            KillTimer(hwnd_, kHideTimer);
+            trigger_.SetEnabled(false);
+            revealState_ = RevealState::Shown;
+            revealProgress_ = 1.0f;
+            animating_ = false;
+            ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+            SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+    }
+
     RequestRedraw();
 }
 
@@ -539,7 +593,7 @@ void DockWindow::Render() {
     const SIZE windowSize{static_cast<LONG>(target_.width()),
                           static_cast<LONG>(target_.height())};
 
-    const float frostSigma = design::glass::kFrost * kMaxFrostSigmaPx * scale;
+    const float frostSigma = settings_.frost * kMaxFrostSigmaPx * scale;
     if (frostDirty_ || !frost_.ready()) {
         if (frost_.Build(backdrop_, windowOrigin, windowSize, frostSigma)) {
             frostDirty_ = false;
@@ -587,13 +641,13 @@ void DockWindow::Render() {
     constants.shape[2] = kCornerRadius * scale;
     constants.shape[3] = elapsed;
 
-    constants.light[0] = Radians(design::glass::kLightAngleDegrees);
-    constants.light[1] = design::glass::kLightIntensity;
-    constants.light[2] = design::glass::kRefraction;
-    constants.light[3] = design::glass::kDepth;
-    constants.material[0] = design::glass::kDispersion;
-    constants.material[1] = design::glass::kFrost;
-    constants.material[2] = design::glass::kSplay;
+    constants.light[0] = Radians(settings_.lightAngleDegrees);
+    constants.light[1] = settings_.lightIntensity;
+    constants.light[2] = settings_.refraction;
+    constants.light[3] = settings_.depth;
+    constants.material[0] = settings_.dispersion;
+    constants.material[1] = settings_.frost;
+    constants.material[2] = settings_.splay;
     constants.material[3] = backdrop_.tiled() ? 1.0f : 0.0f;
 
     constants.windowOrigin[0] = static_cast<float>(windowOrigin.x);
@@ -631,6 +685,7 @@ void DockWindow::Render() {
         constants.tint[3] = 1.0f;
     } else {
         memcpy(constants.tint, design::kBarTint, sizeof(constants.tint));
+        constants.tint[3] = settings_.tintAlpha;
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 
+#include "core/ConfigPaths.h"
 #include "core/DesignTokens.h"
 #include "core/Log.h"
 
@@ -93,14 +94,7 @@ std::wstring ItemStore::ExpandPath(const std::wstring& raw) {
 }
 
 std::wstring ItemStore::ConfigPath() {
-    const std::wstring base = KnownFolder(FOLDERID_LocalAppData);
-    if (base.empty()) {
-        return {};
-    }
-    const std::filesystem::path directory = std::filesystem::path(base) / L"LiquiDock";
-    std::error_code ec;
-    std::filesystem::create_directories(directory, ec);
-    return (directory / kFileName).wstring();
+    return ConfigFilePath(kFileName);
 }
 
 int ItemStore::MainCount() const {

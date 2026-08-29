@@ -38,19 +38,29 @@ float BounceOffset(float time) {
     return magnify::kBounceHeightPx * hop * (1.0f - phase);
 }
 
+} // namespace
+
 // The magnification wave. A raised cosine: zero slope at the cursor and zero
 // slope where it dies out, so neither the peak nor the edge of the wave has a
 // crease in it.
-float WaveScale(float distance) {
-    const float t = distance / magnify::kInfluencePx;
+float DockLayout::WaveScale(float distance) const {
+    if (!magnification_) {
+        return 1.0f;
+    }
+    const float t = distance / std::max(influencePx_, 1.0f);
     if (t >= 1.0f) {
         return 1.0f;
     }
     const float bell = 0.5f * (1.0f + std::cos(t * std::numbers::pi_v<float>));
-    return 1.0f + (magnify::kMaxScale - 1.0f) * bell;
+    return 1.0f + (maxScale_ - 1.0f) * bell;
 }
 
-} // namespace
+void DockLayout::SetMagnification(bool enabled, float maxScale, float influencePx, bool bulge) {
+    magnification_ = enabled;
+    maxScale_ = maxScale;
+    influencePx_ = influencePx;
+    bulge_ = bulge;
+}
 
 float DockLayout::bar_center_y() {
     return kBleed + kBarHeight * 0.5f;
@@ -162,8 +172,7 @@ float DockLayout::MaxBarWidth() const {
     // a way that changes whenever either is tuned. A sweep is exact for
     // whatever the numbers happen to be, and it runs once per layout change.
     float widest = restingContent;
-    for (float cursor = -magnify::kInfluencePx; cursor <= restingContent + magnify::kInfluencePx;
-         cursor += 2.0f) {
+    for (float cursor = -influencePx_; cursor <= restingContent + influencePx_; cursor += 2.0f) {
         float total = 0.0f;
         for (size_t i = 0; i < elements_.size(); ++i) {
             const float scale = (elements_[i].itemIndex < 0)
@@ -298,7 +307,7 @@ void DockLayout::Place() {
         icon.scale = element.scale;
         icons_.push_back(icon);
 
-        if (element.scale > kLensThreshold && lenses_.size() < design::kMaxLenses) {
+        if (bulge_ && element.scale > kLensThreshold && lenses_.size() < design::kMaxLenses) {
             // The lens bottom stays on the bar's bottom edge and its top rises
             // with the icon. At scale 1 it is exactly inscribed in the bar, so
             // it contributes nothing until the icon actually lifts - which is
