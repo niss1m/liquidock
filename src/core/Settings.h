@@ -50,6 +50,13 @@ struct Settings {
     // the whole dock bigger or smaller.
     float iconSize = 0.0f;
 
+    // The hover label's face. Nexus's registry says Segoe UI 12 bold, but that
+    // is what its GDI rendering makes of those numbers, and DirectWrite drawing
+    // light glyphs onto a dark pill does not land in the same place. These are
+    // settings so the match can be dialled in rather than guessed at.
+    float labelFontSize = 0.0f;
+    bool labelBold = false;
+
     // Whether the glass swells around a raised icon. Off by default: it fuses
     // the bar's silhouette to the icons, which reads as liquid clinging to them
     // rather than as a pane of glass, and that is a much stronger effect than

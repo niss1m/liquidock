@@ -129,7 +129,17 @@ namespace label {
 // 12 pt at 96 dpi is 16 px, and the weight is what most of the difference in
 // character was - a semibold variable face next to a plain bold one does not
 // read as the same label however close the metrics get.
-inline constexpr float kFontSize = 16.0f;
+// 12 pt at 96 dpi would be 16 px, but light text on a near-black pill gains
+// apparent weight - the glyphs bloom into the dark ground in a way GDI's
+// ClearType on an opaque background does not - so matching Nexus's numbers
+// exactly overshoots it. Hence a step down in both size and weight. Both are
+// settings, because this is the one thing here that cannot be measured off the
+// running Nexus.
+inline constexpr float kFontSize = 15.0f;
+inline constexpr bool kBold = false;
+// The ceiling for the label-font-size setting. The window reserves headroom for
+// a label this tall at startup, so the pill cannot grow past its own bleed.
+inline constexpr float kMaxFontSize = 22.0f;
 inline constexpr float kPaddingX = 11.0f;
 inline constexpr float kPaddingY = 5.0f;
 inline constexpr float kRadius = 6.0f;
@@ -236,7 +246,7 @@ inline constexpr float kMaxIconRise =
 // clipping icons against the top of the window.
 // The hover label sits above the icon, and the icon is at its highest exactly
 // when the label is showing, so this is the case the window has to fit.
-inline constexpr float kLabelHeight = label::kFontSize + 2.0f * label::kPaddingY;
+inline constexpr float kLabelHeight = label::kMaxFontSize + 2.0f * label::kPaddingY;
 inline constexpr float kBleed = kMaxIconRise + magnify::kBounceHeightPx + label::kGap +
                                 label::kTailHeight + kLabelHeight + 8.0f;
 

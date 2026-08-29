@@ -101,6 +101,8 @@ void Settings::Load() {
     maxScale = design::magnify::kMaxScale;
     influencePx = design::magnify::kInfluencePx;
     iconSize = design::kDefaultIconSize;
+    labelFontSize = design::label::kFontSize;
+    labelBold = design::label::kBold;
     iconBulge = false;
 
     monitorIndex = 0;
@@ -170,6 +172,10 @@ bool Settings::ReadFile(const std::wstring& path) {
             iconSize = ParseFloat(value, iconSize, design::kMinIconSize, design::kMaxIconSize);
         } else if (key == L"influence") {
             influencePx = ParseFloat(value, influencePx, 16.0f, 600.0f);
+        } else if (key == L"label-font-size") {
+            labelFontSize = ParseFloat(value, labelFontSize, 9.0f, design::label::kMaxFontSize);
+        } else if (key == L"label-bold") {
+            labelBold = ParseBool(value, labelBold);
         } else if (key == L"icon-bulge") {
             iconBulge = ParseBool(value, iconBulge);
         } else if (key == L"monitor") {
@@ -215,6 +221,8 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"max-scale") return number(L"%.2f", maxScale);
     if (key == L"influence") return number(L"%.0f", influencePx);
     if (key == L"icon-size") return number(L"%.0f", iconSize);
+    if (key == L"label-font-size") return number(L"%.1f", labelFontSize);
+    if (key == L"label-bold") return labelBold ? L"on" : L"off";
     if (key == L"icon-bulge") return iconBulge ? L"on" : L"off";
     if (key == L"monitor") {
         if (monitorIndex <= 0) {
@@ -285,6 +293,7 @@ bool Settings::Save() const {
         L"light-angle", L"light-intensity", L"tint-alpha", L"backdrop",     L"magnification",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"dwell-seconds", L"slide-seconds",
+        L"label-font-size", L"label-bold",
     };
     for (const wchar_t* key : kAllKeys) {
         if (std::find(written.begin(), written.end(), key) == written.end()) {
@@ -380,6 +389,12 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"max-scale = %.2f\n"
              L"influence = %.0f\n"
              L"\n"
+             L"# The hover label's face, in pixels, and whether it is bold. Nexus asks\n"
+             L"# GDI for Segoe UI 12 bold, but light text on a near-black pill blooms,\n"
+             L"# so matching those numbers exactly comes out heavier than Nexus looks.\n"
+             L"label-font-size = %.1f\n"
+             L"label-bold = %s\n"
+             L"\n"
              L"# Whether the glass swells around a raised icon. Off by default: it\n"
              L"# fuses the bar's outline to the icons, which reads as liquid clinging\n"
              L"# to them rather than as a pane of glass.\n"
@@ -404,7 +419,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
              tintAlpha, backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
-             magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
+             magnification ? L"on" : L"off", iconSize, maxScale, influencePx, labelFontSize,
+             labelBold ? L"on" : L"off",
              iconBulge ? L"on" : L"off", monitorText, reserveSpace ? L"on" : L"off",
              autoHide ? L"on" : L"off", dwellSeconds, slideSeconds);
 

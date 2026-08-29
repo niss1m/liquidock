@@ -410,7 +410,9 @@ bool DockWindow::CreateResources() {
     blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     LD_CHECK(device_->d3d()->CreateBlendState(&blend, &iconBlend_));
 
-    if (!text_.Initialize(*device_, design::label::kFontSize, DWRITE_FONT_WEIGHT_BOLD,
+    if (!text_.Initialize(*device_, settings_.labelFontSize,
+                          settings_.labelBold ? DWRITE_FONT_WEIGHT_BOLD
+                                              : DWRITE_FONT_WEIGHT_SEMI_BOLD,
                           L"Segoe UI")) {
         return false;
     }
@@ -524,6 +526,8 @@ void DockWindow::ReloadSettings() {
     const float previousScale = settings_.maxScale;
     const float previousInfluence = settings_.influencePx;
     const float previousIconSize = settings_.iconSize;
+    const float previousFontSize = settings_.labelFontSize;
+    const bool previousBold = settings_.labelBold;
     const bool previousAutoHide = autoHide_;
 
     settings_.Load();
@@ -537,6 +541,18 @@ void DockWindow::ReloadSettings() {
     if (settings_.maxScale != previousScale || settings_.influencePx != previousInfluence ||
         settings_.iconSize != previousIconSize) {
         UpdatePlacement();
+    }
+
+    // The text format is built once and holds the size and weight, so a change
+    // to either has to rebuild it - editing the file and watching the label
+    // change is the whole point of these two being settings.
+    if (device_ && (settings_.labelFontSize != previousFontSize ||
+                    settings_.labelBold != previousBold)) {
+        text_.Initialize(*device_, settings_.labelFontSize,
+                         settings_.labelBold ? DWRITE_FONT_WEIGHT_BOLD
+                                             : DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                         L"Segoe UI");
+        RequestRedraw();
     }
 
     if (autoHide_ != previousAutoHide) {
@@ -1462,7 +1478,10 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     }
 
     const float width = text_.MeasureWidth(name) + 2.0f * design::label::kPaddingX;
-    const float height = design::kLabelHeight;
+    // From the setting rather than the token: kLabelHeight is sized for the
+    // largest font the setting allows, because that is what the window has to
+    // reserve headroom for, not what this label is actually drawn at.
+    const float height = settings_.labelFontSize + 2.0f * design::label::kPaddingY;
     // Measured off where a *fully magnified* icon reaches, not off this icon's
     // current top. The icon under the cursor is at full size anyway, so the
     // tail still lands just above it - but the height no longer rides the swell,
