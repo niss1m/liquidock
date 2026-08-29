@@ -35,7 +35,7 @@ inline constexpr float kIndicatorTint[4] = {1.0f, 1.0f, 1.0f, 0.75f};
 // nothing: the dock reads as glass because of what the shader does to the
 // backdrop behind it, not because of this fill. Raising it further is how the
 // design gets muddy.
-inline constexpr float kBarTint[4] = {1.0f, 1.0f, 1.0f, 0.08f};
+inline constexpr float kBarTint[4] = {1.0f, 1.0f, 1.0f, 0.06f};
 
 // separator, rgba(255,255,255,0.2)
 inline constexpr float kSeparatorTint[4] = {1.0f, 1.0f, 1.0f, 0.20f};
@@ -54,16 +54,22 @@ inline constexpr float kSeparatorTint[4] = {1.0f, 1.0f, 1.0f, 0.20f};
 namespace glass {
 inline constexpr float kLightAngleDegrees = -45.0f; // Figma
 inline constexpr float kLightIntensity = 0.55f;     // Figma 0.80; the specular blew out
-inline constexpr float kRefraction = 0.45f;         // Figma 0.80; the rim should bend, not smear
-inline constexpr float kDepth = 0.35f;              // Figma 0.20; a wider bevel reads as thicker
-inline constexpr float kDispersion = 0.20f;         // Figma 0.50; the fringing was rainbow-bright
-// Figma 0.04, which is essentially clear glass. Frosting is what separates the
-// dock from the photograph behind it, and without it the bar has no surface of
-// its own on a busy wallpaper.
-inline constexpr float kFrost = 0.65f;
-// Figma 1.00, which fans the bending all the way to the middle of the pane.
-// Keeping it near the rim is what leaves the interior flat.
-inline constexpr float kSplay = 0.60f;
+// The edge is where all the optics live now, so refraction can be strong again -
+// it is confined to a few pixels rather than smeared across the panel.
+inline constexpr float kRefraction = 0.68f;
+// Figma 0.20. This is the band width, and it is the number that decides whether
+// the dock reads as a sheet of glass or as a glossy dome; 0.28 puts the edge at
+// about seven logical pixels.
+inline constexpr float kDepth = 0.28f;
+inline constexpr float kDispersion = 0.30f;         // Figma 0.50, and now only at the rim
+// Figma 0.04, which is essentially clear glass. This is now purely the blur
+// radius behind the panel - the body is always fully the blurred image - so it
+// can be heavy without turning the panel to fog. Heavy is what makes whatever is
+// behind the dock read as depth rather than as clutter.
+inline constexpr float kFrost = 0.82f;
+// Figma 1.00, which fans the bending all the way to the middle of the pane. A
+// low value keeps the lens ring pinned to the edge, which is the whole point.
+inline constexpr float kSplay = 0.35f;
 } // namespace glass
 
 // --- Magnification --------------------------------------------------------

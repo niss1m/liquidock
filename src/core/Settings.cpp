@@ -95,7 +95,7 @@ void Settings::Load() {
     lightAngleDegrees = design::glass::kLightAngleDegrees;
     lightIntensity = design::glass::kLightIntensity;
     tintAlpha = design::kBarTint[3];
-    backdrop = BackdropSource::Wallpaper;
+    backdrop = BackdropSource::Screen;
 
     magnification = true;
     maxScale = design::magnify::kMaxScale;

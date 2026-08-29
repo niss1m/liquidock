@@ -53,6 +53,18 @@ bool WallpaperBackdrop::Update(HMONITOR monitor) {
     if (!GetMonitorInfoW(monitor, &info)) {
         return false;
     }
+
+    // Everything below this line is a COM activation plus several cross-process
+    // calls into the shell, and it used to run on every single frame the dock
+    // drew - about nine milliseconds of it, which is most of a frame at 100 Hz
+    // and exactly the cursor lag it caused.
+    //
+    // The wallpaper cannot change without the SPI_SETDESKWALLPAPER broadcast
+    // that calls Invalidate(), so once it is loaded there is nothing left to
+    // ask anybody.
+    if (srv_ && !loadedKey_.empty() && EqualRect(&monitorRect_, &info.rcMonitor)) {
+        return false;
+    }
     monitorRect_ = info.rcMonitor;
     const int monitorWidth = monitorRect_.right - monitorRect_.left;
     const int monitorHeight = monitorRect_.bottom - monitorRect_.top;

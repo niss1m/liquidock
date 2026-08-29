@@ -72,7 +72,7 @@ public:
     // auto-hide back on under someone who launched with --no-autohide.
     bool Create(GraphicsDevice& device, bool diagnostic = false,
                 std::optional<bool> autoHideOverride = std::nullopt, bool dumpBackdrop = false,
-                bool simulateDeviceLoss = false);
+                bool simulateDeviceLoss = false, bool stats = false);
     void Destroy();
 
     HWND hwnd() const { return hwnd_; }
@@ -171,6 +171,22 @@ private:
     // --simulate-device-loss: takes the device-lost branch a few seconds in, so
     // the recovery path can be tested without provoking a real TDR.
     bool simulateDeviceLoss_ = false;
+    // --stats: once a second, how many frames were presented and what they
+    // cost. Guessing at where a frame goes is how you end up optimising the
+    // wrong thing.
+    bool stats_ = false;
+    unsigned statsFrames_ = 0;
+    double statsRenderMs_ = 0.0;
+    double statsWorstMs_ = 0.0;
+    double statsWaitMs_ = 0.0;
+    double statsPresentMs_ = 0.0;
+    double statsBackdropMs_ = 0.0;
+    double statsFrostMs_ = 0.0;
+    LARGE_INTEGER statsSince_{};
+    unsigned statsCaptureBase_ = 0;
+    unsigned statsCopiedBase_ = 0;
+    unsigned statsPointerBase_ = 0;
+    unsigned statsThrottledBase_ = 0;
 
     // Items, their icons and their geometry.
     Settings settings_;

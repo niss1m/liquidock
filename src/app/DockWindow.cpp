@@ -57,6 +57,8 @@ constexpr UINT kShowSettingsMessage = WM_APP + 7;
 constexpr UINT kSimulateDeviceLossMessage = WM_APP + 6;
 constexpr UINT_PTR kSimulateLossTimer = 6;
 constexpr UINT kSimulateLossDelayMs = 3000;
+// --stats only.
+constexpr UINT_PTR kStatsTimer = 7;
 
 enum ItemMenuCommand : UINT {
     kCommandOpen = 1,
@@ -70,11 +72,12 @@ constexpr float kCornerRadius = design::kCornerRadius;
 constexpr float kBottomMargin = design::kScreenMargin;
 constexpr float kBleed = design::kBleed;
 
-// Blur radius at frost = 1.0, in logical pixels. The default frost of 0.65
-// lands at 13 px, which softens the desktop behind the dock without erasing it -
-// you can still tell what is back there, which is the difference between
-// frosted glass and a grey rectangle.
-constexpr float kMaxFrostSigmaPx = 20.0f;
+// Blur radius at frost = 1.0, in logical pixels. The body of the panel is
+// always fully this blurred image, so the number is now the whole story: the
+// default of 0.82 lands at 26 px, heavy enough that what is behind the dock
+// reads as depth rather than as detail, and light enough that you can still tell
+// a window from a wallpaper.
+constexpr float kMaxFrostSigmaPx = 32.0f;
 
 float Radians(float degrees) {
     return degrees * std::numbers::pi_v<float> / 180.0f;
@@ -106,12 +109,13 @@ DockWindow::~DockWindow() {
 
 bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
                         std::optional<bool> autoHideOverride, bool dumpBackdrop,
-                        bool simulateDeviceLoss) {
+                        bool simulateDeviceLoss, bool stats) {
     device_ = &device;
     diagnostic_ = diagnostic;
     autoHideOverride_ = autoHideOverride;
     dumpBackdrop_ = dumpBackdrop;
     simulateDeviceLoss_ = simulateDeviceLoss;
+    stats_ = stats;
     shaders_ = std::make_unique<ShaderCache>(device.d3d());
 
     QueryPerformanceFrequency(&frequency_);
@@ -173,6 +177,9 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
     }
     if (simulateDeviceLoss_) {
         SetTimer(hwnd_, kSimulateLossTimer, kSimulateLossDelayMs, nullptr);
+    }
+    if (stats_) {
+        QueryPerformanceCounter(&statsSince_);
     }
 
 #ifdef LIQUIDOCK_DEBUG
@@ -377,6 +384,7 @@ void DockWindow::Destroy() {
         KillTimer(hwnd_, kRunningTimer);
         KillTimer(hwnd_, kDeviceRetryTimer);
         KillTimer(hwnd_, kSimulateLossTimer);
+        KillTimer(hwnd_, kStatsTimer);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
@@ -811,6 +819,10 @@ void DockWindow::Render() {
     if (deviceLost_) {
         return;
     }
+    LARGE_INTEGER renderStart{};
+    if (stats_) {
+        QueryPerformanceCounter(&renderStart);
+    }
 
     // Everything that can fail is done before BeginFrame. BeginFrame takes a
     // slot from the frame-latency semaphore that only Present hands back, so
@@ -844,11 +856,26 @@ void DockWindow::Render() {
         capture_->SetRegion(region);
     }
 
-    if (wallpaper_.Update(monitor)) {
-        frostDirty_ = true;
+    LARGE_INTEGER backdropStart{};
+    if (stats_) {
+        QueryPerformanceCounter(&backdropStart);
+    }
+    // The wallpaper is only the stand-in until live capture has a frame. Once
+    // it does, asking about the wallpaper at all is pure cost.
+    if (!capture_ || !capture_->ready()) {
+        if (wallpaper_.Update(monitor)) {
+            frostDirty_ = true;
+        }
     }
     if (capture_ && capture_->Update(monitor)) {
         frostDirty_ = true;
+    }
+    if (stats_) {
+        LARGE_INTEGER backdropEnd{};
+        QueryPerformanceCounter(&backdropEnd);
+        statsBackdropMs_ +=
+            1000.0 * static_cast<double>(backdropEnd.QuadPart - backdropStart.QuadPart) /
+            static_cast<double>(frequency_.QuadPart);
     }
     // A capture that failed outright - no duplication on this adapter - is
     // dropped here rather than retried forever, and the dock carries on with
@@ -861,16 +888,34 @@ void DockWindow::Render() {
     }
 
     Backdrop& backdrop = ActiveBackdrop();
+    // The capture texture belongs to another device. Everything that samples it
+    // - the frost chain and the glass draw alike - has to sit inside the keyed
+    // mutex, so it is taken for the whole frame and given back after Present.
+    const bool sharedBackdrop = (&backdrop == static_cast<Backdrop*>(capture_.get()));
+    if (sharedBackdrop && !capture_->BeginRead()) {
+        RequestRedraw(); // the copy is still in flight; try again next message
+        return;
+    }
     const RECT monitorRect = backdrop.monitor_rect();
     const POINT windowOrigin{windowRect.left - monitorRect.left, windowRect.top - monitorRect.top};
     const SIZE windowSize{static_cast<LONG>(target_.width()),
                           static_cast<LONG>(target_.height())};
 
     const float frostSigma = settings_.frost * kMaxFrostSigmaPx * scale;
+    LARGE_INTEGER frostStart{};
+    if (stats_) {
+        QueryPerformanceCounter(&frostStart);
+    }
     if (frostDirty_ || !frost_.ready()) {
         if (frost_.Build(backdrop, windowOrigin, windowSize, frostSigma)) {
             frostDirty_ = false;
         }
+    }
+    if (stats_) {
+        LARGE_INTEGER frostEnd{};
+        QueryPerformanceCounter(&frostEnd);
+        statsFrostMs_ += 1000.0 * static_cast<double>(frostEnd.QuadPart - frostStart.QuadPart) /
+                         static_cast<double>(frequency_.QuadPart);
     }
     const float viewWidth = static_cast<float>(target_.width());
     const float viewHeight = static_cast<float>(target_.height());
@@ -944,6 +989,10 @@ void DockWindow::Render() {
         std::min(static_cast<int>(lenses.size()), static_cast<int>(design::kMaxLenses));
     constants.lensInfo[0] = static_cast<float>(lensCount);
     constants.lensInfo[1] = design::magnify::kFuse * scale;
+    // The shader works in physical pixels but the edge band and the rim are
+    // quoted in logical ones, because a two-pixel rim at 200% DPI is a one-pixel
+    // rim, which is to say no rim at all.
+    constants.lensInfo[2] = scale;
     for (int i = 0; i < lensCount; ++i) {
         constants.lens[i][0] = lenses[static_cast<size_t>(i)].centerX * scale;
         constants.lens[i][1] = (lenses[static_cast<size_t>(i)].centerY + slide) * scale;
@@ -963,13 +1012,29 @@ void DockWindow::Render() {
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(ctx->Map(constantBuffer_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        if (sharedBackdrop) {
+            capture_->EndRead();
+        }
         return;
     }
     memcpy(mapped.pData, &constants, sizeof(constants));
     ctx->Unmap(constantBuffer_.Get(), 0);
 
+    LARGE_INTEGER waitStart{};
+    if (stats_) {
+        QueryPerformanceCounter(&waitStart);
+    }
     ID3D11RenderTargetView* rtv = target_.BeginFrame();
+    if (stats_) {
+        LARGE_INTEGER waitEnd{};
+        QueryPerformanceCounter(&waitEnd);
+        statsWaitMs_ += 1000.0 * static_cast<double>(waitEnd.QuadPart - waitStart.QuadPart) /
+                        static_cast<double>(frequency_.QuadPart);
+    }
     if (!rtv) {
+        if (sharedBackdrop) {
+            capture_->EndRead();
+        }
         return;
     }
 
@@ -1008,12 +1073,68 @@ void DockWindow::Render() {
 
     device_->DrainDebugMessages();
 
-    if (!target_.EndFrame()) {
+    LARGE_INTEGER presentStart{};
+    if (stats_) {
+        QueryPerformanceCounter(&presentStart);
+    }
+    const bool presented = target_.EndFrame();
+    if (stats_) {
+        LARGE_INTEGER presentEnd{};
+        QueryPerformanceCounter(&presentEnd);
+        statsPresentMs_ +=
+            1000.0 * static_cast<double>(presentEnd.QuadPart - presentStart.QuadPart) /
+            static_cast<double>(frequency_.QuadPart);
+    }
+    if (sharedBackdrop) {
+        capture_->EndRead();
+    }
+
+    if (!presented) {
         // A TDR, or a driver updating itself while the dock runs. Everything
         // device-bound is invalid now, so tear it down and start trying to
         // build it again rather than repainting a dead swap chain forever.
         HandleDeviceLost();
         return;
+    }
+
+    if (stats_) {
+        LARGE_INTEGER renderEnd{};
+        QueryPerformanceCounter(&renderEnd);
+        const double ms = 1000.0 * static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) /
+                          static_cast<double>(frequency_.QuadPart);
+        ++statsFrames_;
+        statsRenderMs_ += ms;
+        statsWorstMs_ = std::max(statsWorstMs_, ms);
+
+        const double sinceMs =
+            1000.0 * static_cast<double>(renderEnd.QuadPart - statsSince_.QuadPart) /
+            static_cast<double>(frequency_.QuadPart);
+        if (sinceMs >= 1000.0) {
+            const unsigned acquired = capture_ ? capture_->acquired() : 0;
+            const unsigned copied = capture_ ? capture_->copied() : 0;
+            const unsigned pointer = capture_ ? capture_->pointerOnly() : 0;
+            const unsigned throttled = capture_ ? capture_->throttled() : 0;
+            LogInfo("STATS {} frames in {:.0f} ms, avg {:.2f} (wait {:.2f}, present {:.2f}), "
+                    "worst {:.2f} | backdrop {:.2f} frost {:.2f} | capture acquired {} "
+                    "pointer-only {} throttled {} copied {}",
+                    statsFrames_, sinceMs, statsRenderMs_ / statsFrames_,
+                    statsWaitMs_ / statsFrames_, statsPresentMs_ / statsFrames_, statsWorstMs_,
+                    statsBackdropMs_ / statsFrames_, statsFrostMs_ / statsFrames_,
+                    acquired - statsCaptureBase_, pointer - statsPointerBase_,
+                    throttled - statsThrottledBase_, copied - statsCopiedBase_);
+            statsFrames_ = 0;
+            statsRenderMs_ = 0.0;
+            statsWorstMs_ = 0.0;
+            statsWaitMs_ = 0.0;
+            statsPresentMs_ = 0.0;
+            statsBackdropMs_ = 0.0;
+            statsFrostMs_ = 0.0;
+            statsCaptureBase_ = acquired;
+            statsCopiedBase_ = copied;
+            statsPointerBase_ = pointer;
+            statsThrottledBase_ = throttled;
+            statsSince_ = renderEnd;
+        }
     }
 
     // Drive the next animation frame. Present blocked on vblank, so this paces

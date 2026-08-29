@@ -38,7 +38,7 @@ struct Settings {
     float lightAngleDegrees = 0.0f;
     float lightIntensity = 0.0f;
     float tintAlpha = 0.0f;
-    BackdropSource backdrop = BackdropSource::Wallpaper;
+    BackdropSource backdrop = BackdropSource::Screen;
 
     // --- Magnification ----------------------------------------------------
     bool magnification = true;

@@ -52,6 +52,13 @@ public:
     void Shutdown();
 
     bool Update(HMONITOR monitor) override;
+
+    // The capture texture is shared between two devices, so the render thread
+    // has to take the keyed mutex around every frame that samples it. Begin
+    // returns false if it could not, in which case the frame is skipped rather
+    // than drawn from a half-written texture.
+    bool BeginRead();
+    void EndRead();
     void SetRegion(const RECT& region) override;
     void SetActive(bool active) override;
     bool failed() const override { return failed_.load(std::memory_order_relaxed); }
@@ -59,6 +66,14 @@ public:
     // True once a frame has actually landed. Until then the dock keeps showing
     // the wallpaper, so switching modes never flashes an empty backdrop.
     bool ready() const { return hasFrame_.load(std::memory_order_relaxed) && srv_ != nullptr; }
+
+    // Counters for --stats. Acquired is every frame duplication handed over,
+    // copied is the subset that actually touched the dock. The gap between them
+    // is the whole argument for filtering on dirty rectangles.
+    unsigned acquired() const { return acquired_.load(std::memory_order_relaxed); }
+    unsigned copied() const { return copied_.load(std::memory_order_relaxed); }
+    unsigned pointerOnly() const { return pointerOnly_.load(std::memory_order_relaxed); }
+    unsigned throttled() const { return throttled_.load(std::memory_order_relaxed); }
 
     ID3D11ShaderResourceView* srv() const override { return srv_.Get(); }
     void uv_scale(float out[2]) const override { out[0] = uvScale_[0]; out[1] = uvScale_[1]; }
@@ -68,6 +83,7 @@ public:
 
 private:
     void Run();
+    bool CreateCaptureDevice();
     bool CreateDuplication();
     bool EnsureRegionTexture(int width, int height);
     // True when any of the frame's dirty or move rectangles overlaps the dock.
@@ -78,8 +94,24 @@ private:
     HWND notify_ = nullptr;
     UINT message_ = 0;
 
+    // Desktop duplication gets a device of its own rather than borrowing the
+    // dock's. Sharing one was the obvious thing and it was wrong: duplication
+    // does substantial work inside the device, and with the immediate context
+    // serialised between the two threads the dock's own frames queued behind it
+    // - measured at three hundred milliseconds a frame while idle. The two
+    // devices now meet only at a shared texture with a keyed mutex, which is
+    // sub-millisecond.
+    ComPtr<ID3D11Device> captureDevice_;
+    ComPtr<ID3D11DeviceContext> captureContext_;
     ComPtr<IDXGIOutputDuplication> duplication_;
-    ComPtr<ID3D11Texture2D> region_;
+
+    // Written by the capture device, sampled by the render device. Two views of
+    // one allocation, each with its own handle to the same keyed mutex.
+    ComPtr<ID3D11Texture2D> region_;         // capture side
+    ComPtr<IDXGIKeyedMutex> regionLock_;     // capture side
+    ComPtr<ID3D11Texture2D> sharedRegion_;   // render side
+    ComPtr<IDXGIKeyedMutex> sharedLock_;     // render side
+    HANDLE sharedHandle_ = nullptr;
     ComPtr<ID3D11ShaderResourceView> srv_;
 
     std::thread worker_;
@@ -107,10 +139,17 @@ private:
     // The dock moved to another monitor, so the worker has to rebuild its
     // duplication against a different output.
     std::atomic<bool> duplicationStale_{false};
+    std::atomic<unsigned> acquired_{0};
+    std::atomic<unsigned> copied_{0};
+    std::atomic<unsigned> pointerOnly_{0};
+    std::atomic<unsigned> throttled_{0};
 
     // Reused across frames rather than reallocated: this is touched on every
     // desktop change, which on a busy screen is sixty times a second.
     std::vector<uint8_t> metadata_;
+    // When the last frame was actually taken, for the refresh cap below.
+    LARGE_INTEGER lastFrameTick_{};
+    LARGE_INTEGER tickFrequency_{};
 
     float uvScale_[2] = {1.0f, 1.0f};
     float uvOffset_[2] = {0.0f, 0.0f};
