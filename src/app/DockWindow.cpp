@@ -1,5 +1,6 @@
 #include "app/DockWindow.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <numbers>
@@ -13,6 +14,18 @@ namespace {
 
 constexpr wchar_t kWindowClass[] = L"LiquiDock.Dock";
 constexpr UINT_PTR kShaderWatchTimer = 1;
+constexpr UINT_PTR kHideTimer = 2;
+
+// Posted to ourselves after presenting an animation frame. Present blocks on
+// vblank, so this self-paces at the monitor's refresh rate without a timer -
+// and unlike a timer it stops the instant the animation settles.
+constexpr UINT kAnimateMessage = WM_APP + 1;
+
+// TODO(M2): these belong in the config file once it exists, and in the
+// preferences UI in M4. They are the numbers a user actually wants to change.
+constexpr float kDwellSeconds = 3.0f;  // how long the dock stays out
+constexpr float kSlideSeconds = 0.22f; // how long the slide itself takes
+constexpr int kTriggerThicknessPx = 2; // the strip that notices the cursor
 
 // M0 has no item list yet, so the bar is sized as the design's own dock: ten
 // main icons, a separator, two utility icons. That makes an M0 screenshot
@@ -37,15 +50,24 @@ float Radians(float degrees) {
     return degrees * std::numbers::pi_v<float> / 180.0f;
 }
 
+// Smootherstep. Zero first *and* second derivative at both ends, so the slide
+// has no perceptible corner where it starts or stops - a plain lerp reads as
+// mechanical at this duration.
+float Eased(float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
 } // namespace
 
 DockWindow::~DockWindow() {
     Destroy();
 }
 
-bool DockWindow::Create(GraphicsDevice& device, bool diagnostic) {
+bool DockWindow::Create(GraphicsDevice& device, bool diagnostic, bool autoHide) {
     device_ = &device;
     diagnostic_ = diagnostic;
+    autoHide_ = autoHide;
     shaders_ = std::make_unique<ShaderCache>(device.d3d());
 
     QueryPerformanceFrequency(&frequency_);
@@ -92,10 +114,95 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic) {
     SetTimer(hwnd_, kShaderWatchTimer, 250, nullptr);
 #endif
 
+    if (autoHide_) {
+        trigger_.Create([this] { Reveal(); });
+        trigger_.SetEnabled(false); // the dock starts on screen
+    }
+    UpdatePlacement(); // now that the trigger exists, give it its bounds
+
+    QueryPerformanceCounter(&lastFrameTime_);
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
     RequestRedraw();
-    LogInfo("Dock window created at {} DPI", dpi_);
+
+    // Start visible, then tuck away. Launching straight into a hidden dock
+    // looks indistinguishable from launching into a broken one.
+    StartHideCountdown();
+
+    LogInfo("Dock window created at {} DPI, auto-hide {}", dpi_, autoHide_ ? "on" : "off");
     return true;
+}
+
+void DockWindow::Reveal() {
+    if (!autoHide_ || !hwnd_) {
+        return;
+    }
+
+    if (revealState_ == RevealState::Shown || revealState_ == RevealState::Revealing) {
+        StartHideCountdown(); // already out; just reset the dwell
+        return;
+    }
+
+    revealState_ = RevealState::Revealing;
+    animating_ = true;
+    trigger_.SetEnabled(false);
+    QueryPerformanceCounter(&lastFrameTime_);
+
+    ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+    // Re-assert topmost on every reveal. Other always-on-top shells - Nexus
+    // included - re-assert theirs periodically, and whoever asked last wins.
+    SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    RequestRedraw();
+}
+
+void DockWindow::StartHideCountdown() {
+    if (!autoHide_ || !hwnd_) {
+        return;
+    }
+    revealState_ = (revealProgress_ >= 1.0f) ? RevealState::Shown : revealState_;
+    SetTimer(hwnd_, kHideTimer, static_cast<UINT>(kDwellSeconds * 1000.0f), nullptr);
+    LogDebug("dwell timer armed ({} s)", kDwellSeconds);
+}
+
+void DockWindow::BeginHiding() {
+    if (!autoHide_ || revealState_ == RevealState::Hidden) {
+        return;
+    }
+    revealState_ = RevealState::Hiding;
+    animating_ = true;
+    QueryPerformanceCounter(&lastFrameTime_);
+    RequestRedraw();
+}
+
+float DockWindow::AdvanceReveal(float deltaSeconds) {
+    if (!autoHide_) {
+        return 1.0f;
+    }
+
+    const float step = (kSlideSeconds > 0.0f) ? (deltaSeconds / kSlideSeconds) : 1.0f;
+
+    if (revealState_ == RevealState::Revealing) {
+        revealProgress_ = std::min(1.0f, revealProgress_ + step);
+        if (revealProgress_ >= 1.0f) {
+            revealState_ = RevealState::Shown;
+            animating_ = false;
+            LogDebug("slide out complete");
+            StartHideCountdown();
+        }
+    } else if (revealState_ == RevealState::Hiding) {
+        revealProgress_ = std::max(0.0f, revealProgress_ - step);
+        if (revealProgress_ <= 0.0f) {
+            revealState_ = RevealState::Hidden;
+            animating_ = false;
+            // Hide the window outright rather than leaving an invisible one
+            // composited every frame, and re-arm the edge strip.
+            LogDebug("slide in complete, dock hidden");
+            ShowWindow(hwnd_, SW_HIDE);
+            trigger_.SetEnabled(true);
+        }
+    }
+
+    return Eased(revealProgress_);
 }
 
 bool DockWindow::CreateResources() {
@@ -124,8 +231,10 @@ bool DockWindow::CreateResources() {
 }
 
 void DockWindow::Destroy() {
+    trigger_.Destroy();
     if (hwnd_) {
         KillTimer(hwnd_, kShaderWatchTimer);
+        KillTimer(hwnd_, kHideTimer);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
@@ -140,7 +249,12 @@ void DockWindow::RequestRedraw() {
 void DockWindow::UpdatePlacement() {
     const float scale = static_cast<float>(dpi_) / 96.0f;
     const int width = static_cast<int>(std::lround((kDockWidth + 2.0f * kBleed) * scale));
-    const int height = static_cast<int>(std::lround((kDockHeight + 2.0f * kBleed) * scale));
+    // The window reaches from above the bar's resting position all the way down
+    // to the screen edge, so the bar can slide entirely out of sight *within*
+    // it. That makes the animation a constant fed to the shader rather than a
+    // SetWindowPos on every frame, which would make DWM redo its work each time.
+    const int height =
+        static_cast<int>(std::lround((kBottomMargin + kDockHeight + kBleed) * scale));
 
     HMONITOR monitor = hwnd_ ? MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY)
                              : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
@@ -154,11 +268,14 @@ void DockWindow::UpdatePlacement() {
     // own space.
     const RECT& work = info.rcWork;
     const int x = work.left + ((work.right - work.left) - width) / 2;
-    const int y = work.bottom - height - static_cast<int>(std::lround(kBottomMargin * scale)) +
-                  static_cast<int>(std::lround(kBleed * scale));
+    const int y = work.bottom - height;
 
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW);
+
+    // The trigger strip spans the dock's full width so the cursor does not have
+    // to find the bar exactly, only the right stretch of the edge.
+    trigger_.SetBounds(x, work.bottom - kTriggerThicknessPx, width, kTriggerThicknessPx);
 
     // Moving the dock invalidates the cached frost even at an unchanged size:
     // it is a crop of the wallpaper at a particular position.
@@ -218,12 +335,22 @@ void DockWindow::Render() {
     QueryPerformanceCounter(&now);
     const float elapsed = static_cast<float>(now.QuadPart - startTime_.QuadPart) /
                           static_cast<float>(frequency_.QuadPart);
+    float deltaSeconds = static_cast<float>(now.QuadPart - lastFrameTime_.QuadPart) /
+                         static_cast<float>(frequency_.QuadPart);
+    lastFrameTime_ = now;
+    // A frame can be arbitrarily late if the machine stalled; clamping keeps a
+    // hitch from teleporting the dock through its whole slide.
+    deltaSeconds = std::clamp(deltaSeconds, 0.0f, 0.1f);
+
+    const float reveal = AdvanceReveal(deltaSeconds);
+    const float shownCentreY = (kBleed + kDockHeight * 0.5f) * scale;
+    const float hiddenCentreY = viewHeight + kDockHeight * 0.5f * scale;
 
     GlassConstants constants{};
     constants.viewportCenter[0] = viewWidth;
     constants.viewportCenter[1] = viewHeight;
     constants.viewportCenter[2] = viewWidth * 0.5f;
-    constants.viewportCenter[3] = viewHeight * 0.5f;
+    constants.viewportCenter[3] = hiddenCentreY + (shownCentreY - hiddenCentreY) * reveal;
     constants.shape[0] = kDockWidth * 0.5f * scale;
     constants.shape[1] = kDockHeight * 0.5f * scale;
     constants.shape[2] = kCornerRadius * scale;
@@ -312,6 +439,13 @@ void DockWindow::Render() {
         deviceLost_ = true;
         LogError("Device lost - the dock will stay blank until it is restarted");
     }
+
+    // Drive the next animation frame. Present blocked on vblank, so this paces
+    // itself at the refresh rate; when the slide settles animating_ goes false
+    // and the dock falls silent again.
+    if (animating_ && !deviceLost_) {
+        PostMessageW(hwnd_, kAnimateMessage, 0, 0);
+    }
 }
 
 LRESULT CALLBACK DockWindow::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -366,12 +500,36 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
 
+        case kAnimateMessage:
+            Render();
+            return 0;
+
         case WM_TIMER:
-            if (wParam == kShaderWatchTimer && shaders_ && shaders_->PollForChanges()) {
-                // A shader edit can change the frost amount, and the cached
-                // blur would otherwise keep the old radius until the dock moved.
-                frostDirty_ = true;
-                RequestRedraw();
+            if (wParam == kShaderWatchTimer) {
+                if (shaders_ && shaders_->PollForChanges()) {
+                    // A shader edit can change the frost amount, and the cached
+                    // blur would otherwise keep the old radius until the dock
+                    // happened to move.
+                    frostDirty_ = true;
+                    RequestRedraw();
+                }
+            } else if (wParam == kHideTimer) {
+                KillTimer(hwnd_, kHideTimer);
+                // One cursor check when the dwell expires, rather than polling
+                // for the whole three seconds to learn the same thing.
+                POINT cursor{};
+                RECT bounds{};
+                const bool haveCursor = GetCursorPos(&cursor) != 0;
+                const bool haveBounds = GetWindowRect(hwnd, &bounds) != 0;
+                const bool hovering = haveCursor && haveBounds && PtInRect(&bounds, cursor);
+                LogDebug("dwell expired: cursor ({},{}) bounds ({},{})-({},{}) hovering={}",
+                         cursor.x, cursor.y, bounds.left, bounds.top, bounds.right, bounds.bottom,
+                         hovering ? 1 : 0);
+                if (hovering) {
+                    StartHideCountdown(); // still hovering, so stay out
+                } else {
+                    BeginHiding();
+                }
             }
             return 0;
 

@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "app/EdgeTrigger.h"
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
 #include "gfx/ShaderCache.h"
@@ -41,7 +42,7 @@ public:
     // own - so if the composition path were broken on a given driver, a normal
     // render would look much the same as a failed one. This makes the two
     // impossible to confuse.
-    bool Create(GraphicsDevice& device, bool diagnostic = false);
+    bool Create(GraphicsDevice& device, bool diagnostic = false, bool autoHide = true);
     void Destroy();
 
     HWND hwnd() const { return hwnd_; }
@@ -49,6 +50,10 @@ public:
     // Marks the window dirty. The dock never renders on a timer - a frame is
     // presented only in response to something that actually changed.
     void RequestRedraw();
+
+    // Slides the dock into view and restarts its dwell timer. Called when the
+    // cursor reaches the screen edge, and safe to call repeatedly.
+    void Reveal();
 
 private:
     static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
@@ -60,6 +65,12 @@ private:
     bool CreateResources();
     void UpdatePlacement();
     void Render();
+
+    // Advances the slide animation. Returns the eased 0..1 position, where 0 is
+    // fully tucked below the screen edge and 1 is fully out.
+    float AdvanceReveal(float deltaSeconds);
+    void StartHideCountdown();
+    void BeginHiding();
 
     GraphicsDevice* device_ = nullptr;
     std::unique_ptr<ShaderCache> shaders_;
@@ -76,6 +87,20 @@ private:
     UINT dpi_ = 96;
     bool diagnostic_ = false;
     bool deviceLost_ = false;
+
+    // Auto-hide. The dock is a window that is mostly not there: it sits tucked
+    // below the screen edge until EdgeTrigger reports the cursor arriving, then
+    // slides out, dwells, and slides back.
+    enum class RevealState { Hidden, Revealing, Shown, Hiding };
+    EdgeTrigger trigger_;
+    RevealState revealState_ = RevealState::Shown;
+    float revealProgress_ = 1.0f; // 0 = tucked away, 1 = fully out
+    bool autoHide_ = true;
+    // True only while a slide is in flight. The animation drives itself by
+    // posting a message after each Present rather than running on a timer, so
+    // it paces at the monitor's refresh rate and stops dead when it settles.
+    bool animating_ = false;
+    LARGE_INTEGER lastFrameTime_{};
     LARGE_INTEGER startTime_{};
     LARGE_INTEGER frequency_{};
 };

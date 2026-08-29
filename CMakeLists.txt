@@ -49,6 +49,7 @@ add_custom_target(liquidock_shaders DEPENDS "${EMBEDDED_SHADERS}")
 add_executable(liquidock WIN32
     src/app/main.cpp
     src/app/DockWindow.cpp
+    src/app/EdgeTrigger.cpp
     src/app/TrayIcon.cpp
     src/core/Log.cpp
     src/gfx/GraphicsDevice.cpp

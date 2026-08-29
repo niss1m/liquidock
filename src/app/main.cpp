@@ -34,7 +34,7 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-int Run(bool diagnostic) {
+int Run(bool diagnostic, bool autoHide) {
     InitLogFile();
     LogInfo("LiquiDock {} starting{}", LIQUIDOCK_VERSION,
             diagnostic ? " (diagnostic render)" : "");
@@ -49,7 +49,7 @@ int Run(bool diagnostic) {
     }
 
     DockWindow dock;
-    if (!dock.Create(device, diagnostic)) {
+    if (!dock.Create(device, diagnostic, autoHide)) {
         MessageBoxW(nullptr, L"LiquiDock could not create its window.", L"LiquiDock",
                     MB_ICONERROR | MB_OK);
         return 1;
@@ -80,6 +80,8 @@ int Run(bool diagnostic) {
 
 int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLine, _In_ int) {
     const bool diagnostic = wcsstr(commandLine, L"--diagnostic") != nullptr;
+    // TODO(M2): a config file setting, with the command line only overriding it.
+    const bool autoHide = wcsstr(commandLine, L"--no-autohide") == nullptr;
 
     liquidock::SingleInstanceGuard guard;
     if (!guard.Acquire()) {
@@ -93,7 +95,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLin
         return 1;
     }
 
-    const int result = liquidock::Run(diagnostic);
+    const int result = liquidock::Run(diagnostic, autoHide);
     CoUninitialize();
     return result;
 }
