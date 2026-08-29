@@ -44,6 +44,12 @@ public:
     // clock waits on this rather than on a timer.
     HANDLE frame_latency_waitable() const { return waitable_; }
 
+    // For callers that draw with Direct2D rather than D3D: D2D wraps the DXGI
+    // surface itself, so it needs the swap chain rather than a render target
+    // view. The buffer identity rotates inside the runtime, so the bitmap made
+    // from buffer 0 stays valid across presents exactly as the cached view does.
+    IDXGISwapChain1* swap_chain() const { return swapChain_.Get(); }
+
 private:
     bool CreateBuffers();
 

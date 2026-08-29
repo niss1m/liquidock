@@ -62,7 +62,7 @@ int Run(bool diagnostic, std::optional<bool> autoHideOverride, bool dumpBackdrop
     }
 
     TrayIcon tray;
-    tray.Create();
+    tray.Create(dock.hwnd(), DockWindow::show_settings_message());
 
     // Watching the settings file rather than polling it. The wait below blocks
     // on the message queue and the directory handle together, so an idle dock

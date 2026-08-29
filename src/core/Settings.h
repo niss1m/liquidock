@@ -71,12 +71,22 @@ struct Settings {
     // succeeds: an unreadable file leaves every default in place.
     void Load();
 
+    // Writes the current values back, rewriting only the value half of each
+    // `key = value` line and leaving every comment, blank line and unknown key
+    // exactly where it was. A settings file the user has annotated must survive
+    // being edited from the preferences window.
+    bool Save() const;
+
     // The file's path, for the tray menu's "Preferences" command.
     static std::wstring FilePath();
 
     // True when the file changed on disk since the last call. Used to reload
     // while the dock is running so the glass can be tuned by saving the file.
     static bool PollForChanges();
+
+    // Formats one setting the way the file spells it. Public so the writer and
+    // any future exporter agree on the representation.
+    std::wstring ValueFor(const std::wstring& key) const;
 
 private:
     bool ReadFile(const std::wstring& path);

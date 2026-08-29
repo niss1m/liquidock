@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <filesystem>
+#include <vector>
 
 #include "core/ConfigPaths.h"
 #include "core/DesignTokens.h"
@@ -187,6 +188,114 @@ bool Settings::ReadFile(const std::wstring& path) {
         }
     }
 
+    fclose(file);
+    return true;
+}
+
+std::wstring Settings::ValueFor(const std::wstring& key) const {
+    wchar_t buffer[64];
+    auto number = [&buffer](const wchar_t* format, double value) {
+        swprintf_s(buffer, format, value);
+        return std::wstring(buffer);
+    };
+
+    if (key == L"refraction") return number(L"%.2f", refraction);
+    if (key == L"depth") return number(L"%.2f", depth);
+    if (key == L"dispersion") return number(L"%.2f", dispersion);
+    if (key == L"frost") return number(L"%.2f", frost);
+    if (key == L"splay") return number(L"%.2f", splay);
+    if (key == L"light-angle") return number(L"%.0f", lightAngleDegrees);
+    if (key == L"light-intensity") return number(L"%.2f", lightIntensity);
+    if (key == L"tint-alpha") return number(L"%.2f", tintAlpha);
+    if (key == L"backdrop") return backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper";
+    if (key == L"magnification") return magnification ? L"on" : L"off";
+    if (key == L"max-scale") return number(L"%.2f", maxScale);
+    if (key == L"influence") return number(L"%.0f", influencePx);
+    if (key == L"icon-bulge") return iconBulge ? L"on" : L"off";
+    if (key == L"monitor") {
+        if (monitorIndex <= 0) {
+            return L"primary";
+        }
+        swprintf_s(buffer, L"%d", monitorIndex);
+        return std::wstring(buffer);
+    }
+    if (key == L"reserve-space") return reserveSpace ? L"on" : L"off";
+    if (key == L"auto-hide") return autoHide ? L"on" : L"off";
+    if (key == L"dwell-seconds") return number(L"%.1f", dwellSeconds);
+    if (key == L"slide-seconds") return number(L"%.2f", slideSeconds);
+    return {};
+}
+
+bool Settings::Save() const {
+    const std::wstring path = FilePath();
+    if (path.empty()) {
+        return false;
+    }
+    // Nothing to rewrite yet: write the annotated default file instead, which
+    // already contains every current value.
+    if (!std::filesystem::exists(path)) {
+        return WriteDefaults(path);
+    }
+
+    std::vector<std::wstring> lines;
+    {
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, path.c_str(), L"rt, ccs=UTF-8") != 0 || !file) {
+            return false;
+        }
+        wchar_t line[1024];
+        while (fgetws(line, static_cast<int>(std::size(line)), file)) {
+            std::wstring text(line);
+            while (!text.empty() && (text.back() == L'\n' || text.back() == L'\r')) {
+                text.pop_back();
+            }
+            lines.push_back(std::move(text));
+        }
+        fclose(file);
+    }
+
+    // Rewrite in place, so the user's own comments and ordering survive.
+    std::vector<std::wstring> written;
+    for (std::wstring& text : lines) {
+        const std::wstring trimmed = Trim(text);
+        if (trimmed.empty() || trimmed[0] == L'#') {
+            continue;
+        }
+        const size_t equals = trimmed.find(L'=');
+        if (equals == std::wstring::npos) {
+            continue;
+        }
+        const std::wstring key = Trim(trimmed.substr(0, equals));
+        const std::wstring value = ValueFor(key);
+        if (value.empty()) {
+            continue; // a key this build does not know; leave it untouched
+        }
+        text = key + L" = " + value;
+        written.push_back(key);
+    }
+
+    // A key the file predates - it was written by an older build - is appended
+    // rather than lost, so upgrading never silently drops a setting.
+    static const wchar_t* const kAllKeys[] = {
+        L"refraction", L"depth",        L"dispersion",    L"frost",         L"splay",
+        L"light-angle", L"light-intensity", L"tint-alpha", L"backdrop",     L"magnification",
+        L"max-scale",  L"influence",    L"icon-bulge",    L"monitor",       L"reserve-space",
+        L"auto-hide",  L"dwell-seconds", L"slide-seconds",
+    };
+    for (const wchar_t* key : kAllKeys) {
+        if (std::find(written.begin(), written.end(), key) == written.end()) {
+            lines.push_back(std::wstring(key) + L" = " + ValueFor(key));
+        }
+    }
+
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path.c_str(), L"wt, ccs=UTF-8") != 0 || !file) {
+        LogWarn("Could not write the settings file");
+        return false;
+    }
+    for (const std::wstring& text : lines) {
+        fwprintf(file, L"%s\n", text.c_str());
+    }
     fclose(file);
     return true;
 }

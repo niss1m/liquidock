@@ -51,6 +51,8 @@ constexpr UINT kCaptureMessage = WM_APP + 3;
 constexpr UINT kRunningMessage = WM_APP + 4;
 // The shell's appbar notifications - another appbar appeared, the taskbar moved.
 constexpr UINT kAppBarMessage = WM_APP + 5;
+// Posted by the tray when Preferences is chosen.
+constexpr UINT kShowSettingsMessage = WM_APP + 7;
 // --simulate-device-loss, posted once at startup.
 constexpr UINT kSimulateDeviceLossMessage = WM_APP + 6;
 constexpr UINT_PTR kSimulateLossTimer = 6;
@@ -227,12 +229,18 @@ void DockWindow::StartHideCountdown() {
     if (!autoHide_ || !hwnd_) {
         return;
     }
+    if (settingsWindow_ && settingsWindow_->visible()) {
+        return; // the dock stays put while its own preferences are open
+    }
     revealState_ = (revealProgress_ >= 1.0f) ? RevealState::Shown : revealState_;
     SetTimer(hwnd_, kHideTimer, static_cast<UINT>(settings_.dwellSeconds * 1000.0f), nullptr);
 }
 
 void DockWindow::BeginHiding() {
     if (!autoHide_ || menuOpen_ || revealState_ == RevealState::Hidden) {
+        return;
+    }
+    if (settingsWindow_ && settingsWindow_->visible()) {
         return;
     }
     revealState_ = RevealState::Hiding;
@@ -356,6 +364,7 @@ void DockWindow::Destroy() {
     iconLoader_.Stop();
     capture_.reset();
     running_.Shutdown();
+    settingsWindow_.reset();
     // Before anything else: an appbar registration that outlives its window
     // leaves the work area permanently short with nothing on screen to explain
     // why, until the user logs out.
@@ -434,6 +443,10 @@ void DockWindow::ApplySettings() {
     }
 }
 
+UINT DockWindow::show_settings_message() {
+    return kShowSettingsMessage;
+}
+
 void DockWindow::ReloadSettings() {
     if (!hwnd_) {
         return;
@@ -476,6 +489,10 @@ void DockWindow::ReloadSettings() {
 }
 
 void DockWindow::ReleaseDeviceResources() {
+    // The preferences window draws with the same device, so it goes first and
+    // is simply rebuilt the next time it is asked for.
+    settingsWindow_.reset();
+
     // The capture thread holds the device context, so it has to be stopped
     // before anything is released rather than merely told to stop.
     capture_.reset();
@@ -1274,6 +1291,30 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             LogInfo("Simulating a lost graphics device");
             HandleDeviceLost();
             return 0;
+
+        case kShowSettingsMessage: {
+            if (deviceLost_) {
+                return 0; // nothing to draw it with
+            }
+            if (!settingsWindow_) {
+                settingsWindow_ = std::make_unique<SettingsWindow>();
+                if (!settingsWindow_->Create(*device_, settings_, [this](const Settings& next) {
+                        // Applied before the file is even written, so dragging a
+                        // slider changes the dock under the cursor.
+                        settings_ = next;
+                        ApplySettings();
+                        UpdatePlacement();
+                        RequestRedraw();
+                    })) {
+                    settingsWindow_.reset();
+                    return 0;
+                }
+            }
+            settingsWindow_->Show(TargetMonitor());
+            // The dock must not slide away while its own preferences are open.
+            KillTimer(hwnd_, kHideTimer);
+            return 0;
+        }
 
         case kAppBarMessage:
             // ABN_POSCHANGED: the taskbar moved or another appbar appeared, so

@@ -69,6 +69,7 @@ add_executable(liquidock WIN32
     src/model/IconLoader.cpp
     src/model/ItemStore.cpp
     src/model/RunningState.cpp
+    src/ui/SettingsWindow.cpp
     "${EMBEDDED_SHADERS}"
     # CMake collects .manifest sources and feeds them to mt.exe through
     # `cmake -E vs_link_exe --manifests`. Passing /MANIFEST:EMBED and

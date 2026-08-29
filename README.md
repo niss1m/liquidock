@@ -22,7 +22,10 @@ specular edge driven by a light angle you control.
   presented, no GPU work, no wakeups. Screen capture waits on the desktop's own change
   notifications and ignores changes that miss the dock; running indicators wait on a window event
   hook; the settings file is watched on a waitable handle, not polled.
-- **Preferences that were designed**, not accumulated over fifteen years of checkboxes.
+- **Preferences that were designed**, not accumulated over fifteen years of checkboxes. Every
+  setting says what it is *for* underneath its name, and every change applies to the running dock
+  as you make it - there is no OK button, because the only way to judge a value like `frost` is to
+  see it.
 
 ## Status
 
@@ -34,7 +37,7 @@ Early. See the milestones below for where things stand.
 | M1 | The liquid glass shader and backdrop pipeline | done |
 | M2 | Item model, icons, layout, launching, magnification | done |
 | M3 | Multi-monitor, appbar, running indicators, live-capture backdrop | done |
-| M4 | Settings UI | |
+| M4 | Settings UI | done |
 | M5 | Portable / Microsoft Store / Steam packaging | |
 
 ## The items file
@@ -56,10 +59,13 @@ preferences UI lands in M4.
 
 ## Settings
 
-`%LOCALAPPDATA%\LiquiDock\settings.txt`, `key = value`, written with a comment on every setting the
-first time the dock runs. Reachable from *Preferences…* in the tray menu. The dock watches the file,
-so saving it takes effect immediately — which is the point, because half of these are judgement
-calls about how something looks and the only way to settle one is to see it.
+*Preferences…* in the tray menu opens a custom-drawn panel with every setting on it. Changes apply
+to the running dock immediately and are written back to the settings file.
+
+That file — `%LOCALAPPDATA%\LiquiDock\settings.txt`, `key = value`, with a comment on every
+setting — stays a first-class way in, and *Edit settings file…* opens it. The dock watches it, so
+saving takes effect without a restart, and the preferences panel rewrites only the value half of
+each line, so comments you add survive being edited from the UI.
 
 Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
 `light-intensity`, `tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`,

@@ -17,7 +17,10 @@ public:
     TrayIcon& operator=(const TrayIcon&) = delete;
     ~TrayIcon();
 
-    bool Create();
+    // `owner` is posted `showSettings` when Preferences is chosen. The tray
+    // does not own the preferences window; the dock does, because the dock owns
+    // the graphics device it draws with.
+    bool Create(HWND owner = nullptr, UINT showSettings = 0);
     void Destroy();
 
 private:
@@ -28,6 +31,8 @@ private:
     void ShowMenu();
 
     HWND hwnd_ = nullptr;
+    HWND owner_ = nullptr;
+    UINT showSettings_ = 0;
     UINT taskbarCreatedMessage_ = 0;
     bool iconAdded_ = false;
 };

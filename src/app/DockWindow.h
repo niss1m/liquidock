@@ -21,6 +21,7 @@
 #include "model/IconLoader.h"
 #include "model/ItemStore.h"
 #include "model/RunningState.h"
+#include "ui/SettingsWindow.h"
 
 namespace liquidock {
 
@@ -87,6 +88,9 @@ public:
     // Re-reads settings.txt and applies it. Called from the message loop when
     // the config directory watch reports the file was saved.
     void ReloadSettings();
+
+    // The private message the tray posts to open the preferences window.
+    static UINT show_settings_message();
 
 private:
     static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
@@ -176,6 +180,7 @@ private:
     IconLoader iconLoader_;
     IconAtlas atlas_;
     RunningState running_;
+    std::unique_ptr<SettingsWindow> settingsWindow_;
     std::vector<IconBitmap> loadedIcons_;
     int atlasCell_ = 0;
     int pressedItem_ = -1;

@@ -16,7 +16,8 @@ constexpr UINT kTrayIconId = 1;
 
 enum MenuCommand : UINT {
     kCommandSettings = 100,
-    kCommandExit = 101,
+    kCommandEditFile = 101,
+    kCommandExit = 102,
 };
 
 } // namespace
@@ -25,7 +26,10 @@ TrayIcon::~TrayIcon() {
     Destroy();
 }
 
-bool TrayIcon::Create() {
+bool TrayIcon::Create(HWND owner, UINT showSettings) {
+    owner_ = owner;
+    showSettings_ = showSettings;
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = &TrayIcon::WndProcThunk;
@@ -103,6 +107,7 @@ void TrayIcon::ShowMenu() {
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"LiquiDock " LIQUIDOCK_VERSION_W);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCommandSettings, L"Preferences…");
+    AppendMenuW(menu, MF_STRING, kCommandEditFile, L"Edit settings file…");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCommandExit, L"Quit LiquiDock");
 
@@ -122,9 +127,13 @@ void TrayIcon::ShowMenu() {
     if (command == kCommandExit) {
         PostQuitMessage(0);
     } else if (command == kCommandSettings) {
-        // Until the preferences UI lands in M4, the settings file is the
-        // preferences UI. The dock watches it, so saving takes effect without
-        // a restart and this is a complete answer rather than a placeholder.
+        if (owner_ && showSettings_) {
+            PostMessageW(owner_, showSettings_, 0, 0);
+        }
+    } else if (command == kCommandEditFile) {
+        // The file stays a first-class way in. Everything the window can do it
+        // can do too, it is what the window writes, and some settings are
+        // simply faster to type than to drag.
         const std::wstring path = Settings::FilePath();
         if (!path.empty()) {
             ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
