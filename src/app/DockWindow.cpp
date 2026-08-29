@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "core/Check.h"
+#include "core/DesignTokens.h"
 #include "core/Log.h"
 
 namespace liquidock {
@@ -13,16 +14,17 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"LiquiDock.Dock";
 constexpr UINT_PTR kShaderWatchTimer = 1;
 
-// Provisional geometry, in logical pixels at 96 DPI. M2 derives all of this
-// from the item list and the configured icon size; the numbers here exist only
-// to put something on screen that is the right shape.
-constexpr float kDockWidth = 720.0f;
-constexpr float kDockHeight = 92.0f;
-constexpr float kCornerRadius = 26.0f;
-constexpr float kBottomMargin = 16.0f;
+// M0 has no item list yet, so the bar is sized as the design's own dock: ten
+// main icons, a separator, two utility icons. That makes an M0 screenshot
+// directly comparable against Figma frame 3:5 instead of merely dock-shaped.
+// M2 replaces this with the real item count.
+constexpr float kDockWidth = design::BarWidth(10, 2);
+constexpr float kDockHeight = design::kBarHeight;
+constexpr float kCornerRadius = design::kCornerRadius;
+constexpr float kBottomMargin = design::kScreenMargin;
 
 // The window is grown past the glass on every side so the rim highlight, and
-// later the drop shadow and the icons that overshoot the dock while magnified,
+// later the drop shadow and the icons that overshoot the bar while magnified,
 // have somewhere to land.
 constexpr float kBleed = 40.0f;
 
@@ -36,8 +38,9 @@ DockWindow::~DockWindow() {
     Destroy();
 }
 
-bool DockWindow::Create(GraphicsDevice& device) {
+bool DockWindow::Create(GraphicsDevice& device, bool diagnostic) {
     device_ = &device;
+    diagnostic_ = diagnostic;
     shaders_ = std::make_unique<ShaderCache>(device.d3d());
 
     QueryPerformanceFrequency(&frequency_);
@@ -176,21 +179,23 @@ void DockWindow::Render() {
     constants.shape[2] = kCornerRadius * scale;
     constants.shape[3] = elapsed;
 
-    // Defaults lifted straight from the Figma glass panel: light -45 degrees at
-    // 80%, refraction 80, depth 20, dispersion 50, frost 4, splay 100.
-    constants.light[0] = Radians(-45.0f);
-    constants.light[1] = 0.80f;
-    constants.light[2] = 0.80f; // refraction, consumed in M1
-    constants.light[3] = 0.20f; // depth
-    constants.material[0] = 0.50f; // dispersion, consumed in M1
-    constants.material[1] = 0.04f; // frost, consumed in M1
-    constants.material[2] = 1.00f; // splay
+    constants.light[0] = Radians(design::glass::kLightAngleDegrees);
+    constants.light[1] = design::glass::kLightIntensity;
+    constants.light[2] = design::glass::kRefraction;  // consumed in M1
+    constants.light[3] = design::glass::kDepth;
+    constants.material[0] = design::glass::kDispersion; // consumed in M1
+    constants.material[1] = design::glass::kFrost;      // consumed in M1
+    constants.material[2] = design::glass::kSplay;
     constants.material[3] = 0.0f;
 
-    constants.tint[0] = 0.10f;
-    constants.tint[1] = 0.11f;
-    constants.tint[2] = 0.13f;
-    constants.tint[3] = 0.55f;
+    if (diagnostic_) {
+        constants.tint[0] = 1.0f;
+        constants.tint[1] = 0.0f;
+        constants.tint[2] = 1.0f;
+        constants.tint[3] = 1.0f;
+    } else {
+        memcpy(constants.tint, design::kBarTint, sizeof(constants.tint));
+    }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(ctx->Map(constantBuffer_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {

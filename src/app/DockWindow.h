@@ -32,7 +32,12 @@ public:
     DockWindow& operator=(const DockWindow&) = delete;
     ~DockWindow();
 
-    bool Create(GraphicsDevice& device);
+    // `diagnostic` renders the bar in flat opaque magenta instead of glass. The
+    // design fill is 5% white, which is correct but nearly invisible on its
+    // own - so if the composition path were broken on a given driver, a normal
+    // render would look much the same as a failed one. This makes the two
+    // impossible to confuse.
+    bool Create(GraphicsDevice& device, bool diagnostic = false);
     void Destroy();
 
     HWND hwnd() const { return hwnd_; }
@@ -56,6 +61,7 @@ private:
     HWND hwnd_ = nullptr;
     ComPtr<ID3D11Buffer> constantBuffer_;
     UINT dpi_ = 96;
+    bool diagnostic_ = false;
     LARGE_INTEGER startTime_{};
     LARGE_INTEGER frequency_{};
 };

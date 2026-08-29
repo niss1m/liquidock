@@ -1,6 +1,8 @@
 #include <windows.h>
 #include <objbase.h>
 
+#include <cwchar>
+
 #include "app/DockWindow.h"
 #include "app/TrayIcon.h"
 #include "core/Log.h"
@@ -32,9 +34,10 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-int Run() {
+int Run(bool diagnostic) {
     InitLogFile();
-    LogInfo("LiquiDock {} starting", LIQUIDOCK_VERSION);
+    LogInfo("LiquiDock {} starting{}", LIQUIDOCK_VERSION,
+            diagnostic ? " (diagnostic render)" : "");
 
     GraphicsDevice device;
     if (!device.Initialize()) {
@@ -46,7 +49,7 @@ int Run() {
     }
 
     DockWindow dock;
-    if (!dock.Create(device)) {
+    if (!dock.Create(device, diagnostic)) {
         MessageBoxW(nullptr, L"LiquiDock could not create its window.", L"LiquiDock",
                     MB_ICONERROR | MB_OK);
         return 1;
@@ -75,7 +78,9 @@ int Run() {
 } // namespace
 } // namespace liquidock
 
-int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
+int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR commandLine, _In_ int) {
+    const bool diagnostic = wcsstr(commandLine, L"--diagnostic") != nullptr;
+
     liquidock::SingleInstanceGuard guard;
     if (!guard.Acquire()) {
         return 0; // Already running; the existing instance owns the screen edge.
@@ -88,7 +93,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         return 1;
     }
 
-    const int result = liquidock::Run();
+    const int result = liquidock::Run(diagnostic);
     CoUninitialize();
     return result;
 }
