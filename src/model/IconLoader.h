@@ -9,6 +9,8 @@
 #include <thread>
 #include <vector>
 
+#include "model/DockItem.h"
+
 namespace liquidock {
 
 // One extracted icon, as premultiplied BGRA at `size` x `size`.
@@ -45,7 +47,7 @@ public:
     // Starts extracting `paths` at `size` pixels square. `notify` is posted
     // WM_APP-style each time results are ready to collect. Cancels and replaces
     // any load already in flight.
-    void Start(const std::vector<std::wstring>& paths, int size, HWND notify, UINT message);
+    void Start(std::vector<DockItem> items, int size, HWND notify, UINT message);
 
     // Signals the worker to stop and waits for it. Safe to call twice.
     void Stop();
@@ -54,7 +56,7 @@ public:
     void Collect(std::vector<IconBitmap>& out);
 
 private:
-    void Run(std::vector<std::wstring> paths, int size, HWND notify, UINT message);
+    void Run(std::vector<DockItem> items, int size, HWND notify, UINT message);
 
     std::thread worker_;
     std::mutex mutex_;

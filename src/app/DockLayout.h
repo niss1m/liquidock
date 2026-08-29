@@ -54,6 +54,12 @@ public:
     // Window width in logical pixels, used to centre the resting bar.
     void SetWindowWidth(float logicalWidth) { windowWidth_ = logicalWidth; }
 
+    // Shrinks the row until it fits `availableLogical`, and returns the factor
+    // applied. A dock of forty-odd items is wider than a screen at full size,
+    // and a dock running off both edges is worse than a slightly smaller one.
+    float FitWithin(float availableLogical);
+    float item_scale() const { return itemScale_; }
+
     // The magnification the user asked for. `bulge` is what makes the glass
     // swell around a raised icon; with it off the bar keeps the plain rounded
     // silhouette the design specifies, and icons simply rise out of it.
@@ -121,6 +127,8 @@ private:
     float maxScale_ = 1.0f;
     float influencePx_ = 1.0f;
     bool bulge_ = false;
+    // 1 until the row would not fit the screen.
+    float itemScale_ = 1.0f;
     float barCenterX_ = 0.0f;
     float barHalfWidth_ = 0.0f;
 };

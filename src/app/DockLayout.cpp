@@ -133,7 +133,23 @@ float DockLayout::ContentWidth() const {
     for (const Element& element : elements_) {
         total += element.gapBefore + element.baseWidth * element.scale;
     }
-    return total;
+    return total * itemScale_;
+}
+
+float DockLayout::FitWithin(float availableLogical) {
+    itemScale_ = 1.0f;
+    if (availableLogical <= 0.0f || elements_.empty()) {
+        return itemScale_;
+    }
+    // MaxBarWidth scales linearly with the factor - every width and gap in it
+    // does - so the ratio is exact and one division settles it.
+    const float needed = MaxBarWidth();
+    if (needed > availableLogical) {
+        // Floored: past about a third the icons stop being recognisable, and a
+        // dock that has to be that small is telling the user something.
+        itemScale_ = std::max(0.35f, availableLogical / needed);
+    }
+    return itemScale_;
 }
 
 float DockLayout::TargetScale(const Element& element, float baseCenterX) const {
@@ -148,7 +164,7 @@ float DockLayout::RestingBarWidth() const {
     for (const Element& element : elements_) {
         total += element.gapBefore + element.baseWidth;
     }
-    return total + 2.0f * kPaddingX;
+    return (total + 2.0f * kPaddingX) * itemScale_;
 }
 
 float DockLayout::MaxBarWidth() const {
@@ -171,18 +187,22 @@ float DockLayout::MaxBarWidth() const {
     // Closed form would need the wave's shape and the icon pitch to interact in
     // a way that changes whenever either is tuned. A sweep is exact for
     // whatever the numbers happen to be, and it runs once per layout change.
+    // The sweep runs in screen space, because the wave's reach is quoted there:
+    // shrinking the icons must not also shrink how far the swell carries.
     float widest = restingContent;
-    for (float cursor = -influencePx_; cursor <= restingContent + influencePx_; cursor += 2.0f) {
+    for (float cursor = -influencePx_; cursor <= restingContent * itemScale_ + influencePx_;
+         cursor += 2.0f) {
         float total = 0.0f;
         for (size_t i = 0; i < elements_.size(); ++i) {
-            const float scale = (elements_[i].itemIndex < 0)
-                                    ? 1.0f
-                                    : WaveScale(std::fabs(cursor - centers[i]));
+            const float scale =
+                (elements_[i].itemIndex < 0)
+                    ? 1.0f
+                    : WaveScale(std::fabs(cursor - centers[i] * itemScale_));
             total += elements_[i].gapBefore + elements_[i].baseWidth * scale;
         }
         widest = std::max(widest, total);
     }
-    return widest + 2.0f * kPaddingX;
+    return (widest + 2.0f * kPaddingX) * itemScale_;
 }
 
 bool DockLayout::Advance(float deltaSeconds) {
@@ -203,9 +223,9 @@ bool DockLayout::Advance(float deltaSeconds) {
     {
         float x = restLeft;
         for (const Element& element : elements_) {
-            x += element.gapBefore;
-            restCenters.push_back(x + element.baseWidth * 0.5f);
-            x += element.baseWidth;
+            x += element.gapBefore * itemScale_;
+            restCenters.push_back(x + element.baseWidth * 0.5f * itemScale_);
+            x += element.baseWidth * itemScale_;
         }
     }
 
@@ -278,8 +298,8 @@ void DockLayout::Place() {
 
     float x = left;
     for (const Element& element : elements_) {
-        x += element.gapBefore;
-        const float width = element.baseWidth * element.scale;
+        x += element.gapBefore * itemScale_;
+        const float width = element.baseWidth * element.scale * itemScale_;
         const float centerX = x + width * 0.5f;
         x += width;
 
@@ -296,7 +316,7 @@ void DockLayout::Place() {
 
         // Icons keep their bottom edge on the icon row and grow upward, so a
         // magnified icon rises out of the bar rather than swelling through it.
-        const float iconSize = kIconSize * element.scale;
+        const float iconSize = kIconSize * element.scale * itemScale_;
         const float lift = BounceOffset(element.bounceTime);
 
         PlacedIcon icon;
@@ -317,7 +337,7 @@ void DockLayout::Place() {
             GlassLens lens;
             lens.centerX = centerX;
             lens.centerY = (top + barBottom) * 0.5f;
-            lens.halfWidth = iconSize * 0.5f + kIconGap;
+            lens.halfWidth = iconSize * 0.5f + kIconGap * itemScale_;
             lens.halfHeight = (barBottom - top) * 0.5f;
             lens.radius = std::min(lens.halfWidth, lens.halfHeight);
             lenses_.push_back(lens);
@@ -357,7 +377,7 @@ int DockLayout::ItemAt(float x, float y) const {
         // The hit slab is the icon's column, from the top of whichever is
         // higher - the icon or the bar - down to the bar's bottom edge. Clicking
         // the padding under an icon activates it, the way the macOS dock does.
-        const float half = icon.size * 0.5f + kIconGap * 0.5f;
+        const float half = icon.size * 0.5f + kIconGap * itemScale_ * 0.5f;
         const float top = std::min(barTop, icon.centerY - icon.size * 0.5f);
         if (y < top || y > barBottom) {
             continue;

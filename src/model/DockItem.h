@@ -18,7 +18,23 @@ enum class ItemGroup { Main, Utility };
 // same one-line-per-item config file.
 struct DockItem {
     std::wstring path;
-    std::wstring label; // shown in tooltips and the context menu
+    std::wstring label; // shown in the hover label and the context menu
+
+    // Passed to the target when it is launched. A dock entry is a *command*,
+    // not just a file: "Chrome with this profile" and "this script with that
+    // argument" are the entries people actually want and cannot express by
+    // pointing at an executable alone.
+    std::wstring arguments;
+    // The directory the target starts in. Plenty of programs - Blender and the
+    // Adobe suite among them - fail in odd ways when started from elsewhere.
+    std::wstring workingDirectory;
+
+    // An image file to use instead of the icon the shell would give. Any format
+    // WIC can decode, which in practice is png, jpeg, bmp, tiff, gif and ico.
+    // Empty means "ask the shell", which is right for most things and wrong for
+    // exactly the case people care about most: a themed icon set.
+    std::wstring iconPath;
+
     ItemGroup group = ItemGroup::Main;
 
     // Index of this item's cell in the icon atlas, or -1 while its icon is

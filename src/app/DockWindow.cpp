@@ -445,13 +445,13 @@ void DockWindow::RequestRedraw() {
 }
 
 void DockWindow::StartIconLoad() {
-    std::vector<std::wstring> paths;
-    paths.reserve(store_.items().size());
+    std::vector<DockItem> snapshot;
+    snapshot.reserve(store_.items().size());
     for (DockItem& item : store_.items()) {
         item.atlasSlot = -1;
-        paths.push_back(item.path);
+        snapshot.push_back(item);
     }
-    iconLoader_.Start(paths, atlasCell_, hwnd_, kIconMessage);
+    iconLoader_.Start(std::move(snapshot), atlasCell_, hwnd_, kIconMessage);
 }
 
 void DockWindow::DrainLoadedIcons() {
@@ -693,6 +693,8 @@ void DockWindow::Launch(int itemIndex) {
     }
     const DockItem& item = store_.items()[static_cast<size_t>(itemIndex)];
     const std::wstring path = ItemStore::ExpandPath(item.path);
+    const std::wstring arguments = ItemStore::ExpandPath(item.arguments);
+    const std::wstring directory = ItemStore::ExpandPath(item.workingDirectory);
     LogInfo("Launching item {}", itemIndex);
 
     layout_.Bounce(itemIndex);
@@ -703,7 +705,7 @@ void DockWindow::Launch(int itemIndex) {
     // extension, resolve a stale shortcut, or wait on a slow network path - and
     // blocking here would freeze the magnification mid-wave. The thread is
     // detached because it touches nothing of ours and needs no result.
-    std::thread([path] {
+    std::thread([path, arguments, directory] {
         if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
             return;
         }
@@ -716,6 +718,10 @@ void DockWindow::Launch(int itemIndex) {
         info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
         info.lpVerb = L"open";
         info.lpFile = path.c_str();
+        // Null rather than an empty string: ShellExecuteEx treats "" as a real
+        // (empty) argument for some verbs, and as a working directory of "".
+        info.lpParameters = arguments.empty() ? nullptr : arguments.c_str();
+        info.lpDirectory = directory.empty() ? nullptr : directory.c_str();
         info.nShow = SW_SHOWNORMAL;
         if (!ShellExecuteExW(&info)) {
             LogWarn("Could not launch a dock item: {}", GetLastError());
@@ -827,6 +833,20 @@ void DockWindow::UpdatePlacement() {
         dpi_ = dpiX;
     }
     const float scale = static_cast<float>(dpi_) / 96.0f;
+
+    // How much room there is, before deciding how much is wanted. A dock of
+    // forty-odd items is wider than a screen at full icon size, and one running
+    // off both edges is worse than one drawn slightly smaller.
+    MONITORINFO fit{sizeof(fit)};
+    if (GetMonitorInfoW(monitor, &fit)) {
+        const float availableLogical =
+            static_cast<float>(fit.rcWork.right - fit.rcWork.left) / scale - 2.0f * kBleed;
+        const float applied = layout_.FitWithin(availableLogical);
+        if (applied < 1.0f) {
+            LogInfo("Dock scaled to {:.0f}% to fit {} items on screen", applied * 100.0f,
+                    store_.items().size());
+        }
+    }
 
     // The window has to be wide enough for the dock at its widest, which is the
     // magnification wave sitting wherever produces the largest total. Sizing it

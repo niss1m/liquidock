@@ -20,17 +20,22 @@ using Microsoft::WRL::ComPtr;
 constexpr wchar_t kFileName[] = L"items.txt";
 
 const wchar_t kFileHeader[] =
-    L"# LiquiDock items. One per line:\n"
+    L"# LiquiDock items.\n"
     L"#\n"
-    L"#     group | path | label\n"
+    L"# One block per entry:\n"
     L"#\n"
-    L"# group is `main` or `utility` - utility items sit to the right of the\n"
-    L"# hairline. label is optional and defaults to the file's own name. path is\n"
-    L"# anything the shell can open: a program, a shortcut, a folder, a\n"
-    L"# `shell:AppsFolder\\...` moniker, or a `::{guid}` parsing name.\n"
+    L"#     [item]\n"
+    L"#     group   = main | utility     utility items sit right of the hairline\n"
+    L"#     path    = what to launch     a program, shortcut, folder, document, a\n"
+    L"#                                  shell:AppsFolder\\... moniker for a Store app,\n"
+    L"#                                  or a ::{guid} parsing name\n"
+    L"#     label   = what to call it    optional; defaults to the file name\n"
+    L"#     args    = arguments          optional\n"
+    L"#     workdir = starting folder    optional\n"
+    L"#     icon    = an image file      optional; png, jpg, bmp, ico, gif, tiff\n"
     L"#\n"
     L"# Environment variables are expanded. Blank lines and # lines are ignored.\n"
-    L"# LiquiDock rereads this file when it starts.\n"
+    L"# The old `group | path | label` one-liners are still read.\n"
     L"\n";
 
 std::wstring Trim(std::wstring_view text) {
@@ -135,6 +140,24 @@ bool ItemStore::ReadFile(const std::wstring& path) {
         return false;
     }
 
+    DockItem current;
+    bool building = false;
+    auto flush = [this, &current, &building]() {
+        if (!building || current.path.empty()) {
+            building = false;
+            current = DockItem{};
+            return;
+        }
+        if (current.label.empty()) {
+            current.label = LabelFromPath(current.path);
+        }
+        if (static_cast<int>(items_.size()) < design::kMaxItems) {
+            items_.push_back(std::move(current));
+        }
+        current = DockItem{};
+        building = false;
+    };
+
     wchar_t line[2048];
     while (fgetws(line, static_cast<int>(std::size(line)), file)) {
         const std::wstring text = Trim(line);
@@ -142,41 +165,70 @@ bool ItemStore::ReadFile(const std::wstring& path) {
             continue;
         }
 
-        // group | path | label, with the label optional. Splitting on the first
-        // two separators only means a label containing a pipe still survives.
-        const size_t first = text.find(L'|');
-        if (first == std::wstring::npos) {
-            LogWarn("Skipping a malformed item line (no separator)");
+        if (_wcsicmp(text.c_str(), L"[item]") == 0) {
+            flush();
+            building = true;
             continue;
         }
-        const size_t second = text.find(L'|', first + 1);
 
-        DockItem item;
-        const std::wstring group = Trim(text.substr(0, first));
-        item.group =
-            (_wcsicmp(group.c_str(), L"utility") == 0) ? ItemGroup::Utility : ItemGroup::Main;
-        if (second == std::wstring::npos) {
-            item.path = Trim(text.substr(first + 1));
+        // The old one-line form, kept because a file someone already has must
+        // not stop working when the format grows.
+        if (!building && text.find(L'|') != std::wstring::npos) {
+            const size_t first = text.find(L'|');
+            const size_t second = text.find(L'|', first + 1);
+            DockItem item;
+            item.group = (_wcsicmp(Trim(text.substr(0, first)).c_str(), L"utility") == 0)
+                             ? ItemGroup::Utility
+                             : ItemGroup::Main;
+            if (second == std::wstring::npos) {
+                item.path = Trim(text.substr(first + 1));
+            } else {
+                item.path = Trim(text.substr(first + 1, second - first - 1));
+                item.label = Trim(text.substr(second + 1));
+            }
+            if (!item.path.empty()) {
+                if (item.label.empty()) {
+                    item.label = LabelFromPath(item.path);
+                }
+                if (static_cast<int>(items_.size()) < design::kMaxItems) {
+                    items_.push_back(std::move(item));
+                }
+            }
+            continue;
+        }
+
+        const size_t equals = text.find(L'=');
+        if (equals == std::wstring::npos || !building) {
+            continue;
+        }
+        const std::wstring key = Trim(text.substr(0, equals));
+        const std::wstring value = Trim(text.substr(equals + 1));
+
+        if (key == L"group") {
+            current.group = (_wcsicmp(value.c_str(), L"utility") == 0) ? ItemGroup::Utility
+                                                                       : ItemGroup::Main;
+        } else if (key == L"path") {
+            current.path = value;
+        } else if (key == L"label") {
+            current.label = value;
+        } else if (key == L"args") {
+            current.arguments = value;
+        } else if (key == L"workdir") {
+            current.workingDirectory = value;
+        } else if (key == L"icon") {
+            current.iconPath = value;
         } else {
-            item.path = Trim(text.substr(first + 1, second - first - 1));
-            item.label = Trim(text.substr(second + 1));
+            LogWarn("Unknown key in items.txt; ignoring it");
         }
-
-        if (item.path.empty()) {
-            continue;
-        }
-        if (item.label.empty()) {
-            item.label = LabelFromPath(item.path);
-        }
-        if (static_cast<int>(items_.size()) >= design::kMaxItems) {
-            LogWarn("Dock item limit ({}) reached; ignoring the rest of the file",
-                    design::kMaxItems);
-            break;
-        }
-        items_.push_back(std::move(item));
     }
+    flush();
 
     fclose(file);
+
+    if (static_cast<int>(items_.size()) >= design::kMaxItems) {
+        LogWarn("Dock item limit ({}) reached; the rest of the file was ignored",
+                design::kMaxItems);
+    }
 
     // Utility items always sit to the right of the hairline, whatever order the
     // file lists them in. Stable, so the file's order survives within a group.
@@ -202,9 +254,23 @@ bool ItemStore::Save() const {
     // carriage returns.
     fputws(kFileHeader, file);
     for (const DockItem& item : items_) {
-        fwprintf(file, L"%s | %s | %s\n",
-                 item.group == ItemGroup::Utility ? L"utility" : L"main", item.path.c_str(),
-                 item.label.c_str());
+        fwprintf(file, L"[item]\n");
+        fwprintf(file, L"group   = %s\n",
+                 item.group == ItemGroup::Utility ? L"utility" : L"main");
+        fwprintf(file, L"path    = %s\n", item.path.c_str());
+        fwprintf(file, L"label   = %s\n", item.label.c_str());
+        // Only written when set, so the common entry stays four short lines
+        // rather than seven with three of them empty.
+        if (!item.arguments.empty()) {
+            fwprintf(file, L"args    = %s\n", item.arguments.c_str());
+        }
+        if (!item.workingDirectory.empty()) {
+            fwprintf(file, L"workdir = %s\n", item.workingDirectory.c_str());
+        }
+        if (!item.iconPath.empty()) {
+            fwprintf(file, L"icon    = %s\n", item.iconPath.c_str());
+        }
+        fwprintf(file, L"\n");
     }
     fclose(file);
     return true;
@@ -321,8 +387,10 @@ void ItemStore::SeedDefaults() {
             if (items_.size() >= 10) {
                 break; // a first run should look like a dock, not like a taskbar
             }
-            items_.push_back(
-                DockItem{shortcut.wstring(), shortcut.stem().wstring(), ItemGroup::Main, -1});
+            DockItem item;
+            item.path = shortcut.wstring();
+            item.label = shortcut.stem().wstring();
+            items_.push_back(std::move(item));
         }
     }
 
@@ -338,16 +406,26 @@ void ItemStore::SeedDefaults() {
             const std::wstring expanded = ExpandPath(candidate);
             std::error_code ec;
             if (std::filesystem::exists(expanded, ec)) {
-                items_.push_back(
-                    DockItem{candidate, LabelFromPath(expanded), ItemGroup::Main, -1});
+                DockItem item;
+                item.path = candidate;
+                item.label = LabelFromPath(expanded);
+                items_.push_back(std::move(item));
             }
         }
     }
 
     // The standing shortcuts, mirroring the right-hand run in the design.
-    items_.push_back(DockItem{L"%USERPROFILE%\\Downloads", L"Downloads", ItemGroup::Utility, -1});
-    items_.push_back(DockItem{L"::{645FF040-5081-101B-9F08-00AA002F954E}", L"Recycle Bin",
-                              ItemGroup::Utility, -1});
+    DockItem downloads;
+    downloads.path = L"%USERPROFILE%\\Downloads";
+    downloads.label = L"Downloads";
+    downloads.group = ItemGroup::Utility;
+    items_.push_back(std::move(downloads));
+
+    DockItem bin;
+    bin.path = L"::{645FF040-5081-101B-9F08-00AA002F954E}";
+    bin.label = L"Recycle Bin";
+    bin.group = ItemGroup::Utility;
+    items_.push_back(std::move(bin));
 }
 
 } // namespace liquidock

@@ -148,9 +148,10 @@ inline constexpr float kTintAlpha = 0.16f;
 } // namespace menu
 
 // Hard ceiling on dock items. The magnified layout and the glass lenses both
-// travel to the GPU in constant buffers, which want a fixed size; 32 is far
-// past any dock a person would actually use and still only 1 KB of constants.
-inline constexpr int kMaxItems = 32;
+// travel to the GPU in constant buffers, which want a fixed size. Raised from
+// 32 after importing a real Nexus dock that had 43 - "far past any dock a person
+// would actually use" turned out to be wrong about the first person who tried.
+inline constexpr int kMaxItems = 64;
 
 // Lenses are only emitted for icons that are actually raised, and the wave
 // reaches about five icons wide, so eight is generous.

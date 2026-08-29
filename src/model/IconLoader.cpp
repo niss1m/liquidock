@@ -3,6 +3,7 @@
 #include <objbase.h>
 #include <shlobj.h>
 #include <shobjidl_core.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -167,6 +168,80 @@ std::wstring ResolveExecutable(const std::wstring& path) {
     return EndsWith(expanded, L".exe") ? expanded : std::wstring{};
 }
 
+// Decodes an image file into a premultiplied BGRA square, letterboxed so a
+// non-square source keeps its proportions rather than being stretched.
+//
+// This is what makes a themed icon set usable: people who care about how their
+// dock looks have a folder of PNGs, and pointing an entry at one has to be as
+// ordinary as pointing it at an executable.
+bool LoadIconImage(const std::wstring& path, int size, std::vector<uint32_t>& out) {
+    ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory)))) {
+        return false;
+    }
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
+                                                  WICDecodeMetadataCacheOnLoad, &decoder))) {
+        return false;
+    }
+    ComPtr<IWICBitmapFrameDecode> frame;
+    if (FAILED(decoder->GetFrame(0, &frame))) {
+        return false;
+    }
+
+    UINT sourceWidth = 0;
+    UINT sourceHeight = 0;
+    if (FAILED(frame->GetSize(&sourceWidth, &sourceHeight)) || sourceWidth == 0 ||
+        sourceHeight == 0) {
+        return false;
+    }
+
+    // Fit inside the cell, preserving the aspect ratio.
+    const double aspect = static_cast<double>(sourceWidth) / sourceHeight;
+    UINT targetWidth = static_cast<UINT>(size);
+    UINT targetHeight = static_cast<UINT>(size);
+    if (aspect > 1.0) {
+        targetHeight = std::max<UINT>(1, static_cast<UINT>(size / aspect));
+    } else if (aspect < 1.0) {
+        targetWidth = std::max<UINT>(1, static_cast<UINT>(size * aspect));
+    }
+
+    ComPtr<IWICBitmapScaler> scaler;
+    if (FAILED(factory->CreateBitmapScaler(&scaler)) ||
+        FAILED(scaler->Initialize(frame.Get(), targetWidth, targetHeight,
+                                  WICBitmapInterpolationModeHighQualityCubic))) {
+        return false;
+    }
+
+    // PBGRA: premultiplied, which is what the atlas and the swap chain both
+    // want, so WIC does the multiply rather than a loop here doing it wrong.
+    ComPtr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateFormatConverter(&converter)) ||
+        FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppPBGRA,
+                                     WICBitmapDitherTypeNone, nullptr, 0.0,
+                                     WICBitmapPaletteTypeCustom))) {
+        return false;
+    }
+
+    std::vector<uint32_t> scaled(static_cast<size_t>(targetWidth) * targetHeight);
+    if (FAILED(converter->CopyPixels(nullptr, targetWidth * 4,
+                                     static_cast<UINT>(scaled.size() * 4),
+                                     reinterpret_cast<BYTE*>(scaled.data())))) {
+        return false;
+    }
+
+    out.assign(static_cast<size_t>(size) * size, 0);
+    const int left = (size - static_cast<int>(targetWidth)) / 2;
+    const int top = (size - static_cast<int>(targetHeight)) / 2;
+    for (UINT y = 0; y < targetHeight; ++y) {
+        std::copy_n(scaled.begin() + static_cast<size_t>(y) * targetWidth, targetWidth,
+                    out.begin() + static_cast<size_t>(top + y) * size + left);
+    }
+    return true;
+}
+
 bool ExtractIcon(const std::wstring& path, int size, std::vector<uint32_t>& out) {
     ComPtr<IShellItemImageFactory> factory;
     // Parsing names cover every kind of entry the config file accepts - files,
@@ -198,21 +273,20 @@ IconLoader::~IconLoader() {
     Stop();
 }
 
-void IconLoader::Start(const std::vector<std::wstring>& paths, int size, HWND notify,
-                       UINT message) {
+void IconLoader::Start(std::vector<DockItem> items, int size, HWND notify, UINT message) {
     Stop();
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         ready_.clear();
     }
-    worker_ = std::thread([this, paths, size, notify, message] {
+    worker_ = std::thread([this, items = std::move(items), size, notify, message]() mutable {
         // Shell extensions are overwhelmingly apartment-threaded, and several
         // of them will refuse to load at all on an MTA thread.
         const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         if (FAILED(hr)) {
             return;
         }
-        Run(paths, size, notify, message);
+        Run(std::move(items), size, notify, message);
         CoUninitialize();
     });
 }
@@ -237,10 +311,10 @@ void IconLoader::Collect(std::vector<IconBitmap>& out) {
     ready_.clear();
 }
 
-void IconLoader::Run(std::vector<std::wstring> paths, int size, HWND notify, UINT message) {
+void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT message) {
     const unsigned generation = generation_.load(std::memory_order_relaxed);
 
-    for (size_t index = 0; index < paths.size(); ++index) {
+    for (size_t index = 0; index < items.size(); ++index) {
         if (generation_.load(std::memory_order_relaxed) != generation) {
             return; // cancelled; a newer load owns the queue now
         }
@@ -249,9 +323,29 @@ void IconLoader::Run(std::vector<std::wstring> paths, int size, HWND notify, UIN
         icon.slot = static_cast<int>(index);
         icon.size = size;
 
-        const std::wstring expanded = ItemStore::ExpandPath(paths[index]);
+        const std::wstring expanded = ItemStore::ExpandPath(items[index].path);
         icon.target = ResolveExecutable(expanded);
-        if (!ExtractIcon(expanded, size, icon.pixels)) {
+
+        // An explicit image wins over whatever the shell would say. If it fails
+        // to decode - a path that has moved, a file that is not an image - the
+        // shell icon is still a better answer than a placeholder.
+        // `icon = <file>` means "take the icon from this file", whatever kind of
+        // file it is. Usually that is a PNG from a themed set, so the image
+        // decoder is tried first and is the best answer when it works. But
+        // pointing at an executable, a .ico or a .dll is just as reasonable a
+        // thing to want - and it is what an imported Nexus dock actually
+        // contains - so the shell gets a turn before giving up on the override.
+        bool loaded = false;
+        const std::wstring custom = ItemStore::ExpandPath(items[index].iconPath);
+        if (!custom.empty()) {
+            loaded = LoadIconImage(custom, size, icon.pixels) ||
+                     ExtractIcon(custom, size, icon.pixels);
+            if (!loaded) {
+                LogWarn("Could not read the icon for dock item {}; using the target's own",
+                        index);
+            }
+        }
+        if (!loaded && !ExtractIcon(expanded, size, icon.pixels)) {
             LogWarn("No icon for dock item {}; drawing a placeholder", index);
             DrawPlaceholder(size, icon.pixels);
         }

@@ -14,7 +14,7 @@
 
 // design::kMaxItems icons, the same again for running indicators, plus the
 // hairline. Matches kMaxIconInstances in DockWindow.h.
-#define MAX_INSTANCES 65
+#define MAX_INSTANCES 129
 
 cbuffer IconConstants : register(b0)
 {
