@@ -79,10 +79,11 @@ inline constexpr float kSplay = 1.00f;
 // the thing everyone is actually comparing this to.
 namespace magnify {
 
-// How big the icon under the cursor gets. Nexus's own amplitude sits about
-// here, and it is enough: past this the swell starts shoving its neighbours
-// around more than it magnifies the thing you are pointing at.
-inline constexpr float kMaxScale = 1.60f;
+// How big the icon under the cursor gets. Double, which is what a dock at 32 px
+// needs for the magnified icon to be worth looking at - at 1.6 the difference
+// between the icon you are pointing at and its neighbours is too slight to
+// register at this size.
+inline constexpr float kMaxScale = 2.00f;
 
 // Half-width of the wave in logical pixels - Nexus's DockMagPixels, which is
 // worth copying exactly. It was 132 here, which at any icon size reaches so far
@@ -91,11 +92,10 @@ inline constexpr float kMaxScale = 1.60f;
 // what makes the swell feel attached to the pointer.
 inline constexpr float kInfluencePx = 60.0f;
 
-// Critically damped spring, in the usual w^2 form. w = sqrt(1250) = 35.4 rad/s,
-// so a step settles in roughly 4/w = 0.11 s. It was 430, settling in 0.19 s,
-// which reads as the dock catching up with the cursor rather than following it.
-// Still a spring rather than a jump cut - the mass is what stops a fast sweep
-// looking like a strobe - just a much lighter one.
+// The spring now runs in one place only: relaxing back to rest once the cursor
+// has left. While the cursor is on the dock the magnification is computed
+// directly from its position, because anything that converges necessarily lags.
+// w = sqrt(1250) = 35.4 rad/s, so leaving settles in about 0.11 s.
 inline constexpr float kStiffness = 1250.0f;
 
 // A magnified icon keeps its bottom edge on the icon row and grows upward, the

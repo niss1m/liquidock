@@ -255,22 +255,43 @@ bool DockLayout::Advance(float deltaSeconds) {
         Element& element = elements_[i];
         const float target = TargetScale(element, restCenters[i]);
 
-        float remaining = deltaSeconds;
-        while (remaining > 0.0f) {
-            const float step = std::min(remaining, kSubstep);
-            remaining -= step;
-            const float acceleration =
-                -magnify::kStiffness * (element.scale - target) - 2.0f * omega * element.velocity;
-            element.velocity += acceleration * step;
-            element.scale += element.velocity * step;
-        }
-
-        if (std::fabs(element.scale - target) < kRestPosition &&
-            std::fabs(element.velocity) < kRestVelocity) {
+        if (hovered_) {
+            // Instant, while the cursor is on the dock. The magnified size is a
+            // *function of where the pointer is*, not a value chasing one - and
+            // that is the whole difference in feel. A spring, however stiff,
+            // lags by definition: it has to be behind in order to have somewhere
+            // to accelerate toward. At 430 that lag was a fifth of a second and
+            // read as the dock catching up; even at 1250 it was still there.
+            // Computing the size directly costs nothing and cannot lag, because
+            // there is no state to converge.
+            //
+            // It is also cheaper. With nothing settling, the dock presents a
+            // frame per mouse move rather than a frame per vblank until the
+            // springs are done.
             element.scale = target;
             element.velocity = 0.0f;
         } else {
-            moving = true;
+            // Leaving is the one place easing earns its keep: flicking the
+            // cursor off the dock and having six icons snap back to size at once
+            // is a jolt. This is the same critically damped spring, now only
+            // ever running toward 1.
+            float remaining = deltaSeconds;
+            while (remaining > 0.0f) {
+                const float step = std::min(remaining, kSubstep);
+                remaining -= step;
+                const float acceleration = -magnify::kStiffness * (element.scale - target) -
+                                           2.0f * omega * element.velocity;
+                element.velocity += acceleration * step;
+                element.scale += element.velocity * step;
+            }
+
+            if (std::fabs(element.scale - target) < kRestPosition &&
+                std::fabs(element.velocity) < kRestVelocity) {
+                element.scale = target;
+                element.velocity = 0.0f;
+            } else {
+                moving = true;
+            }
         }
 
         if (element.bounceTime >= 0.0f) {
