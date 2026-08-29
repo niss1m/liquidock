@@ -63,14 +63,15 @@ namespace glass {
 inline constexpr float kLightAngleDegrees = -45.0f;
 inline constexpr float kLightIntensity = 0.80f;
 inline constexpr float kRefraction = 0.80f;
-inline constexpr float kDepth = 0.20f;
+inline constexpr float kDepth = 1.00f;
 inline constexpr float kDispersion = 0.50f;
 // Essentially clear. This is the one that was most wrong: at 0.82 the dock is a
 // frosted slab and the desktop behind it is gone.
 inline constexpr float kFrost = 0.04f;
-// Full splay, which now means something - it is how far the edge optics reach
-// across the face, and the design wants them reaching a long way in.
-inline constexpr float kSplay = 1.00f;
+// How far the edge optics reach across the face. The panel reads 64 now, not
+// the 100 it did before - with depth at full, 100 pushed the bending most of
+// the way across a 45 px bar and there was no flat middle left.
+inline constexpr float kSplay = 0.64f;
 } // namespace glass
 
 // --- Magnification --------------------------------------------------------
@@ -117,23 +118,33 @@ inline constexpr float kBounceHeightPx = 16.0f;
 
 // Auto-hide timings. Both are overridable in settings.txt.
 inline constexpr float kDwellSeconds = 3.0f;  // how long the dock stays out
-inline constexpr float kSlideSeconds = 0.22f; // how long the slide itself takes
+inline constexpr float kSlideSeconds = 0.07f; // how long the slide itself takes
 
 // The name that appears above the icon under the cursor. Not in the Figma
 // file - the design has no hover state - so these follow the macOS dock, which
 // is what everyone will compare it to: a small dark pill directly above the
 // icon, close enough to belong to it.
 namespace label {
-inline constexpr float kFontSize = 14.5f;
-inline constexpr float kPaddingX = 14.0f;
-inline constexpr float kPaddingY = 7.5f;
-inline constexpr float kRadius = 10.0f;
-// Between the top of the icon and the bottom of the pill. Generous on purpose:
-// a label that crowds the icon reads as part of it rather than as a name for it.
-inline constexpr float kGap = 13.0f;
-// A short fade rather than an instant appearance, so sweeping the cursor along
-// the row does not strobe a different name every few milliseconds.
-inline constexpr float kFadeSeconds = 0.09f;
+// Nexus's own: DockFontName1 "Segoe UI", DockFontSize1 12, DockFontBold1 True.
+// 12 pt at 96 dpi is 16 px, and the weight is what most of the difference in
+// character was - a semibold variable face next to a plain bold one does not
+// read as the same label however close the metrics get.
+inline constexpr float kFontSize = 16.0f;
+inline constexpr float kPaddingX = 11.0f;
+inline constexpr float kPaddingY = 5.0f;
+inline constexpr float kRadius = 6.0f;
+// The tail. Measured to the point, not to the pill's flat bottom edge, so the
+// gap below stays the same whatever the tail's height is.
+inline constexpr float kTailWidth = 13.0f;
+inline constexpr float kTailHeight = 7.0f;
+// Between the top of the icon and the tip of the tail. Small, because the tail
+// is what connects the name to the icon now - the wide gap that did that job
+// before is no longer carrying it.
+inline constexpr float kGap = 6.0f;
+// Instant. Nexus has MagSmoothness 0 and DisableAnimations set, and a fade here
+// is another tenth of a second between pointing at something and being told
+// what it is.
+inline constexpr float kFadeSeconds = 0.0f;
 
 // Near-black and near-opaque. The label has to be readable over a photograph
 // with no idea what colour it is, and the only thing that reliably survives
@@ -218,12 +229,13 @@ inline constexpr float kMaxIconRise =
 // The hover label sits above the icon, and the icon is at its highest exactly
 // when the label is showing, so this is the case the window has to fit.
 inline constexpr float kLabelHeight = label::kFontSize + 2.0f * label::kPaddingY;
-inline constexpr float kBleed =
-    kMaxIconRise + magnify::kBounceHeightPx + label::kGap + kLabelHeight + 8.0f;
+inline constexpr float kBleed = kMaxIconRise + magnify::kBounceHeightPx + label::kGap +
+                                label::kTailHeight + kLabelHeight + 8.0f;
 
 static_assert(kMaxConfigurableScale >= magnify::kMaxScale,
               "The ceiling has to admit the default magnification");
-static_assert(kBleed > kMaxIconRise + magnify::kBounceHeightPx + kLabelHeight,
+static_assert(kBleed > kMaxIconRise + magnify::kBounceHeightPx + kLabelHeight +
+                          label::kTailHeight,
               "The window must contain a raised icon, its bounce, and its label");
 
 } // namespace liquidock::design

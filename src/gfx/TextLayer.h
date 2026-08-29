@@ -27,7 +27,9 @@ public:
     TextLayer(const TextLayer&) = delete;
     TextLayer& operator=(const TextLayer&) = delete;
 
-    bool Initialize(GraphicsDevice& device, float fontSize);
+    bool Initialize(GraphicsDevice& device, float fontSize,
+                    DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                    const wchar_t* family = L"Segoe UI Variable Text");
     void Reset();
 
     // Drops the cached target bitmap. Call when the swap chain is resized: the
@@ -45,6 +47,13 @@ public:
     float MeasureWidth(std::wstring_view text);
 
     void FillRounded(const D2D1_RECT_F& rect, float radius, const D2D1_COLOR_F& colour);
+    // A rounded pill with a triangular tail hanging off its bottom edge,
+    // built as one closed outline rather than a pill with a triangle laid on
+    // top. That matters for the border: drawn as two shapes, the pill's
+    // stroke would run straight across the base of the tail and the join
+    // would show as a seam through the point.
+    void FillTooltip(const D2D1_RECT_F& rect, float radius, float tailCenterX, float tailWidth,
+                     float tailHeight, const D2D1_COLOR_F& fill, const D2D1_COLOR_F& edge);
     void StrokeRounded(const D2D1_RECT_F& rect, float radius, const D2D1_COLOR_F& colour,
                        float width = 1.0f);
     void Draw(std::wstring_view text, const D2D1_RECT_F& rect, const D2D1_COLOR_F& colour);

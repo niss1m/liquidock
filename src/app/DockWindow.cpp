@@ -406,7 +406,8 @@ bool DockWindow::CreateResources() {
     blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     LD_CHECK(device_->d3d()->CreateBlendState(&blend, &iconBlend_));
 
-    if (!text_.Initialize(*device_, design::label::kFontSize)) {
+    if (!text_.Initialize(*device_, design::label::kFontSize, DWRITE_FONT_WEIGHT_BOLD,
+                          L"Segoe UI")) {
         return false;
     }
 
@@ -1388,18 +1389,14 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
         wanted = layout_.ItemAt(x, y);
     }
 
-    // A different icon takes the label over immediately if nothing is showing,
-    // and otherwise waits for the old one to fade out - which is what stops a
-    // sweep along the row from strobing a different name every few frames.
-    if (wanted != labelItem_) {
-        if (labelAlpha_ <= 0.0f) {
-            labelItem_ = wanted;
-        } else {
-            wanted = -1;
-        }
-    }
+    // The name changes the instant the cursor crosses onto another icon.
+    // Handing over used to mean fading the old label out before the new one
+    // could begin, which put two fades - nearly a fifth of a second - between
+    // pointing at something and being told what it is. That was most of what
+    // still read as lag once the magnification itself was instant.
+    labelItem_ = wanted;
 
-    const float target = (labelItem_ >= 0 && wanted == labelItem_) ? 1.0f : 0.0f;
+    const float target = (labelItem_ >= 0) ? 1.0f : 0.0f;
     const float step = (design::label::kFadeSeconds > 0.0f)
                            ? deltaSeconds / design::label::kFadeSeconds
                            : 1.0f;
@@ -1441,14 +1438,21 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     // Kept inside the window: an icon at either end would otherwise have half
     // its name clipped away by the swap chain.
     left = std::clamp(left, 4.0f, std::max(4.0f, viewWidth - width - 4.0f));
-    const float bottom = iconTop - design::label::kGap;
+    // The gap is measured to the tip of the tail, so the pill itself sits a
+    // tail's height further up.
+    const float point = iconTop - design::label::kGap;
+    const float bottom = point - design::label::kTailHeight;
     const D2D1_RECT_F pill = D2D1::RectF(left, bottom - height, left + width, bottom);
 
     auto colour = [](const float rgba[4], float alpha) {
         return D2D1::ColorF(rgba[0], rgba[1], rgba[2], rgba[3] * alpha);
     };
-    text_.FillRounded(pill, design::label::kRadius, colour(design::label::kFill, labelAlpha_));
-    text_.StrokeRounded(pill, design::label::kRadius, colour(design::label::kEdge, labelAlpha_));
+    // The tail points at the icon, not at the middle of the pill: at either end
+    // of the row the pill is pushed inward to stay on screen, and a tail centred
+    // on it would then be pointing at a neighbour.
+    text_.FillTooltip(pill, design::label::kRadius, icon->centerX, design::label::kTailWidth,
+                      design::label::kTailHeight, colour(design::label::kFill, labelAlpha_),
+                      colour(design::label::kEdge, labelAlpha_));
     text_.Draw(name, pill, colour(design::label::kText, labelAlpha_));
     text_.End();
 

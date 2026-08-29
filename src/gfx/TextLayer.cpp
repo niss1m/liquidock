@@ -3,9 +3,12 @@
 #include "core/Check.h"
 #include "core/Log.h"
 
+#include <algorithm>
+
 namespace liquidock {
 
-bool TextLayer::Initialize(GraphicsDevice& device, float fontSize) {
+bool TextLayer::Initialize(GraphicsDevice& device, float fontSize, DWRITE_FONT_WEIGHT weight,
+                           const wchar_t* family) {
     Reset();
     device_ = &device;
 
@@ -21,10 +24,11 @@ bool TextLayer::Initialize(GraphicsDevice& device, float fontSize) {
 
     LD_CHECK(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                  reinterpret_cast<IUnknown**>(dwrite_.GetAddressOf())));
-    // Segoe UI Variable on Windows 11, with DirectWrite falling back on its own
-    // where it is missing.
-    LD_CHECK(dwrite_->CreateTextFormat(L"Segoe UI Variable Text", nullptr,
-                                       DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+    // Segoe UI Variable on Windows 11 by default, with DirectWrite falling back
+    // on its own where it is missing. The dock's hover label asks for plain
+    // Segoe UI Bold instead, because that is the face Nexus labels its icons
+    // with and matching it was the point.
+    LD_CHECK(dwrite_->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                                        DWRITE_FONT_STRETCH_NORMAL, fontSize, L"en-us", &format_));
     format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -118,6 +122,59 @@ void TextLayer::FillRounded(const D2D1_RECT_F& rect, float radius, const D2D1_CO
     }
     brush_->SetColor(colour);
     d2d_->FillRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), brush_.Get());
+}
+
+void TextLayer::FillTooltip(const D2D1_RECT_F& rect, float radius, float tailCenterX,
+                            float tailWidth, float tailHeight, const D2D1_COLOR_F& fill,
+                            const D2D1_COLOR_F& edge) {
+    if (!drawing_ || !factory_ || !brush_) {
+        return;
+    }
+
+    const float width = rect.right - rect.left;
+    const float height = rect.bottom - rect.top;
+    const float r = std::min(radius, std::min(width, height) * 0.5f);
+    // The tail leaves the bottom edge between the two corner arcs, so its half
+    // width is capped by whatever straight run is left between them.
+    const float halfTail = std::min(tailWidth * 0.5f, std::max(0.0f, width * 0.5f - r));
+    const float tailX =
+        std::clamp(tailCenterX, rect.left + r + halfTail, rect.right - r - halfTail);
+
+    ComPtr<ID2D1PathGeometry> path;
+    if (FAILED(factory_->CreatePathGeometry(&path))) {
+        return;
+    }
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(path->Open(&sink))) {
+        return;
+    }
+
+    auto arc = [](float x, float y, float sweep) {
+        return D2D1::ArcSegment(D2D1::Point2F(x, y), D2D1::SizeF(sweep, sweep), 0.0f,
+                                D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL);
+    };
+
+    sink->BeginFigure(D2D1::Point2F(rect.left + r, rect.top), D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine(D2D1::Point2F(rect.right - r, rect.top));
+    sink->AddArc(arc(rect.right, rect.top + r, r));
+    sink->AddLine(D2D1::Point2F(rect.right, rect.bottom - r));
+    sink->AddArc(arc(rect.right - r, rect.bottom, r));
+    sink->AddLine(D2D1::Point2F(tailX + halfTail, rect.bottom));
+    sink->AddLine(D2D1::Point2F(tailX, rect.bottom + tailHeight));
+    sink->AddLine(D2D1::Point2F(tailX - halfTail, rect.bottom));
+    sink->AddLine(D2D1::Point2F(rect.left + r, rect.bottom));
+    sink->AddArc(arc(rect.left, rect.bottom - r, r));
+    sink->AddLine(D2D1::Point2F(rect.left, rect.top + r));
+    sink->AddArc(arc(rect.left + r, rect.top, r));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    if (FAILED(sink->Close())) {
+        return;
+    }
+
+    brush_->SetColor(fill);
+    d2d_->FillGeometry(path.Get(), brush_.Get());
+    brush_->SetColor(edge);
+    d2d_->DrawGeometry(path.Get(), brush_.Get(), 1.0f);
 }
 
 void TextLayer::StrokeRounded(const D2D1_RECT_F& rect, float radius, const D2D1_COLOR_F& colour,
