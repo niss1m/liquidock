@@ -38,11 +38,24 @@ Requires **Windows 10 version 2004** or newer, and Visual Studio 2022 with the *
 with C++* workload (MSVC v143, Windows 11 SDK, CMake, Ninja).
 
 ```
+.\scripts\build.ps1                        # debug
+.\scripts\build.ps1 -Preset release -Run   # release, then launch it
+```
+
+The script finds Visual Studio and enters its developer environment for you. If
+you would rather drive CMake directly, do it from a *Developer PowerShell for VS
+2022* — the presets pin `CMAKE_CXX_COMPILER` to a bare `cl.exe`, which only
+resolves inside that environment:
+
+```
 cmake --preset debug
 cmake --build --preset debug
 ```
 
-The executable lands in `build/debug/liquidock.exe`.
+The executable lands in `build/debug/liquidock.exe`. Or double-click `run.cmd`.
+
+Because the dock's real fill is 5% white and easy to mistake for a failed
+render, `run-diagnostic.cmd` draws it in flat opaque magenta instead.
 
 ## License
 

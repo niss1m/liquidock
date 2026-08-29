@@ -70,11 +70,19 @@ if ($running) {
     Start-Sleep -Milliseconds 300
 }
 
+# Windows PowerShell turns any stderr line from a native exe into a terminating
+# NativeCommandError while ErrorActionPreference is 'Stop', so a harmless CMake
+# warning would abort a build that actually succeeded. The exit code is the real
+# gate.
+$ErrorActionPreference = 'Continue'
+
 cmake --preset $Preset
-if ($LASTEXITCODE -ne 0) { throw "Configure failed." }
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = 'Stop'; throw "Configure failed." }
 
 cmake --build --preset $Preset
-if ($LASTEXITCODE -ne 0) { throw "Build failed." }
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = 'Stop'; throw "Build failed." }
+
+$ErrorActionPreference = 'Stop'
 
 $exe = Join-Path $buildDir 'liquidock.exe'
 Write-Host ''

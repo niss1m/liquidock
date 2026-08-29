@@ -15,9 +15,22 @@ string(APPEND header "#include <string_view>\n\n")
 string(APPEND header "namespace liquidock::shaders {\n")
 
 set(table "")
+set(seen_symbols "")
 foreach(shader ${SHADERS})
     get_filename_component(filename "${shader}" NAME)
-    string(REPLACE "." "_" symbol "${filename}")
+    # Sanitise to a legal C++ identifier, not just s/./_/. A shader named
+    # "Glass-v2.hlsl" or "Drop Shadow.hlsl" would otherwise emit a header that
+    # does not compile, and the error would point at generated code rather than
+    # at the filename that caused it.
+    string(REGEX REPLACE "[^A-Za-z0-9_]" "_" symbol "${filename}")
+    # list(FIND) rather than `if(... IN_LIST ...)`: this file runs under
+    # `cmake -P`, and script mode does not inherit the project's policy
+    # settings, so CMP0057 is OLD here and IN_LIST is not an operator.
+    list(FIND seen_symbols "${symbol}" symbol_index)
+    if(NOT symbol_index EQUAL -1)
+        message(FATAL_ERROR "Shader name collision: ${filename} maps to k${symbol}")
+    endif()
+    list(APPEND seen_symbols "${symbol}")
     file(READ "${shader}" source)
     string(APPEND header "\ninline constexpr std::string_view k${symbol} = R\"HLSL(\n")
     string(APPEND header "${source}")
