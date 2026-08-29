@@ -1454,9 +1454,6 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     const bool moving = (labelAlpha_ != target);
     if (labelAlpha_ <= 0.001f || labelItem_ < 0 ||
         labelItem_ >= static_cast<int>(store_.items().size()) || !text_.ready()) {
-        // Nothing showing, so the next label starts where its icon is rather
-        // than sliding in from wherever the last one happened to end up.
-        labelPlaced_ = false;
         return moving;
     }
 
@@ -1488,20 +1485,8 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     // and the label holds one line as the cursor travels the row.
     const float iconTop = layout_.magnified_icon_top() + slideLogical;
 
-    // The pill travels to the next icon instead of teleporting. Exponential
-    // approach, so it is frame-rate independent and has no overshoot to settle.
-    const float targetX = icon->centerX;
-    if (!labelPlaced_) {
-        labelX_ = targetX;
-        labelPlaced_ = true;
-    } else if (deltaSeconds > 0.0f) {
-        labelX_ += (targetX - labelX_) *
-                   (1.0f - std::exp(-deltaSeconds / design::label::kSlideTau));
-    }
-    const bool sliding = std::fabs(targetX - labelX_) > 0.3f;
-
     const float viewWidth = static_cast<float>(target_.width()) / scale;
-    float left = labelX_ - width * 0.5f;
+    float left = icon->centerX - width * 0.5f;
     // Kept inside the window: an icon at either end would otherwise have half
     // its name clipped away by the swap chain.
     left = std::clamp(left, 4.0f, std::max(4.0f, viewWidth - width - 4.0f));
@@ -1523,7 +1508,7 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     text_.Draw(name, pill, colour(design::label::kText, labelAlpha_));
     text_.End();
 
-    return moving || sliding;
+    return moving;
 }
 
 LRESULT CALLBACK DockWindow::WndProcThunk(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {

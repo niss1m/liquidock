@@ -177,8 +177,13 @@ void TextLayer::FillTooltip(const D2D1_RECT_F& rect, float radius, float tailCen
 
     brush_->SetColor(fill);
     d2d_->FillGeometry(path.Get(), brush_.Get());
-    brush_->SetColor(edge);
-    d2d_->DrawGeometry(path.Get(), brush_.Get(), 1.0f);
+    // A borderless tooltip is the normal case rather than a special one, so the
+    // stroke is skipped outright instead of drawn in a colour that happens to
+    // be invisible.
+    if (edge.a > 0.004f) {
+        brush_->SetColor(edge);
+        d2d_->DrawGeometry(path.Get(), brush_.Get(), 1.0f);
+    }
 }
 
 void TextLayer::StrokeRounded(const D2D1_RECT_F& rect, float radius, const D2D1_COLOR_F& colour,

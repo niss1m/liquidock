@@ -129,20 +129,20 @@ namespace label {
 // 12 pt at 96 dpi is 16 px, and the weight is what most of the difference in
 // character was - a semibold variable face next to a plain bold one does not
 // read as the same label however close the metrics get.
-// 12 pt at 96 dpi would be 16 px, but light text on a near-black pill gains
-// apparent weight - the glyphs bloom into the dark ground in a way GDI's
-// ClearType on an opaque background does not - so matching Nexus's numbers
-// exactly overshoots it. Hence a step down in both size and weight. Both are
-// settings, because this is the one thing here that cannot be measured off the
-// running Nexus.
-inline constexpr float kFontSize = 15.0f;
-inline constexpr bool kBold = false;
+// 12 pt at 96 dpi is 16 px. I dropped this to 15 and to semibold on a theory
+// about light glyphs blooming into a dark pill; against a photograph of the
+// real thing the weight was plainly too light, so the registry's own numbers
+// stand. Both remain settings - this is the one thing here that cannot be
+// measured off the running Nexus, whose tooltip window will not show for
+// synthetic input.
+inline constexpr float kFontSize = 16.0f;
+inline constexpr bool kBold = true;
 // The ceiling for the label-font-size setting. The window reserves headroom for
 // a label this tall at startup, so the pill cannot grow past its own bleed.
 inline constexpr float kMaxFontSize = 22.0f;
 inline constexpr float kPaddingX = 11.0f;
 inline constexpr float kPaddingY = 5.0f;
-inline constexpr float kRadius = 6.0f;
+inline constexpr float kRadius = 8.0f;
 // The tail. Measured to the point, not to the pill's flat bottom edge, so the
 // gap below stays the same whatever the tail's height is.
 inline constexpr float kTailWidth = 13.0f;
@@ -155,11 +155,6 @@ inline constexpr float kGap = 6.0f;
 // is another tenth of a second between pointing at something and being told
 // what it is.
 inline constexpr float kFadeSeconds = 0.0f;
-// How quickly the pill slides sideways to the next icon, as the time constant
-// of an exponential approach: ~95% of the way there in three of these. The one
-// thing here that is deliberately not instant - the label travels along the row
-// rather than teleporting, which is what makes a sweep read as smooth.
-inline constexpr float kSlideTau = 0.045f;
 // Dismissed after this long without the cursor moving. Nexus does the same, and
 // it is what stops a name you have finished reading from sitting over your work.
 inline constexpr unsigned kIdleMs = 1000;
@@ -168,9 +163,11 @@ inline constexpr unsigned kIdleMs = 1000;
 // with no idea what colour it is, and the only thing that reliably survives
 // that is black behind white.
 inline constexpr float kFill[4] = {0.03f, 0.03f, 0.04f, 0.94f};
-// Barely there: invisible over a bright wallpaper, and just enough to keep the
-// pill from dissolving into a dark one.
-inline constexpr float kEdge[4] = {1.0f, 1.0f, 1.0f, 0.10f};
+// None. Nexus's has no border at all - it is a flat black shape with the name
+// on it, and the hairline was reading as a glow around the pill rather than as
+// a definition of it. Kept as a token, at zero, because the tooltip is drawn
+// with one call that takes both colours.
+inline constexpr float kEdge[4] = {1.0f, 1.0f, 1.0f, 0.0f};
 inline constexpr float kText[4] = {1.0f, 1.0f, 1.0f, 0.95f};
 } // namespace label
 
