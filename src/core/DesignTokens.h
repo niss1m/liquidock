@@ -56,11 +56,11 @@ inline constexpr float kLightAngleDegrees = -45.0f; // Figma
 inline constexpr float kLightIntensity = 0.55f;     // Figma 0.80; the specular blew out
 // The edge is where all the optics live now, so refraction can be strong again -
 // it is confined to a few pixels rather than smeared across the panel.
-inline constexpr float kRefraction = 0.68f;
+inline constexpr float kRefraction = 0.74f;
 // Figma 0.20. This is the band width, and it is the number that decides whether
 // the dock reads as a sheet of glass or as a glossy dome; 0.28 puts the edge at
 // about seven logical pixels.
-inline constexpr float kDepth = 0.28f;
+inline constexpr float kDepth = 0.34f;
 inline constexpr float kDispersion = 0.30f;         // Figma 0.50, and now only at the rim
 // Figma 0.04, which is essentially clear glass. This is now purely the blur
 // radius behind the panel - the body is always fully the blurred image - so it
@@ -119,18 +119,24 @@ inline constexpr float kSlideSeconds = 0.22f; // how long the slide itself takes
 // is what everyone will compare it to: a small dark pill directly above the
 // icon, close enough to belong to it.
 namespace label {
-inline constexpr float kFontSize = 12.5f;
-inline constexpr float kPaddingX = 9.0f;
-inline constexpr float kPaddingY = 4.5f;
-inline constexpr float kRadius = 7.0f;
-// Between the top of the icon and the bottom of the pill.
-inline constexpr float kGap = 9.0f;
+inline constexpr float kFontSize = 14.5f;
+inline constexpr float kPaddingX = 14.0f;
+inline constexpr float kPaddingY = 7.5f;
+inline constexpr float kRadius = 10.0f;
+// Between the top of the icon and the bottom of the pill. Generous on purpose:
+// a label that crowds the icon reads as part of it rather than as a name for it.
+inline constexpr float kGap = 13.0f;
 // A short fade rather than an instant appearance, so sweeping the cursor along
 // the row does not strobe a different name every few milliseconds.
 inline constexpr float kFadeSeconds = 0.09f;
 
-inline constexpr float kFill[4] = {0.07f, 0.07f, 0.08f, 0.92f};
-inline constexpr float kEdge[4] = {1.0f, 1.0f, 1.0f, 0.13f};
+// Near-black and near-opaque. The label has to be readable over a photograph
+// with no idea what colour it is, and the only thing that reliably survives
+// that is black behind white.
+inline constexpr float kFill[4] = {0.03f, 0.03f, 0.04f, 0.94f};
+// Barely there: invisible over a bright wallpaper, and just enough to keep the
+// pill from dissolving into a dark one.
+inline constexpr float kEdge[4] = {1.0f, 1.0f, 1.0f, 0.10f};
 inline constexpr float kText[4] = {1.0f, 1.0f, 1.0f, 0.95f};
 } // namespace label
 

@@ -177,6 +177,7 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
     StartIconLoad();
     ApplyBackdropSource();
     running_.Initialize(hwnd_, kRunningMessage);
+    menu_.Initialize(*device_, *shaders_, wallpaper_);
     if (dumpBackdrop_) {
         SetTimer(hwnd_, kDumpTimer, kDumpDelayMs, nullptr);
     }
@@ -245,7 +246,44 @@ void DockWindow::StartHideCountdown() {
         return; // the dock stays put while its own preferences are open
     }
     revealState_ = (revealProgress_ >= 1.0f) ? RevealState::Shown : revealState_;
+
+    QueryPerformanceCounter(&hideDeadline_);
+    hideDeadline_.QuadPart +=
+        static_cast<LONGLONG>(settings_.dwellSeconds * static_cast<float>(frequency_.QuadPart));
+    hidePending_ = true;
+
+    // The timer is the backstop for when the dock is completely idle and never
+    // renders again; the deadline above is what actually gets checked while it
+    // is busy.
     SetTimer(hwnd_, kHideTimer, static_cast<UINT>(settings_.dwellSeconds * 1000.0f), nullptr);
+}
+
+void DockWindow::CheckHideDeadline() {
+    if (!hidePending_ || !autoHide_ || !hwnd_) {
+        return;
+    }
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    if (now.QuadPart < hideDeadline_.QuadPart) {
+        return;
+    }
+
+    hidePending_ = false;
+    KillTimer(hwnd_, kHideTimer);
+
+    // One cursor check when the dwell expires, rather than polling for the
+    // whole three seconds to learn the same thing.
+    POINT cursor{};
+    float x = 0.0f;
+    float y = 0.0f;
+    const bool hovering = !menuOpen_ && GetCursorPos(&cursor) && CursorToLayout(cursor, &x, &y) &&
+                          layout_.Contains(x, y);
+    const bool busy = menuOpen_ || (settingsWindow_ && settingsWindow_->visible());
+    if (hovering || busy) {
+        StartHideCountdown(); // still in use, so stay out
+    } else {
+        BeginHiding();
+    }
 }
 
 void DockWindow::BeginHiding() {
@@ -256,6 +294,7 @@ void DockWindow::BeginHiding() {
         return;
     }
     revealState_ = RevealState::Hiding;
+    hidePending_ = false;
     animating_ = true;
     QueryPerformanceCounter(&lastFrameTime_);
     RequestRedraw();
@@ -514,6 +553,7 @@ void DockWindow::ReleaseDeviceResources() {
     // before anything is released rather than merely told to stop.
     capture_.reset();
 
+    menu_.Destroy();
     text_.Reset();
     frost_.Reset();
     atlas_.Reset();
@@ -685,41 +725,30 @@ void DockWindow::Launch(int itemIndex) {
 }
 
 void DockWindow::ShowDockMenu(int itemIndex, POINT screen) {
-    const bool onItem =
-        itemIndex >= 0 && itemIndex < static_cast<int>(store_.items().size());
+    const bool onItem = itemIndex >= 0 && itemIndex < static_cast<int>(store_.items().size());
 
-    HMENU menu = CreatePopupMenu();
-    if (!menu) {
-        return;
-    }
+    std::vector<GlassMenu::Item> items;
     // The item commands are the top of the menu when there is an item, and
     // simply absent when the click landed on the bar - rather than a fixed menu
     // with half its entries greyed out, which tells the user nothing.
     if (onItem) {
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0,
-                    store_.items()[static_cast<size_t>(itemIndex)].label.c_str());
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, kCommandOpen, L"Open");
-        AppendMenuW(menu, MF_STRING, kCommandRemove, L"Remove from Dock");
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        items.push_back({0, store_.items()[static_cast<size_t>(itemIndex)].label, false, false,
+                         true});
+        items.push_back({0, L"", false, true, false});
+        items.push_back({kCommandOpen, L"Open", true, false, false});
+        items.push_back({kCommandRemove, L"Remove from Dock", true, false, false});
+        items.push_back({0, L"", false, true, false});
     }
-    AppendMenuW(menu, MF_STRING, kCommandAdd, L"Add app…");
-    AppendMenuW(menu, MF_STRING, kCommandPreferences, L"Preferences…");
-    AppendMenuW(menu, MF_STRING, kCommandEditFile, L"Edit the items file…");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kCommandQuit, L"Quit LiquiDock");
+    items.push_back({kCommandAdd, L"Add app…", true, false, false});
+    items.push_back({kCommandPreferences, L"Preferences…", true, false, false});
+    items.push_back({kCommandEditFile, L"Edit the items file…", true, false, false});
+    items.push_back({0, L"", false, true, false});
+    items.push_back({kCommandQuit, L"Quit LiquiDock", true, false, false});
 
-    // The dwell timer must not fire while a menu is up, or the dock slides away
-    // from underneath the thing the user is choosing from.
+    // The dwell timer must not fire while a menu the dock opened is up.
     menuOpen_ = true;
     KillTimer(hwnd_, kHideTimer);
-
-    SetForegroundWindow(hwnd_);
-    const int command = TrackPopupMenuEx(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
-                                         screen.x, screen.y, hwnd_, nullptr);
-    PostMessageW(hwnd_, WM_NULL, 0, 0);
-    DestroyMenu(menu);
-
+    const UINT command = menu_.Track(std::move(items), screen);
     menuOpen_ = false;
     StartHideCountdown();
 
@@ -978,6 +1007,8 @@ void DockWindow::Render() {
     // A frame can be arbitrarily late if the machine stalled; clamping keeps a
     // hitch from teleporting the dock through its whole slide.
     deltaSeconds = std::clamp(deltaSeconds, 0.0f, 0.1f);
+
+    CheckHideDeadline();
 
     const float reveal = AdvanceReveal(deltaSeconds);
     const float slide = SlideOffset(reveal);
@@ -1633,19 +1664,7 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 DumpTextureToBmp(*device_, ActiveBackdrop().srv(),
                                  ConfigFilePath(L"backdrop.bmp"));
             } else if (wParam == kHideTimer) {
-                KillTimer(hwnd_, kHideTimer);
-                // One cursor check when the dwell expires, rather than polling
-                // for the whole three seconds to learn the same thing.
-                POINT cursor{};
-                float x = 0.0f;
-                float y = 0.0f;
-                const bool hovering = !menuOpen_ && GetCursorPos(&cursor) &&
-                                      CursorToLayout(cursor, &x, &y) && layout_.Contains(x, y);
-                if (hovering || menuOpen_) {
-                    StartHideCountdown(); // still in use, so stay out
-                } else {
-                    BeginHiding();
-                }
+                CheckHideDeadline();
             }
             return 0;
 

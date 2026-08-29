@@ -157,12 +157,21 @@ float4 PSMain(Varyings input) : SV_Target
     // way. The small lift afterwards is the luminous quality real glass has: it
     // gathers light rather than merely passing it on.
     const float lum = dot(body, float3(0.2126, 0.7152, 0.0722));
-    body = lerp(lum.xxx, body, 0.78);
+    body = lerp(lum.xxx, body, 0.62);
     body = lerp(body, float3(0.5, 0.5, 0.5), 0.10);
     // Glass gathers light, and it lifts a dark background far more than a bright
     // one - which is also what keeps the panel visible as an object over black
     // and stops it blowing out over white. A flat multiply cannot do both.
     body = body + (1.0 - body) * 0.12;
+
+    // A sheet lit from above. This gradient across the face, rather than any
+    // amount of edge treatment, is what makes the surface read as a lit
+    // material instead of a cut-out filled with a blur - and unlike a bevel it
+    // adds no curvature, so it cannot turn the panel back into a dome.
+    const float topEdge = RECT_CENTER.y - HALF_SIZE.y;
+    const float vertical = saturate((windowPx.y - topEdge) / max(2.0 * HALF_SIZE.y, 1.0));
+    body += (1.0 - body) * 0.09 * (1.0 - vertical);
+    body *= 1.0 - 0.07 * vertical;
 
     // --- The lens ring -----------------------------------------------------
     // Glass disperses because its refractive index varies with wavelength, so
@@ -200,6 +209,15 @@ float4 PSMain(Varyings input) : SV_Target
     // A whisper of shadow on the side facing away. Without it the rim reads as
     // a glow around the whole shape rather than as light landing on an edge.
     colour *= 1.0 - rim * saturate(-facing) * 0.30 * intensity;
+
+    // A second, much softer treatment inside the rim: a sheen where the surface
+    // turns upward and a shadow where it turns down, both falling off over a
+    // dozen pixels. The crisp rim alone gives an outlined shape; this is what
+    // gives it thickness. It follows the distance field, so it wraps the corners
+    // and any bulge instead of being a band across the top.
+    const float inner = pow(saturate(1.0 + dist / (16.0 * scale)), 2.0);
+    colour += saturate(-outward.y) * inner * 0.075 * intensity;
+    colour *= 1.0 - saturate(outward.y) * inner * 0.10 * intensity;
 
     // The backdrop has already been sampled and composited into `colour`, so
     // the dock is opaque wherever it covers - it is showing its own

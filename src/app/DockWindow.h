@@ -18,29 +18,15 @@
 #include "gfx/TextLayer.h"
 #include "glass/CaptureBackdrop.h"
 #include "glass/FrostChain.h"
+#include "glass/GlassConstants.h"
 #include "glass/WallpaperBackdrop.h"
 #include "model/IconLoader.h"
 #include "model/ItemStore.h"
 #include "model/RunningState.h"
+#include "ui/GlassMenu.h"
 #include "ui/SettingsWindow.h"
 
 namespace liquidock {
-
-// Mirrors GlassConstants in shaders/Glass.hlsl. Both sides are float4-packed so
-// the layouts cannot drift apart silently.
-struct GlassConstants {
-    float viewportCenter[4]; // xy = viewport size (px), zw = rect centre (px)
-    float shape[4];          // xy = rect half size (px), z = corner radius (px), w = time (s)
-    float light[4];          // x = angle (rad), y = intensity, z = refraction, w = depth
-    float material[4];       // x = dispersion, y = frost, z = splay, w = tiled flag
-    float tint[4];           // straight alpha
-    float windowOrigin[4];   // xy = window origin (monitor px), zw = monitor size (px)
-    float backdropUv[4];     // xy = uv scale, zw = uv offset
-    float lensInfo[4];       // x = lens count, y = smooth-min radius (px)
-    float lens[design::kMaxLenses][4]; // xy = centre (px), zw = half size (px)
-};
-static_assert(sizeof(GlassConstants) == 256, "GlassConstants must match the HLSL cbuffer");
-static_assert(sizeof(GlassConstants) % 16 == 0, "Constant buffers must be 16-byte aligned");
 
 // Mirrors IconConstants in shaders/Icon.hlsl. Worst case is every item drawn
 // with a running indicator under it, plus the hairline between the two groups -
@@ -115,6 +101,11 @@ private:
     // fully tucked below the screen edge and 1 is fully out.
     float AdvanceReveal(float deltaSeconds);
     void StartHideCountdown();
+    // Hides if the dwell has run out and nothing is using the dock. Called both
+    // from the dwell timer and from the render loop, because a WM_TIMER is only
+    // synthesised when the message queue is empty - and while live capture is
+    // running the queue very often is not.
+    void CheckHideDeadline();
     void BeginHiding();
 
     // How far, in logical pixels, the dock is currently pushed below its
@@ -214,6 +205,7 @@ private:
     IconAtlas atlas_;
     RunningState running_;
     std::unique_ptr<SettingsWindow> settingsWindow_;
+    GlassMenu menu_;
     std::vector<IconBitmap> loadedIcons_;
     int atlasCell_ = 0;
     int pressedItem_ = -1;
@@ -228,6 +220,10 @@ private:
     AppBar appBar_;
     RevealState revealState_ = RevealState::Shown;
     float revealProgress_ = 1.0f; // 0 = tucked away, 1 = fully out
+    // When the dock is due to slide away, as a timestamp rather than only as a
+    // timer, so a busy message queue cannot postpone it indefinitely.
+    LARGE_INTEGER hideDeadline_{};
+    bool hidePending_ = false;
     bool autoHide_ = true;
     // True only while a slide is in flight. The animation drives itself by
     // posting a message after each Present rather than running on a timer, so

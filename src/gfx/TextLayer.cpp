@@ -90,6 +90,12 @@ void TextLayer::End() {
     }
 }
 
+void TextLayer::SetAlignment(DWRITE_TEXT_ALIGNMENT alignment) {
+    if (format_) {
+        format_->SetTextAlignment(alignment);
+    }
+}
+
 float TextLayer::MeasureWidth(std::wstring_view text) {
     if (!dwrite_ || !format_ || text.empty()) {
         return 0.0f;

@@ -49,6 +49,10 @@ public:
                        float width = 1.0f);
     void Draw(std::wstring_view text, const D2D1_RECT_F& rect, const D2D1_COLOR_F& colour);
 
+    // Centred by default, which is what a label wants; a menu wants its items
+    // left-aligned against a common edge.
+    void SetAlignment(DWRITE_TEXT_ALIGNMENT alignment);
+
 private:
     GraphicsDevice* device_ = nullptr;
     ComPtr<ID2D1Factory1> factory_;
