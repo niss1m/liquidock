@@ -47,11 +47,10 @@ GlassMenu::~GlassMenu() {
     Destroy();
 }
 
-bool GlassMenu::Initialize(GraphicsDevice& device, ShaderCache& shaders,
-                           WallpaperBackdrop& backdrop) {
+bool GlassMenu::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
     device_ = &device;
     shaders_ = &shaders;
-    backdrop_ = &backdrop;
+    backdrop_.Initialize(device);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -155,6 +154,11 @@ void GlassMenu::Place(POINT screen) {
 
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, windowWidth, windowHeight, SWP_NOACTIVATE);
 
+    // Taken now, while the window is positioned but still hidden, so it copies
+    // what is actually behind the menu rather than the menu itself.
+    const RECT screenRect{x, y, x + windowWidth, y + windowHeight};
+    backdrop_.Capture(monitor, screenRect);
+
     if (target_.width() == 0) {
         target_.Initialize(*device_, hwnd_, static_cast<UINT>(windowWidth),
                            static_cast<UINT>(windowHeight));
@@ -189,19 +193,19 @@ void GlassMenu::Render() {
     }
 
     const float scale = static_cast<float>(dpi_) / 96.0f;
-    HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-    backdrop_->Update(monitor);
+    if (!backdrop_.srv()) {
+        return;
+    }
 
     RECT windowRect{};
     GetWindowRect(hwnd_, &windowRect);
-    const RECT monitorRect = backdrop_->monitor_rect();
+    const RECT monitorRect = backdrop_.monitor_rect();
     const POINT origin{windowRect.left - monitorRect.left, windowRect.top - monitorRect.top};
     const SIZE size{static_cast<LONG>(target_.width()), static_cast<LONG>(target_.height())};
 
     // Rebuilt every time the menu opens rather than cached: it is on screen for
     // a second and a half, and it has moved since last time.
-    frost_.Build(*backdrop_, origin, size,
-                 design::glass::kFrost * 32.0f * scale);
+    frost_.Build(backdrop_, origin, size, design::menu::kFrost * 32.0f * scale);
 
     const float viewWidth = static_cast<float>(target_.width());
     const float viewHeight = static_cast<float>(target_.height());
@@ -215,13 +219,13 @@ void GlassMenu::Render() {
     constants.shape[1] = height_ * 0.5f * scale;
     constants.shape[2] = layout::kCorner * scale;
     constants.light[0] = Radians(design::glass::kLightAngleDegrees);
-    constants.light[1] = design::glass::kLightIntensity;
-    constants.light[2] = design::glass::kRefraction;
-    constants.light[3] = design::glass::kDepth;
-    constants.material[0] = design::glass::kDispersion;
-    constants.material[1] = design::glass::kFrost;
-    constants.material[2] = design::glass::kSplay;
-    constants.material[3] = backdrop_->tiled() ? 1.0f : 0.0f;
+    constants.light[1] = design::menu::kLightIntensity;
+    constants.light[2] = design::menu::kRefraction;
+    constants.light[3] = design::menu::kDepth;
+    constants.material[0] = design::menu::kDispersion;
+    constants.material[1] = design::menu::kFrost;
+    constants.material[2] = design::menu::kSplay;
+    constants.material[3] = 0.0f;
     constants.windowOrigin[0] = static_cast<float>(origin.x);
     constants.windowOrigin[1] = static_cast<float>(origin.y);
     constants.windowOrigin[2] = static_cast<float>(monitorRect.right - monitorRect.left);
@@ -229,19 +233,17 @@ void GlassMenu::Render() {
 
     float uvScale[2]{};
     float uvOffset[2]{};
-    backdrop_->uv_scale(uvScale);
-    backdrop_->uv_offset(uvOffset);
+    backdrop_.uv_scale(uvScale);
+    backdrop_.uv_offset(uvOffset);
     constants.backdropUv[0] = uvScale[0];
     constants.backdropUv[1] = uvScale[1];
     constants.backdropUv[2] = uvOffset[0];
     constants.backdropUv[3] = uvOffset[1];
     constants.lensInfo[2] = scale;
-    // A menu is a surface to read from, so it is tinted a little harder than
-    // the dock: the dock has icons on it, this has words.
     constants.tint[0] = 1.0f;
     constants.tint[1] = 1.0f;
     constants.tint[2] = 1.0f;
-    constants.tint[3] = 0.10f;
+    constants.tint[3] = design::menu::kTintAlpha;
 
     ID3D11DeviceContext1* ctx = device_->context();
     D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -268,7 +270,7 @@ void GlassMenu::Render() {
     ID3D11Buffer* cb = constantBuffer_.Get();
     ctx->VSSetConstantBuffers(0, 1, &cb);
     ctx->PSSetConstantBuffers(0, 1, &cb);
-    ID3D11ShaderResourceView* resources[2] = {backdrop_->srv(), frost_.srv()};
+    ID3D11ShaderResourceView* resources[2] = {backdrop_.srv(), frost_.srv()};
     ctx->PSSetShaderResources(0, 2, resources);
     ID3D11SamplerState* samplers[1] = {sampler_.Get()};
     ctx->PSSetSamplers(0, 1, samplers);

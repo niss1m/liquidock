@@ -130,6 +130,23 @@ inline constexpr float kEdge[4] = {1.0f, 1.0f, 1.0f, 0.10f};
 inline constexpr float kText[4] = {1.0f, 1.0f, 1.0f, 0.95f};
 } // namespace label
 
+// The context menu is glass too, but it is glass with words on it, and that
+// changes what the material has to do. The dock is clear because you are meant
+// to see the desktop through it; a menu is meant to be read, and text over a
+// sharp photograph is unreadable however pretty the photograph. So the menu
+// frosts hard and tints harder, and bends much less - there is no point
+// refracting an image nobody is looking at.
+namespace menu {
+inline constexpr float kRefraction = 0.30f;
+inline constexpr float kDepth = 0.22f;
+inline constexpr float kDispersion = 0.15f;
+inline constexpr float kFrost = 0.80f;
+inline constexpr float kSplay = 0.30f;
+inline constexpr float kLightIntensity = 0.55f;
+// Enough white that the text has something to sit on whatever is behind.
+inline constexpr float kTintAlpha = 0.16f;
+} // namespace menu
+
 // Hard ceiling on dock items. The magnified layout and the glass lenses both
 // travel to the GPU in constant buffers, which want a fixed size; 32 is far
 // past any dock a person would actually use and still only 1 KB of constants.

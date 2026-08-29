@@ -177,7 +177,7 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
     StartIconLoad();
     ApplyBackdropSource();
     running_.Initialize(hwnd_, kRunningMessage);
-    menu_.Initialize(*device_, *shaders_, wallpaper_);
+    menu_.Initialize(*device_, *shaders_);
     if (dumpBackdrop_) {
         SetTimer(hwnd_, kDumpTimer, kDumpDelayMs, nullptr);
     }

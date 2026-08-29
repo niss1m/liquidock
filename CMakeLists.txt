@@ -65,6 +65,7 @@ add_executable(liquidock WIN32
     src/gfx/TextLayer.cpp
     src/gfx/TextureDump.cpp
     src/glass/CaptureBackdrop.cpp
+    src/glass/SnapshotBackdrop.cpp
     src/glass/WallpaperBackdrop.cpp
     src/glass/FrostChain.cpp
     src/model/IconLoader.cpp

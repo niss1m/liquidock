@@ -10,7 +10,7 @@
 #include "gfx/ShaderCache.h"
 #include "gfx/TextLayer.h"
 #include "glass/FrostChain.h"
-#include "glass/WallpaperBackdrop.h"
+#include "glass/SnapshotBackdrop.h"
 
 namespace liquidock {
 
@@ -44,7 +44,7 @@ public:
     GlassMenu& operator=(const GlassMenu&) = delete;
     ~GlassMenu();
 
-    bool Initialize(GraphicsDevice& device, ShaderCache& shaders, WallpaperBackdrop& backdrop);
+    bool Initialize(GraphicsDevice& device, ShaderCache& shaders);
     void Destroy();
 
     // Shows the menu at `screen` and does not return until something is chosen
@@ -63,7 +63,7 @@ private:
 
     GraphicsDevice* device_ = nullptr;
     ShaderCache* shaders_ = nullptr;
-    WallpaperBackdrop* backdrop_ = nullptr;
+    SnapshotBackdrop backdrop_;
 
     HWND hwnd_ = nullptr;
     CompositionTarget target_;
