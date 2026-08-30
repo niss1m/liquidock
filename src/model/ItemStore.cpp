@@ -143,12 +143,17 @@ bool ItemStore::ReadFile(const std::wstring& path) {
     DockItem current;
     bool building = false;
     auto flush = [this, &current, &building]() {
-        // A separator has no path by definition, so the emptiness test that
-        // discards a half-written block has to let it through.
-        if (!building || (current.path.empty() && current.kind != ItemKind::Separator)) {
-            building = false;
+        if (!building) {
             current = DockItem{};
             return;
+        }
+        // An entry with no path launches nothing, so a divider is the only
+        // thing it can sensibly be. This has to come *before* the test that
+        // discards a half-written block, or the block is gone before anything
+        // gets to decide what it was - which is what happened when this was
+        // written the other way round, and the dividers stayed missing.
+        if (current.path.empty()) {
+            current.kind = ItemKind::Separator;
         }
         if (current.kind == ItemKind::Separator) {
             if (static_cast<int>(items_.size()) < design::kMaxItems) {
@@ -278,6 +283,20 @@ bool ItemStore::Save() const {
     fputws(kFileHeader, file);
     for (const DockItem& item : items_) {
         fwprintf(file, L"[item]\n");
+        if (item.kind == ItemKind::Separator) {
+            // A divider has nothing else worth writing, and a block of empty
+            // keys would only invite someone to fill them in.
+            //
+            // This branch was missing, so every save wrote a divider as an app
+            // with no path - and a divider therefore survived exactly until the
+            // next time anything rewrote the file, which adding a second one
+            // does immediately.
+            fwprintf(file, L"kind    = separator\n");
+            fwprintf(file, L"group   = %s\n",
+                     item.group == ItemGroup::Utility ? L"utility" : L"main");
+            fwprintf(file, L"\n");
+            continue;
+        }
         fwprintf(file, L"group   = %s\n",
                  item.group == ItemGroup::Utility ? L"utility" : L"main");
         fwprintf(file, L"path    = %s\n", item.path.c_str());
