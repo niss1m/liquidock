@@ -88,6 +88,15 @@ bool TextLayer::Initialize(GraphicsDevice& device, float fontSize, DWRITE_FONT_W
                 // The number this exists to fix: how far apart the space above
                 // a capital and the space below its baseline are when the line
                 // box is centred.
+                // Pin the line box to the face's own ascent and descent.
+                // Left on DEFAULT, DirectWrite derives the baseline from the
+                // font's *recommended* line height - ascent, descent and the
+                // line gap - so the baseline is not at `top + ascent` and
+                // everything measured from it lands a little low. That gap is
+                // exactly the residual asymmetry left over after centring the
+                // ink, and it is invisible until you measure for it.
+                format_->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, ascent_ + descent_,
+                                        ascent_);
                 LogDebug("Face at {:.1f}px: ascent {:.2f} descent {:.2f} cap {:.2f}, "
                          "line-box centring is off by {:.2f}px",
                          fontSize, ascent_, descent_, capHeight_,
