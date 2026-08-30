@@ -2561,7 +2561,7 @@ void SettingsWindow::DrawTooltip() {
     // outline: it is already the lightest thing on the page, and a hairline on
     // top of that reads as a second edge rather than as a definition of the
     // first.
-    FillPointed(pill, 7.0f, corner, Grey(0.17f, 0.98f * tooltipAlpha_));
+    FillPointed(pill, 7.0f, corner, Grey(0.17f, tooltipAlpha_));
 
     DrawText(text, tipFormat_.Get(),
              D2D1::RectF(pill.left + layout::kTooltipPadX, pill.top,
@@ -3439,8 +3439,6 @@ void SettingsWindow::Render() {
         }
     }
 
-    DrawTooltip();
-
     DrawText(activeTab_ == Tab::Items
                  ? L"Esc to close  ·  Ctrl+Z undoes the last change to the list"
                  : L"Esc to close  ·  these are the same values as settings.txt",
@@ -3449,6 +3447,12 @@ void SettingsWindow::Render() {
                          layout::kWidth - layout::kPadding,
                          static_cast<float>(height_) / scale - 8.0f),
              Grey(1.0f, 0.28f));
+
+    // Last of everything. It floats over the panel by definition, and the
+    // footer used to be drawn after it - which is why a tooltip near the bottom
+    // of the window looked semi-transparent: it was not, the line underneath
+    // was simply painted on top of it.
+    DrawTooltip();
 
     d2d_->SetTransform(D2D1::Matrix3x2F::Identity());
     const HRESULT hr = d2d_->EndDraw();
