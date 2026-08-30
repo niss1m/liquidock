@@ -6,6 +6,7 @@
 #include "core/Log.h"
 
 #include <algorithm>
+#include <iterator>
 
 namespace liquidock {
 
@@ -60,6 +61,40 @@ bool TextLayer::Initialize(GraphicsDevice& device, float fontSize, DWRITE_FONT_W
     format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+    // The face's vertical metrics, for DrawInkCentred. Walked from the format
+    // rather than hard-coded: the family is a parameter and the size is a
+    // setting, and a table of numbers for one font would be wrong for both.
+    fontSize_ = fontSize;
+    ComPtr<IDWriteFontCollection> collection;
+    wchar_t familyName[128]{};
+    if (SUCCEEDED(format_->GetFontCollection(&collection)) &&
+        SUCCEEDED(format_->GetFontFamilyName(familyName, static_cast<UINT32>(std::size(familyName))))) {
+        UINT32 index = 0;
+        BOOL exists = FALSE;
+        ComPtr<IDWriteFontFamily> fontFamily;
+        ComPtr<IDWriteFont> font;
+        if (SUCCEEDED(collection->FindFamilyName(familyName, &index, &exists)) && exists &&
+            SUCCEEDED(collection->GetFontFamily(index, &fontFamily)) &&
+            SUCCEEDED(fontFamily->GetFirstMatchingFont(weight, DWRITE_FONT_STRETCH_NORMAL,
+                                                       DWRITE_FONT_STYLE_NORMAL, &font))) {
+            DWRITE_FONT_METRICS metrics{};
+            font->GetMetrics(&metrics);
+            const float perEm = static_cast<float>(metrics.designUnitsPerEm);
+            if (perEm > 0.0f) {
+                ascent_ = fontSize * static_cast<float>(metrics.ascent) / perEm;
+                descent_ = fontSize * static_cast<float>(metrics.descent) / perEm;
+                capHeight_ = fontSize * static_cast<float>(metrics.capHeight) / perEm;
+                // The number this exists to fix: how far apart the space above
+                // a capital and the space below its baseline are when the line
+                // box is centred.
+                LogDebug("Face at {:.1f}px: ascent {:.2f} descent {:.2f} cap {:.2f}, "
+                         "line-box centring is off by {:.2f}px",
+                         fontSize, ascent_, descent_, capHeight_,
+                         (ascent_ - capHeight_) - descent_);
+            }
+        }
+    }
     return true;
 }
 
@@ -216,6 +251,30 @@ void TextLayer::StrokeRounded(const D2D1_RECT_F& rect, float radius, const D2D1_
     }
     brush_->SetColor(colour);
     d2d_->DrawRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), brush_.Get(), width);
+}
+
+void TextLayer::DrawInkCentred(std::wstring_view text, const D2D1_RECT_F& rect,
+                               const D2D1_COLOR_F& colour) {
+    if (!drawing_ || text.empty()) {
+        return;
+    }
+    if (ascent_ <= 0.0f) {
+        Draw(text, rect, colour); // metrics unavailable; the old behaviour
+        return;
+    }
+
+    // Put the middle of the cap band on the middle of the box. Drawn from the
+    // top, because centring is the thing being replaced.
+    const float centre = (rect.top + rect.bottom) * 0.5f;
+    const float top = centre - ascent_ + capHeight_ * 0.5f;
+    const D2D1_RECT_F box =
+        D2D1::RectF(rect.left, top, rect.right, top + ascent_ + descent_ + 1.0f);
+
+    format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    brush_->SetColor(colour);
+    d2d_->DrawTextW(text.data(), static_cast<UINT32>(text.size()), format_.Get(), box, brush_.Get(),
+                    D2D1_DRAW_TEXT_OPTIONS_NONE);
+    format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 }
 
 void TextLayer::Draw(std::wstring_view text, const D2D1_RECT_F& rect, const D2D1_COLOR_F& colour) {

@@ -223,7 +223,7 @@ void GlassMenu::Render() {
                                               layout::kBleed + width_ - 5.0f, top + rowHeight - 1.0f),
                                   7.0f, kHover);
             }
-            text_.Draw(item.label,
+            text_.DrawInkCentred(item.label,
                        D2D1::RectF(layout::kBleed + layout::kPaddingX, top,
                                    layout::kBleed + width_ - layout::kPaddingX, top + rowHeight),
                        (item.header || !item.enabled) ? kTextDim : kText);

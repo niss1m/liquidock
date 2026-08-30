@@ -58,6 +58,17 @@ public:
                        float width = 1.0f);
     void Draw(std::wstring_view text, const D2D1_RECT_F& rect, const D2D1_COLOR_F& colour);
 
+    // Draws with the *ink* centred in `rect` rather than the line box.
+    //
+    // DirectWrite's paragraph centring centres the line box - ascent plus
+    // descent - and the glyphs are not centred inside that. The space above a
+    // capital is `ascent - capHeight`; the space below its baseline is the whole
+    // descent, which is there for the letters that go below it whether the
+    // string has any or not. For a name like "Notion" the two are several
+    // pixels apart, and on a 26 px pill that reads as the padding being wrong.
+    void DrawInkCentred(std::wstring_view text, const D2D1_RECT_F& rect,
+                        const D2D1_COLOR_F& colour);
+
     // Centred by default, which is what a label wants; a menu wants its items
     // left-aligned against a common edge.
     void SetAlignment(DWRITE_TEXT_ALIGNMENT alignment);
@@ -71,6 +82,13 @@ private:
     ComPtr<ID2D1SolidColorBrush> brush_;
     ComPtr<IDWriteFactory> dwrite_;
     ComPtr<IDWriteTextFormat> format_;
+    // The face's own vertical metrics, in logical pixels at the size this layer
+    // was built for. Read from the font rather than assumed, so changing the
+    // family or the size cannot quietly put the centring out.
+    float fontSize_ = 0.0f;
+    float ascent_ = 0.0f;
+    float descent_ = 0.0f;
+    float capHeight_ = 0.0f;
     bool drawing_ = false;
 };
 

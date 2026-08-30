@@ -1734,7 +1734,7 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     text_.FillTooltip(pill, design::label::kRadius, icon->centerX, design::label::kTailWidth,
                       design::label::kTailHeight, colour(design::label::kFill, labelAlpha_),
                       colour(design::label::kEdge, labelAlpha_));
-    text_.Draw(name, pill, colour(design::label::kText, labelAlpha_));
+    text_.DrawInkCentred(name, pill, colour(design::label::kText, labelAlpha_));
     text_.End();
 
     return moving;
