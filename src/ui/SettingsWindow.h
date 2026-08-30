@@ -123,6 +123,9 @@ private:
 
     // -1 when the point is over no row.
     int RowAt(float x, float y) const;
+    // Which system cursor belongs over this point: a hand where a click does
+    // something, a caret where typing does, an arrow everywhere else.
+    const wchar_t* CursorFor(float x, float y) const;
     // Applies a click or drag at `x` to the row, and returns true if the value
     // actually moved - a redraw and a save are only worth it if it did.
     bool ApplyPointer(int row, float x, bool dragging);

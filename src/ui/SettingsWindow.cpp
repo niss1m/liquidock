@@ -458,6 +458,63 @@ void SettingsWindow::ApplyWindowSize() {
     }
 }
 
+const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
+    if (TabAt(x, y) >= 0) {
+        return IDC_HAND;
+    }
+    const int index = RowAt(x, y);
+    if (index < 0) {
+        return IDC_ARROW;
+    }
+    const Row& row = rows_[static_cast<size_t>(index)];
+    const bool inControl = (x >= row.control.left && x <= row.control.right);
+
+    switch (row.kind) {
+        case Row::Kind::Toggle:
+            return IDC_HAND; // the whole row flips it
+        case Row::Kind::Slider:
+        case Row::Kind::Choice:
+            return inControl ? IDC_HAND : IDC_ARROW;
+        case Row::Kind::AddItem:
+        case Row::Kind::AddSeparator:
+            return IDC_HAND;
+        case Row::Kind::Item: {
+            if (inControl && y >= row.control.top && y <= row.control.bottom) {
+                return IDC_HAND; // move up, move down, remove
+            }
+            if (row.itemIndex == expandedItem_ && y > row.bounds.top + layout::kItemHeight) {
+                D2D1_RECT_F fields[static_cast<int>(Field::Count)];
+                D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
+                EditorRects(row, fields, buttons);
+                for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
+                    const D2D1_RECT_F& button = buttons[i];
+                    if (button.right > button.left && x >= button.left && x <= button.right &&
+                        y >= button.top && y <= button.bottom) {
+                        return IDC_HAND;
+                    }
+                    const D2D1_RECT_F& field = fields[i];
+                    if (x >= field.left && x <= field.right && y >= field.top &&
+                        y <= field.bottom) {
+                        if (i == static_cast<int>(Field::Show) ||
+                            i == static_cast<int>(Field::Admin)) {
+                            return IDC_HAND;
+                        }
+                        if (i == static_cast<int>(Field::Path) ||
+                            i == static_cast<int>(Field::Icon)) {
+                            return IDC_ARROW; // read-only; the button beside it changes them
+                        }
+                        return IDC_IBEAM;
+                    }
+                }
+                return IDC_ARROW;
+            }
+            return IDC_HAND; // the row opens, and drags to reorder
+        }
+        default:
+            return IDC_ARROW;
+    }
+}
+
 int SettingsWindow::TabAt(float x, float y) const {
     for (int i = 0; i < kTabCount; ++i) {
         const D2D1_RECT_F& box = tabBounds_[i];
@@ -1529,6 +1586,19 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return HTCLIENT;
         }
 
+        case WM_SETCURSOR:
+            if (LOWORD(lParam) == HTCLIENT) {
+                POINT cursor{};
+                const wchar_t* shape = IDC_ARROW;
+                if (GetCursorPos(&cursor) && ScreenToClient(hwnd, &cursor)) {
+                    shape = CursorFor(static_cast<float>(cursor.x) / scale,
+                                      static_cast<float>(cursor.y) / scale);
+                }
+                SetCursor(LoadCursorW(nullptr, shape));
+                return TRUE;
+            }
+            break;
+
         case WM_MOUSEMOVE: {
             if (!mouseTracking_) {
                 TRACKMOUSEEVENT track{sizeof(track)};
@@ -1627,6 +1697,16 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     draggingItem_ = false;
                     dropIndex_ = -1;
                     SetCapture(hwnd);
+                    return 0;
+                }
+                // Sliders and choices only respond over their own control.
+                // They used to take a click anywhere on the row, so clicking a
+                // label slammed the value to whichever end was nearer - which
+                // the pointer would now be promising is safe.
+                const Row& control = rows_[static_cast<size_t>(row)];
+                const bool needsControl =
+                    (control.kind == Row::Kind::Slider || control.kind == Row::Kind::Choice);
+                if (needsControl && (x < control.control.left || x > control.control.right)) {
                     return 0;
                 }
                 if (ApplyPointer(row, x, false)) {

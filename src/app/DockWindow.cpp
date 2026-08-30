@@ -1784,6 +1784,25 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return HTTRANSPARENT;
         }
 
+        case WM_SETCURSOR:
+            // Only over the dock's own silhouette; anywhere else the window has
+            // already said HTTRANSPARENT and the cursor belongs to whatever is
+            // underneath.
+            if (LOWORD(lParam) == HTCLIENT) {
+                POINT cursor{};
+                float x = 0.0f;
+                float y = 0.0f;
+                const bool onIcon = GetCursorPos(&cursor) &&
+                                    CursorToLayout(cursor, &x, &y) && layout_.ItemAt(x, y) >= 0;
+                // A hand over the icons and nothing else. The bar between them
+                // launches nothing, and a pointer that promises a click
+                // everywhere tells you as little as one that promises it
+                // nowhere.
+                SetCursor(LoadCursorW(nullptr, onIcon ? IDC_HAND : IDC_ARROW));
+                return TRUE;
+            }
+            break;
+
         case WM_MOUSEACTIVATE:
             // Take the click, but do not become the active window and do not
             // eat the click doing it. WS_EX_NOACTIVATE already stops the

@@ -332,6 +332,20 @@ LRESULT GlassMenu::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             return 0;
         }
 
+        case WM_SETCURSOR: {
+            // The menu holds capture, so this arrives wherever the cursor is;
+            // ItemAt returns -1 outside the panel and the arrow is right there.
+            POINT cursor{};
+            int hit = -1;
+            if (GetCursorPos(&cursor)) {
+                ScreenToClient(hwnd, &cursor);
+                hit = ItemAt(static_cast<float>(cursor.x) / scale,
+                             static_cast<float>(cursor.y) / scale);
+            }
+            SetCursor(LoadCursorW(nullptr, hit >= 0 ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+
         case WM_MOUSEMOVE: {
             // With the mouse captured these arrive in our client coordinates
             // however far outside the window the cursor is, which is exactly
