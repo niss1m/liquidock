@@ -164,6 +164,11 @@ struct Settings {
     // succeeds: an unreadable file leaves every default in place.
     void Load();
 
+    // The same thing against a file that is not the live one. Used to read a
+    // saved profile without switching to it, which is what makes "copy this
+    // profile" different from "copy what I am running".
+    void LoadFrom(const std::wstring& path);
+
     // Writes the current values back, rewriting only the value half of each
     // `key = value` line and leaving every comment, blank line and unknown key
     // exactly where it was. A settings file the user has annotated must survive

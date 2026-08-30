@@ -195,6 +195,13 @@ void Settings::Load() {
     }
 }
 
+void Settings::LoadFrom(const std::wstring& path) {
+    Load(); // defaults, then the live file, so a profile missing a key inherits
+    if (!path.empty()) {
+        ReadFile(path);
+    }
+}
+
 bool Settings::ReadFile(const std::wstring& path) {
     FILE* file = nullptr;
     if (_wfopen_s(&file, path.c_str(), L"rt, ccs=UTF-8") != 0 || !file) {

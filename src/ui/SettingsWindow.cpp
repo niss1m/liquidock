@@ -998,7 +998,7 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
         case Row::Kind::Action:
             return IDC_HAND;
         case Row::Kind::Profile: {
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < kProfileActions; ++i) {
                 const D2D1_RECT_F box = ProfileAction(row, i);
                 if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) {
                     return IDC_HAND;
@@ -2350,10 +2350,15 @@ void SettingsWindow::DrawProfile(const Row& row, bool hovered) {
     d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, layout::kPillRadius, layout::kPillRadius),
                                brush_.Get());
 
+    // Centred on the card like every other label here. Hung from the top it
+    // sat a few pixels high of the buttons beside it, which is the whole of
+    // what "looks broken" was.
+    labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     DrawText(profiles_[index], labelFormat_.Get(),
              D2D1::RectF(pill.left + layout::kLabelIndent, pill.top,
-                         pill.right - 150.0f, pill.bottom),
+                         ProfileAction(row, 0).left - 12.0f, pill.bottom),
              kLabel);
+    labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 
     if (!hovered) {
         return;
@@ -2361,8 +2366,8 @@ void SettingsWindow::DrawProfile(const Row& row, bool hovered) {
     // Three words rather than three glyphs. This row does something
     // irreversible and something that overwrites; an icon for either would be
     // a guess the reader has to make.
-    const wchar_t* const actions[3] = {L"Use", L"Save", L"Delete"};
-    for (int i = 0; i < 3; ++i) {
+    const wchar_t* const actions[kProfileActions] = {L"Use", L"Copy", L"Save", L"Delete"};
+    for (int i = 0; i < kProfileActions; ++i) {
         const D2D1_RECT_F box = ProfileAction(row, i);
         const bool under = pointerX_ >= box.left && pointerX_ <= box.right &&
                            pointerY_ >= box.top && pointerY_ <= box.bottom;
@@ -2382,7 +2387,8 @@ D2D1_RECT_F SettingsWindow::ProfileAction(const Row& row, int index) const {
     const D2D1_RECT_F pill = PillRect(row);
     const float centreY = (pill.top + pill.bottom) * 0.5f;
     const float width = 52.0f;
-    const float right = pill.right - layout::kPillPadX - (2 - index) * (width + 6.0f);
+    const float right =
+        pill.right - layout::kPillPadX - (kProfileActions - 1 - index) * (width + 6.0f);
     return D2D1::RectF(right - width, centreY - 13.0f, right, centreY + 13.0f);
 }
 
@@ -3701,10 +3707,24 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                         return 0;
                     }
                     const std::wstring name = profiles_[index];
-                    for (int i = 0; i < 3; ++i) {
+                    for (int i = 0; i < kProfileActions; ++i) {
                         const D2D1_RECT_F box = ProfileAction(entry, i);
                         if (x < box.left || x > box.right || y < box.top || y > box.bottom) {
                             continue;
+                        }
+                        if (i == 1) {
+                            // That profile's token, not the running one's -
+                            // otherwise "copy" on a row you are not using would
+                            // quietly hand over something else.
+                            Settings saved;
+                            saved.LoadFrom(ProfileStore::FileFor(name));
+                            const std::wstring token = saved.ToToken();
+                            Announce(SetClipboardText(token)
+                                         ? (L"Copied " + name + L" - " +
+                                            std::to_wstring(token.size()) + L" characters")
+                                         : L"Could not reach the clipboard");
+                            InvalidateRect(hwnd, nullptr, FALSE);
+                            return 0;
                         }
                         if (i == 0) {
                             // Switching is a copy over the live file; the dock's
@@ -3716,7 +3736,7 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                             } else {
                                 Announce(L"Could not read that profile");
                             }
-                        } else if (i == 1) {
+                        } else if (i == 2) {
                             Announce(ProfileStore::Save(name)
                                          ? (L"Saved the current settings into " + name)
                                          : L"Could not write that profile");

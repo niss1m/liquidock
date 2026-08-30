@@ -83,6 +83,10 @@ std::vector<std::wstring> ProfileStore::List() {
     return names;
 }
 
+std::wstring ProfileStore::FileFor(const std::wstring& name) {
+    return PathFor(name);
+}
+
 bool ProfileStore::Exists(const std::wstring& name) {
     const std::wstring path = PathFor(name);
     if (path.empty()) {

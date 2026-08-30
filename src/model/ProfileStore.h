@@ -27,6 +27,10 @@ public:
     static bool Remove(const std::wstring& name);
     static bool Exists(const std::wstring& name);
 
+    // The profile's own file path, for anything that wants to read it without
+    // switching to it.
+    static std::wstring FileFor(const std::wstring& name);
+
     // A name that cannot escape the folder or collide with the file system's
     // own ideas. Empty if nothing usable is left after cleaning.
     static std::wstring Clean(const std::wstring& name);

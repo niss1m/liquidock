@@ -234,6 +234,8 @@ private:
     // True while the new-profile button has become a field waiting for a
     // name. Enter keeps it, Escape gives up.
     bool naming_ = false;
+    // Use, Copy, Save, Delete.
+    static constexpr int kProfileActions = 4;
     D2D1_RECT_F ProfileAction(const Row& row, int index) const;
     void ReloadProfiles();
     void Announce(const std::wstring& text);
