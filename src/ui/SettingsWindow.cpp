@@ -91,7 +91,9 @@ constexpr float kHoverSeconds = 0.11f;
 constexpr float kTooltipDelay = 0.28f;
 constexpr float kTooltipFade = 0.12f;
 constexpr float kTooltipPadX = 13.0f;
-constexpr float kTooltipHeight = 32.0f;
+// Roomier than the text needs, on purpose: a tooltip that hugs its own
+// ascender reads as cramped however well centred it is.
+constexpr float kTooltipHeight = 34.0f;
 // Clear of the pointer, below and to the right, the way every tooltip is.
 constexpr float kTooltipOffsetX = 16.0f;
 constexpr float kTooltipOffsetY = 20.0f;
@@ -99,7 +101,7 @@ constexpr float kSectionHeight = 46.0f;
 constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
 constexpr float kChoicePadX = 13.0f;
-constexpr float kChoiceHeight = 26.0f;
+constexpr float kChoiceHeight = 29.0f;
 constexpr float kEmptyHeight = 30.0f;
 // The value gets a column of its own on the right of the card, and the track
 // stops before it. Sharing the width meant that at the top of a range the knob
@@ -810,6 +812,55 @@ bool SettingsWindow::CreateDeviceResources() {
     LD_CHECK(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                  reinterpret_cast<IUnknown**>(dwrite_.GetAddressOf())));
 
+    // DirectWrite's vertical centring centres the *line box*, and a line box is
+    // whatever line height the font recommends - which reserves more room above
+    // the ascent than below the descent, because that is what stacked lines of
+    // prose want. One line inside a pill wants the opposite: the ink centred.
+    // Collapsing the line to exactly ascent + descent, with the baseline at the
+    // ascent, makes the line box the ink box, and centring it then centres what
+    // you can actually see. Which is the same fix the dock's hover label needed,
+    // for the same reason.
+    //
+    // Nudging the rectangle down by a pixel or two is what this replaces. That
+    // works at exactly one font size and is wrong at every other, so the panel
+    // had four different nudges in it and none of them agreed.
+    auto tighten = [this](IDWriteTextFormat* format) {
+        if (!format) {
+            return;
+        }
+        ComPtr<IDWriteFontCollection> collection;
+        if (FAILED(format->GetFontCollection(&collection)) || !collection) {
+            if (FAILED(dwrite_->GetSystemFontCollection(&collection, FALSE))) {
+                return;
+            }
+        }
+        wchar_t family[128]{};
+        if (FAILED(format->GetFontFamilyName(family, static_cast<UINT32>(std::size(family))))) {
+            return;
+        }
+        UINT32 index = 0;
+        BOOL exists = FALSE;
+        if (FAILED(collection->FindFamilyName(family, &index, &exists)) || !exists) {
+            return;
+        }
+        ComPtr<IDWriteFontFamily> group;
+        ComPtr<IDWriteFont> font;
+        if (FAILED(collection->GetFontFamily(index, &group)) ||
+            FAILED(group->GetFirstMatchingFont(format->GetFontWeight(), format->GetFontStretch(),
+                                               format->GetFontStyle(), &font))) {
+            return;
+        }
+        DWRITE_FONT_METRICS metrics{};
+        font->GetMetrics(&metrics);
+        if (metrics.designUnitsPerEm == 0) {
+            return;
+        }
+        const float em = format->GetFontSize() / static_cast<float>(metrics.designUnitsPerEm);
+        const float ascent = metrics.ascent * em;
+        const float descent = metrics.descent * em;
+        format->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, ascent + descent, ascent);
+    };
+
     // Segoe UI Variable on Windows 11, Segoe UI everywhere else - DirectWrite
     // falls back on its own when the first is missing.
     auto format = [this](float size, DWRITE_FONT_WEIGHT weight, IDWriteTextFormat** out) {
@@ -846,6 +897,15 @@ bool SettingsWindow::CreateDeviceResources() {
     // The value is drawn into the whole height of the card now, not onto a
     // single baseline beside a control, so it has to find its own middle.
     valueFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+    // Everything that is ever drawn centred in a box, which on this panel is
+    // everything.
+    tighten(titleFormat_.Get());
+    tighten(sectionFormat_.Get());
+    tighten(labelFormat_.Get());
+    tighten(hintFormat_.Get());
+    tighten(tipFormat_.Get());
+    tighten(valueFormat_.Get());
     return true;
 }
 
@@ -1600,7 +1660,7 @@ void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
         const D2D1_COLOR_F colour = Mix(kValue, Grey(1.0f, 1.0f), lit);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         DrawText(row.options[static_cast<size_t>(i)], valueFormat_.Get(),
-                 D2D1::RectF(cell.left, cell.top + 4.0f, cell.right, cell.bottom), colour);
+                 D2D1::RectF(cell.left, cell.top, cell.right, cell.bottom), colour);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
 
@@ -1910,7 +1970,7 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
         d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 6.0f, 6.0f), brush_.Get());
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         DrawText(row.label, valueFormat_.Get(),
-                 D2D1::RectF(pill.left, pill.top + 3.0f, pill.right, pill.bottom), kLabel);
+                 D2D1::RectF(pill.left, pill.top, pill.right, pill.bottom), kLabel);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
         return;
     }
@@ -1977,7 +2037,7 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
         d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 9.0f, 9.0f), brush_.Get());
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         DrawText(L"utility", valueFormat_.Get(),
-                 D2D1::RectF(pill.left, pill.top + 1.0f, pill.right, pill.bottom), kValue);
+                 D2D1::RectF(pill.left, pill.top, pill.right, pill.bottom), kValue);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
 
@@ -2054,7 +2114,7 @@ void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
     for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
         const D2D1_RECT_F& field = fields[i];
         DrawText(kNames[i], hintFormat_.Get(),
-                 D2D1::RectF(labelLeft, field.top + 3.0f, labelLeft + layout::kEditorLabel,
+                 D2D1::RectF(labelLeft, field.top, labelLeft + layout::kEditorLabel,
                              field.bottom),
                  kHint);
 
@@ -2079,7 +2139,7 @@ void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
         const std::wstring text = editing ? editText_ : values[i];
         const bool empty = text.empty();
         DrawText(empty ? L"—" : text, labelFormat_.Get(),
-                 D2D1::RectF(field.left + 8.0f, field.top + 2.0f, field.right - 8.0f, field.bottom),
+                 D2D1::RectF(field.left + 8.0f, field.top, field.right - 8.0f, field.bottom),
                  empty ? kHint : kLabel);
 
         if (editing) {
@@ -2111,7 +2171,7 @@ void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
             d2d_->FillRoundedRectangle(D2D1::RoundedRect(button, 5.0f, 5.0f), brush_.Get());
             valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             DrawText(kButtons[i], valueFormat_.Get(),
-                     D2D1::RectF(button.left, button.top + 3.0f, button.right, button.bottom),
+                     D2D1::RectF(button.left, button.top, button.right, button.bottom),
                      kLabel);
             valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
         }
@@ -2126,7 +2186,7 @@ void SettingsWindow::DrawSearch() {
     d2d_->FillRectangle(
         D2D1::RectF(searchRect_.left, baseline, searchRect_.right, baseline + 1.0f), brush_.Get());
 
-    const D2D1_RECT_F text = D2D1::RectF(searchRect_.left + 2.0f, searchRect_.top + 2.0f,
+    const D2D1_RECT_F text = D2D1::RectF(searchRect_.left + 2.0f, searchRect_.top,
                                          searchRect_.right, searchRect_.bottom);
     if (search_.empty()) {
         DrawText(L"Search installed apps", hintFormat_.Get(), text,
@@ -2343,7 +2403,7 @@ void SettingsWindow::Render() {
                                             layout::kWidth - layout::kPadding, gridRuleY_ + 1.0f),
                                 brush_.Get());
             DrawText(L"Installed, not on the dock — click to add", hintFormat_.Get(),
-                     D2D1::RectF(layout::kPadding, searchRect_.top + 4.0f, searchRect_.left - 12.0f,
+                     D2D1::RectF(layout::kPadding, searchRect_.top, searchRect_.left - 12.0f,
                                  searchRect_.bottom),
                      kHint);
             DrawSearch();
