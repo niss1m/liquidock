@@ -25,8 +25,6 @@ bool CopyBitmap(HBITMAP bitmap, int size, std::vector<uint32_t>& out) {
         return false;
     }
 
-    const int width = std::min<int>(info.bmWidth, size);
-    const int height = std::min<int>(info.bmHeight, size);
 
     BITMAPINFO request{};
     request.bmiHeader.biSize = sizeof(request.bmiHeader);
@@ -66,27 +64,82 @@ bool CopyBitmap(HBITMAP bitmap, int size, std::vector<uint32_t>& out) {
         }
     }
 
+    // Straightened and premultiplied in place, before any of it is averaged:
+    // mixing straight-alpha pixels together darkens the transparent edge, which
+    // is the halo this was fixing in the first place.
+    for (uint32_t& pixel : source) {
+        uint32_t a = pixel >> 24;
+        uint32_t b = pixel & 0xFF;
+        uint32_t g = (pixel >> 8) & 0xFF;
+        uint32_t r = (pixel >> 16) & 0xFF;
+        if (!anyAlpha) {
+            a = 255;
+        } else if (straightAlpha) {
+            b = (b * a + 127) / 255;
+            g = (g * a + 127) / 255;
+            r = (r * a + 127) / 255;
+        }
+        pixel = (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
     out.assign(static_cast<size_t>(size) * size, 0);
+
+    // SIIGBF_BIGGERSIZEOK means what comes back is routinely larger than what
+    // was asked for - forty-eight for a forty, two hundred and fifty-six for
+    // anything - and it used to be *cropped* to the requested square, which
+    // quietly threw away the right and bottom of every oversized icon. Scaled
+    // down instead, by averaging every source pixel that falls inside a
+    // destination one: at these ratios that is a better answer than anything
+    // sampling-based, and it costs one pass over an image measured in tens of
+    // kilobytes.
+    const int sourceWidth = info.bmWidth;
+    const int sourceHeight = info.bmHeight;
+    const float ratio =
+        std::min(static_cast<float>(size) / sourceWidth, static_cast<float>(size) / sourceHeight);
+
+    if (ratio >= 1.0f) {
+        // Small enough to place as it is. Centred rather than stretched: a
+        // thirty-two pixel icon blown up to forty is worse than one sitting in
+        // the middle of forty with room around it.
+        const int width = std::min(sourceWidth, size);
+        const int height = std::min(sourceHeight, size);
+        const int left = (size - width) / 2;
+        const int top = (size - height) / 2;
+        for (int y = 0; y < height; ++y) {
+            const uint32_t* sourceRow = source.data() + static_cast<size_t>(y) * sourceWidth;
+            uint32_t* destRow = out.data() + static_cast<size_t>(top + y) * size + left;
+            std::copy(sourceRow, sourceRow + width, destRow);
+        }
+        return true;
+    }
+
+    const int width = std::max(1, static_cast<int>(std::lround(sourceWidth * ratio)));
+    const int height = std::max(1, static_cast<int>(std::lround(sourceHeight * ratio)));
     const int left = (size - width) / 2;
     const int top = (size - height) / 2;
 
     for (int y = 0; y < height; ++y) {
-        const uint32_t* sourceRow = source.data() + static_cast<size_t>(y) * info.bmWidth;
+        const int y0 = y * sourceHeight / height;
+        const int y1 = std::max(y0 + 1, (y + 1) * sourceHeight / height);
         uint32_t* destRow = out.data() + static_cast<size_t>(top + y) * size + left;
         for (int x = 0; x < width; ++x) {
-            const uint32_t pixel = sourceRow[x];
-            uint32_t a = pixel >> 24;
-            uint32_t b = pixel & 0xFF;
-            uint32_t g = (pixel >> 8) & 0xFF;
-            uint32_t r = (pixel >> 16) & 0xFF;
-            if (!anyAlpha) {
-                a = 255;
-            } else if (straightAlpha) {
-                b = (b * a + 127) / 255;
-                g = (g * a + 127) / 255;
-                r = (r * a + 127) / 255;
+            const int x0 = x * sourceWidth / width;
+            const int x1 = std::max(x0 + 1, (x + 1) * sourceWidth / width);
+            uint32_t sums[4]{};
+            for (int sy = y0; sy < y1; ++sy) {
+                const uint32_t* sourceRow = source.data() + static_cast<size_t>(sy) * sourceWidth;
+                for (int sx = x0; sx < x1; ++sx) {
+                    const uint32_t pixel = sourceRow[sx];
+                    sums[0] += pixel & 0xFF;
+                    sums[1] += (pixel >> 8) & 0xFF;
+                    sums[2] += (pixel >> 16) & 0xFF;
+                    sums[3] += pixel >> 24;
+                }
             }
-            destRow[x] = (a << 24) | (r << 16) | (g << 8) | b;
+            const uint32_t count = static_cast<uint32_t>(y1 - y0) * static_cast<uint32_t>(x1 - x0);
+            const uint32_t half = count / 2;
+            destRow[x] = (((sums[3] + half) / count) << 24) | (((sums[2] + half) / count) << 16) |
+                         (((sums[1] + half) / count) << 8) | ((sums[0] + half) / count);
         }
     }
     return true;

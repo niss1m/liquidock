@@ -166,6 +166,11 @@ private:
     void DrawTileBadge(const Row& row, bool hovered, bool suggestion);
     // What a tile is showing, so drawing and hit testing agree.
     const std::wstring& SuggestionLabel(int index) const;
+    // Which suggestions the search box currently lets through, as indices into
+    // suggestions_. Everything downstream - rows, layout, measurement - counts
+    // this rather than the catalog.
+    void ApplyFilter();
+    void DrawSearch();
 
     // -1 when the point is over no row.
     int RowAt(float x, float y) const;
@@ -246,6 +251,10 @@ private:
     std::vector<CatalogEntry> suggestions_;
     IconLoader suggestionLoader_;
     std::vector<ComPtr<ID2D1Bitmap>> suggestionIcons_;
+    std::vector<int> filtered_;
+    std::wstring search_;
+    bool searchFocused_ = false;
+    D2D1_RECT_F searchRect_{};
     Tab activeTab_ = Tab::Items;
     D2D1_RECT_F tabBounds_[kTabCount]{};
     D2D1_RECT_F buttonBounds_[2]{};

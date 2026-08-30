@@ -136,7 +136,10 @@ constexpr float kTile = 58.0f;      // one cell, icon and its air
 constexpr float kTileIcon = 40.0f;
 constexpr float kTileGap = 6.0f;
 constexpr float kGridGap = 18.0f;   // between the dock's grid and the divider
-constexpr float kGridRuleGap = 14.0f;
+constexpr float kGridRuleGap = 16.0f;  // between the header line and the icons
+constexpr float kRuleCaptionGap = 8.0f;
+constexpr float kSearchWidth = 220.0f;
+constexpr float kSearchHeight = 26.0f;
 // The fixed row of add buttons above the list, and how wide each one is.
 constexpr float kActionRow = 56.0f;
 constexpr float kActionWidth = 124.0f;
@@ -332,11 +335,12 @@ void SettingsWindow::BuildRows() {
         row.column = 0;
         rows_.push_back(std::move(row));
     }
-    for (size_t i = 0; i < suggestions_.size(); ++i) {
+    ApplyFilter();
+    for (const int index : filtered_) {
         Row row;
         row.kind = Row::Kind::Suggestion;
         row.tab = Tab::Items;
-        row.itemIndex = static_cast<int>(i);
+        row.itemIndex = index;
         row.column = 0;
         rows_.push_back(std::move(row));
     }
@@ -477,10 +481,9 @@ float SettingsWindow::MeasureTab(Tab tab) const {
         if (expandedItem_ >= 0) {
             y[0] += layout::kEditorHeight + 8.0f;
         }
-        y[0] += layout::kGridGap;
-        if (!suggestions_.empty()) {
-            y[0] += layout::kGridRuleGap + lines(suggestions_.size()) * line;
-        }
+        y[0] += layout::kGridGap + layout::kRuleCaptionGap + layout::kSearchHeight +
+                layout::kGridRuleGap;
+        y[0] += lines(filtered_.size()) * line;
     }
     float tallest = *std::max_element(y, y + columns);
     if (tab == Tab::Items) {
@@ -642,6 +645,10 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
     if (WindowButtonAt(x, y) >= 0 || TabAt(x, y) >= 0) {
         return IDC_HAND;
     }
+    if (activeTab_ == Tab::Items && !suggestions_.empty() && x >= searchRect_.left &&
+        x <= searchRect_.right && y >= searchRect_.top - 4.0f && y <= searchRect_.bottom + 4.0f) {
+        return IDC_IBEAM;
+    }
     if (activeTab_ == Tab::Items && expandedItem_ >= 0 && x >= editorPanel_.left &&
         x <= editorPanel_.right && y >= editorPanel_.top && y <= editorPanel_.bottom) {
         return EditorCursorFor(x, y);
@@ -741,9 +748,18 @@ float SettingsWindow::LayoutGrids(float top, float width) {
     }
 
     gridRuleY_ = y + layout::kGridGap - itemScroll_;
-    if (!suggestions_.empty()) {
-        y = place(Row::Kind::Suggestion, y + layout::kGridGap + layout::kGridRuleGap);
-    }
+
+    // The header line under the rule carries the caption on the left and the
+    // search box on the right, and the grid starts a clear gap below it - the
+    // caption sitting directly on top of the first line of icons read as a
+    // label for the icon under it rather than for the section.
+    const float headerTop = gridRuleY_ + layout::kRuleCaptionGap;
+    searchRect_ = D2D1::RectF(layout::kWidth - layout::kPadding - layout::kSearchWidth, headerTop,
+                              layout::kWidth - layout::kPadding,
+                              headerTop + layout::kSearchHeight);
+    y = place(Row::Kind::Suggestion,
+              y + layout::kGridGap + layout::kRuleCaptionGap + layout::kSearchHeight +
+                  layout::kGridRuleGap);
     return y;
 }
 
@@ -873,6 +889,9 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
 
     // After the device resources, because turning the pixels into D2D bitmaps
     // needs the context that CreateDeviceResources builds.
+    search_.clear();
+    searchFocused_ = false;
+    filtered_.clear();
     StartIconLoad();
     StartCatalogLoad();
 
@@ -1252,7 +1271,12 @@ void SettingsWindow::StartIconLoad() {
     // calls can block for tens of milliseconds each on a cold cache, and the
     // preferences window is opened by a click - stalling it for a second while
     // forty icons are fetched would be the most visible slowness in the program.
-    iconLoader_.Start(items_.items(), static_cast<int>(layout::kItemIcon), hwnd_, kIconsMessage);
+    // At the size the grid draws them, in device pixels. Loading them at the
+    // old list's twenty-four and drawing them into a forty-pixel cell is an
+    // upscale of two thirds, and looks it.
+    const float scale = static_cast<float>(dpi_) / 96.0f;
+    iconLoader_.Start(items_.items(), static_cast<int>(std::lround(layout::kTileIcon * scale)),
+                      hwnd_, kIconsMessage);
 }
 
 void SettingsWindow::DrainIcons() {
@@ -1684,6 +1708,32 @@ void SettingsWindow::DrawTabs() {
     }
 }
 
+void SettingsWindow::ApplyFilter() {
+    filtered_.clear();
+    filtered_.reserve(suggestions_.size());
+
+    // Case-folded substring, over the name and the path both: people look for
+    // "code" as readily as they look for "Visual Studio", and the thing they
+    // typed is as likely to be in the executable's name as in its label.
+    std::wstring needle = search_;
+    for (wchar_t& ch : needle) {
+        ch = static_cast<wchar_t>(towlower(ch));
+    }
+    for (size_t i = 0; i < suggestions_.size(); ++i) {
+        if (needle.empty()) {
+            filtered_.push_back(static_cast<int>(i));
+            continue;
+        }
+        std::wstring hay = suggestions_[i].label + L" " + suggestions_[i].path;
+        for (wchar_t& ch : hay) {
+            ch = static_cast<wchar_t>(towlower(ch));
+        }
+        if (hay.find(needle) != std::wstring::npos) {
+            filtered_.push_back(static_cast<int>(i));
+        }
+    }
+}
+
 const std::wstring& SettingsWindow::SuggestionLabel(int index) const {
     static const std::wstring empty;
     if (index < 0 || static_cast<size_t>(index) >= suggestions_.size()) {
@@ -1993,6 +2043,48 @@ void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
     }
 }
 
+void SettingsWindow::DrawSearch() {
+    // No box and no border: a rule under the text is enough to say "type here",
+    // and a bordered field on this panel would be the only outlined thing on it.
+    const float baseline = searchRect_.bottom;
+    brush_->SetColor(Grey(1.0f, searchFocused_ ? 0.28f : 0.12f));
+    d2d_->FillRectangle(
+        D2D1::RectF(searchRect_.left, baseline, searchRect_.right, baseline + 1.0f), brush_.Get());
+
+    const D2D1_RECT_F text = D2D1::RectF(searchRect_.left + 2.0f, searchRect_.top + 2.0f,
+                                         searchRect_.right, searchRect_.bottom);
+    if (search_.empty()) {
+        DrawText(L"Search installed apps", hintFormat_.Get(), text,
+                 Grey(1.0f, searchFocused_ ? 0.35f : 0.28f));
+    } else {
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        DrawText(search_, valueFormat_.Get(), text, kValue);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
+
+    if (searchFocused_) {
+        // The caret sits after the text rather than inside it: this field has no
+        // cursor keys, because there is nothing here worth editing in the middle
+        // of - you type a few letters and the grid answers.
+        float width = 0.0f;
+        if (!search_.empty()) {
+            ComPtr<IDWriteTextLayout> layout;
+            if (SUCCEEDED(dwrite_->CreateTextLayout(search_.c_str(),
+                                                    static_cast<UINT32>(search_.size()),
+                                                    valueFormat_.Get(), 400.0f, 40.0f, &layout))) {
+                DWRITE_TEXT_METRICS metrics{};
+                layout->GetMetrics(&metrics);
+                width = metrics.widthIncludingTrailingWhitespace;
+            }
+        }
+        const float x = searchRect_.left + 2.0f + width + 1.0f;
+        brush_->SetColor(kOn);
+        d2d_->FillRectangle(
+            D2D1::RectF(x, searchRect_.top + 4.0f, x + 1.4f, searchRect_.bottom - 2.0f),
+            brush_.Get());
+    }
+}
+
 void SettingsWindow::DrawDetailBar() {
     const float scale = static_cast<float>(dpi_) / 96.0f;
     const float top = static_cast<float>(height_) / scale - layout::kFooterHeight -
@@ -2169,16 +2261,24 @@ void SettingsWindow::Render() {
 
     if (activeTab_ == Tab::Items) {
         // The rule between what is on the dock and what could be.
-        if (!suggestions_.empty() && gridRuleY_ > itemsClip_.top &&
+        if (!suggestions_.empty() && gridRuleY_ > itemsClip_.top - layout::kSearchHeight &&
             gridRuleY_ < itemsClip_.bottom) {
             brush_->SetColor(Grey(1.0f, 0.10f));
             d2d_->FillRectangle(D2D1::RectF(layout::kPadding, gridRuleY_,
                                             layout::kWidth - layout::kPadding, gridRuleY_ + 1.0f),
                                 brush_.Get());
             DrawText(L"Installed, not on the dock — click to add", hintFormat_.Get(),
-                     D2D1::RectF(layout::kPadding, gridRuleY_ + 5.0f,
-                                 layout::kWidth - layout::kPadding, gridRuleY_ + 24.0f),
+                     D2D1::RectF(layout::kPadding, searchRect_.top + 4.0f, searchRect_.left - 12.0f,
+                                 searchRect_.bottom),
                      kHint);
+            DrawSearch();
+            if (filtered_.empty()) {
+                DrawText(L"Nothing installed matches that.", hintFormat_.Get(),
+                         D2D1::RectF(layout::kPadding, searchRect_.bottom + layout::kGridRuleGap,
+                                     layout::kWidth - layout::kPadding,
+                                     searchRect_.bottom + layout::kGridRuleGap + 20.0f),
+                         kHint);
+            }
         }
         if (editorPanel_.bottom > editorPanel_.top) {
             DrawEditor(editorPanel_, expandedItem_);
@@ -2378,6 +2478,25 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 return 0;
             }
 
+            if (activeTab_ == Tab::Items && !suggestions_.empty()) {
+                // Before RowAt, not after: the field is not a row, so a click on
+                // it finds nothing, and a test that lives inside "found a row"
+                // never runs. Generous on the vertical, because the field is a
+                // line of text over a hairline and aiming at a hairline is not a
+                // thing to ask of anyone.
+                const bool inSearch = x >= searchRect_.left && x <= searchRect_.right &&
+                                      y >= searchRect_.top - 6.0f &&
+                                      y <= searchRect_.bottom + 6.0f;
+                if (inSearch != searchFocused_) {
+                    searchFocused_ = inSearch;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                if (inSearch) {
+                    CommitEdit();
+                    return 0;
+                }
+            }
+
             const int row = RowAt(x, y);
             if (row >= 0) {
                 const Row::Kind kind = rows_[static_cast<size_t>(row)].kind;
@@ -2521,6 +2640,28 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         }
 
         case WM_CHAR:
+            if (searchFocused_) {
+                const wchar_t ch = static_cast<wchar_t>(wParam);
+                if (ch == VK_BACK) {
+                    if (!search_.empty()) {
+                        search_.pop_back();
+                    }
+                } else if (ch >= 0x20) {
+                    search_.push_back(ch);
+                } else {
+                    return 0;
+                }
+                // The grid is rebuilt rather than hidden row by row: the tiles
+                // have to close up after a filter, and their positions are the
+                // only thing that says which entry a click meant.
+                itemScroll_ = 0.0f;
+                hoverRow_ = -1;
+                BuildRows();
+                LayoutRows();
+                ApplyWindowSize();
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (editItem_ >= 0 && editField_ != Field::Count) {
                 const wchar_t ch = static_cast<wchar_t>(wParam);
                 if (ch == VK_BACK) {
@@ -2601,6 +2742,23 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     return 0;
                 }
             }
+            if (wParam == VK_ESCAPE && searchFocused_) {
+                // Clears the search first and leaves the field second. Escape
+                // closing the window out from under a half-typed filter is the
+                // sort of thing that loses you the window you were working in.
+                if (!search_.empty()) {
+                    search_.clear();
+                    itemScroll_ = 0.0f;
+                    hoverRow_ = -1;
+                    BuildRows();
+                    LayoutRows();
+                    ApplyWindowSize();
+                } else {
+                    searchFocused_ = false;
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (wParam == VK_ESCAPE) {
                 Hide();
             }
@@ -2646,8 +2804,10 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 item.label = entry.label;
                 wanted.push_back(std::move(item));
             }
-            suggestionLoader_.Start(std::move(wanted), static_cast<int>(layout::kTileIcon),
-                                    hwnd_, kSuggestionIconsMessage);
+            const float scale = static_cast<float>(dpi_) / 96.0f;
+            suggestionLoader_.Start(std::move(wanted),
+                                    static_cast<int>(std::lround(layout::kTileIcon * scale)), hwnd_,
+                                    kSuggestionIconsMessage);
             BuildRows();
             LayoutRows();
             ApplyWindowSize();
