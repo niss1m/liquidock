@@ -240,6 +240,10 @@ bool ItemStore::ReadFile(const std::wstring& path) {
             } else {
                 current.runState = RunState::Normal;
             }
+        } else if (key == L"multiple") {
+            current.allowMultiple = (_wcsicmp(value.c_str(), L"on") == 0 ||
+                                     _wcsicmp(value.c_str(), L"true") == 0 ||
+                                     _wcsicmp(value.c_str(), L"yes") == 0);
         } else if (key == L"admin") {
             current.runAsAdmin = (_wcsicmp(value.c_str(), L"on") == 0 ||
                                   _wcsicmp(value.c_str(), L"true") == 0 || value == L"1");
@@ -320,6 +324,9 @@ bool ItemStore::Save() const {
         }
         if (item.runAsAdmin) {
             fwprintf(file, L"admin   = on\n");
+        }
+        if (item.allowMultiple) {
+            fwprintf(file, L"multiple = on\n");
         }
         fwprintf(file, L"\n");
     }

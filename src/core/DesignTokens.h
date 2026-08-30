@@ -157,6 +157,15 @@ inline constexpr float kFuse = 16.0f;
 
 // Launch bounce: two hops over this long, this tall.
 inline constexpr float kBounceSeconds = 0.62f;
+// The others are shorter. A bounce has to arc and land, which takes time; the
+// ones that stay in place only have to be seen, and a third of a second is
+// long enough to register and short enough not to be waited on.
+inline constexpr float kLaunchSeconds = 0.34f;
+// How far the ghost swells past the icon before it is gone. Enough to read as
+// the app leaving the dock, not so far that it reaches its neighbours.
+inline constexpr float kZoomScale = 1.9f;
+// How far a pulse presses in.
+inline constexpr float kPulseDepth = 0.12f;
 inline constexpr float kBounceHeightPx = 16.0f;
 
 } // namespace magnify

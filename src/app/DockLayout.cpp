@@ -313,8 +313,14 @@ bool DockLayout::Advance(float deltaSeconds) {
         }
 
         if (element.bounceTime >= 0.0f) {
+            // Each effect runs for its own length; a zoom left on the bounce's
+            // clock would keep the layout redrawing for a quarter of a second
+            // after there was nothing left to draw.
+            const float duration = (launchEffect_ == LaunchEffect::Bounce)
+                                       ? magnify::kBounceSeconds
+                                       : magnify::kLaunchSeconds;
             element.bounceTime += deltaSeconds;
-            if (element.bounceTime > magnify::kBounceSeconds) {
+            if (element.bounceTime > duration) {
                 element.bounceTime = -1.0f;
             } else {
                 moving = true;
@@ -380,10 +386,28 @@ void DockLayout::Place() {
             continue;
         }
 
+        // How far through its open animation, if it is running one. Bounce
+        // takes longer than the rest because it has to arc and land.
+        const float duration = (launchEffect_ == LaunchEffect::Bounce)
+                                   ? magnify::kBounceSeconds
+                                   : magnify::kLaunchSeconds;
+        const float phase = (element.bounceTime >= 0.0f && element.bounceTime <= duration)
+                                ? (element.bounceTime / duration)
+                                : -1.0f;
+
         // Icons keep their bottom edge on the icon row and grow upward, so a
         // magnified icon rises out of the bar rather than swelling through it.
-        const float iconSize = kIconSize * element.scale * scale();
-        const float lift = BounceOffset(element.bounceTime);
+        float press = 1.0f;
+        if (phase >= 0.0f && launchEffect_ == LaunchEffect::Pulse) {
+            // In and back out over the run: sine is zero at both ends, so the
+            // icon leaves and returns to its own size with no step either side.
+            press = 1.0f - magnify::kPulseDepth *
+                               std::sin(phase * std::numbers::pi_v<float>);
+        }
+        const float iconSize = kIconSize * element.scale * press * scale();
+        const float lift = (launchEffect_ == LaunchEffect::Bounce)
+                               ? BounceOffset(element.bounceTime)
+                               : 0.0f;
 
         PlacedIcon icon;
         icon.itemIndex = element.itemIndex;
@@ -391,6 +415,7 @@ void DockLayout::Place() {
         icon.centerY = rowBottom - iconSize * 0.5f - lift;
         icon.size = iconSize;
         icon.scale = element.scale;
+        icon.launchPhase = (launchEffect_ == LaunchEffect::None) ? -1.0f : phase;
         icons_.push_back(icon);
 
         if (bulge_ && element.scale > kLensThreshold && lenses_.size() < design::kMaxLenses) {

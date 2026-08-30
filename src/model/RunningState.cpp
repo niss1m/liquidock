@@ -19,6 +19,7 @@ std::wstring Lowercase(std::wstring text) {
 
 struct ScanContext {
     std::unordered_set<std::wstring>* paths;
+    std::unordered_map<std::wstring, HWND>* windows;
     // One process can own many windows, and QueryFullProcessImageName is a
     // syscall each time.
     std::unordered_set<DWORD>* seenPids;
@@ -58,7 +59,12 @@ BOOL CALLBACK ScanWindow(HWND hwnd, LPARAM param) {
     wchar_t path[MAX_PATH * 2];
     DWORD length = static_cast<DWORD>(std::size(path));
     if (QueryFullProcessImageNameW(process, 0, path, &length) && length > 0) {
-        context->paths->insert(Lowercase(std::wstring(path, length)));
+        const std::wstring key = Lowercase(std::wstring(path, length));
+        context->paths->insert(key);
+        // First window wins. An app with several has no canonical one, and the
+        // alternative - keeping all of them and picking later - is a list per
+        // process for a decision that only ever needs one answer.
+        context->windows->emplace(key, hwnd);
     }
     CloseHandle(process);
     return TRUE;
@@ -124,8 +130,9 @@ bool RunningState::Refresh() {
     }
 
     live_.clear();
+    windows_.clear();
     std::unordered_set<DWORD> seenPids;
-    ScanContext context{&live_, &seenPids};
+    ScanContext context{&live_, &windows_, &seenPids};
     EnumWindows(&ScanWindow, reinterpret_cast<LPARAM>(&context));
 
     bool changed = false;

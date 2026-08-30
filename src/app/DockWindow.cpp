@@ -648,6 +648,7 @@ void DockWindow::ApplySettings() {
     layout_.SetMagnification(settings_.magnification, settings_.maxScale, settings_.influencePx,
                              settings_.iconBulge, settings_.followCursor);
     layout_.SetDividerGap(settings_.dividerGap);
+    layout_.SetLaunchEffect(settings_.launchEffect);
     layout_.SetIconGap(settings_.iconGap);
     // The layout's own numbers after a reload. They are otherwise only
     // checkable with a screenshot, and a dock is exactly the thing that is hard
@@ -882,6 +883,34 @@ void DockWindow::ReloadItems() {
     RequestRedraw();
 }
 
+bool DockWindow::Activate(HWND window) {
+    if (!window || !IsWindow(window)) {
+        return false;
+    }
+    if (IsIconic(window)) {
+        ShowWindow(window, SW_RESTORE);
+    }
+
+    // SetForegroundWindow on its own is refused most of the time: the rules
+    // grant the foreground to the process that owns it, and the dock is
+    // WS_EX_NOACTIVATE, so it never owns it. Attaching to the foreground
+    // thread's input queue for the duration is the documented way round that -
+    // the two threads share an input state while attached, which is enough for
+    // the call to be allowed.
+    const HWND foreground = GetForegroundWindow();
+    const DWORD ours = GetCurrentThreadId();
+    const DWORD theirs = foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+    const bool attached = theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, TRUE);
+
+    BringWindowToTop(window);
+    const bool ok = SetForegroundWindow(window) != FALSE;
+
+    if (attached) {
+        AttachThreadInput(ours, theirs, FALSE);
+    }
+    return ok;
+}
+
 void DockWindow::Launch(int itemIndex) {
     if (itemIndex < 0 || itemIndex >= static_cast<int>(store_.items().size())) {
         return;
@@ -895,6 +924,23 @@ void DockWindow::Launch(int itemIndex) {
         PostMessage(hwnd_, kShowSettingsMessage, 0, 0);
         return;
     }
+    // Already open, and not asked to start another: switch to it. This is the
+    // whole difference between a dock and a folder of shortcuts, and it was
+    // missing - every click started a fresh copy, which for a browser means a
+    // new window every time you reach for the one already on screen.
+    if (!item.allowMultiple) {
+        if (HWND window = running_.WindowFor(static_cast<size_t>(itemIndex))) {
+            LogInfo("Switching to item {} rather than starting another", itemIndex);
+            layout_.Bounce(itemIndex);
+            StartHideCountdown();
+            RequestRedraw();
+            if (Activate(window)) {
+                return;
+            }
+            LogWarn("Windows refused the switch; starting a new one instead");
+        }
+    }
+
     const std::wstring path = ItemStore::ExpandPath(item.path);
     const std::wstring arguments = ItemStore::ExpandPath(item.arguments);
     const std::wstring directory = ItemStore::ExpandPath(item.workingDirectory);
@@ -1560,6 +1606,35 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
         constants.source[instances][2] = 1.0f;
         constants.source[instances][3] = 0.0f;
         ++instances;
+
+        // Zoom and Glow both draw a second copy of the icon over the first:
+        // zoom swells it and fades it out, glow leaves it where it is and fades
+        // it out on top of itself, which reads as the icon brightening. Doing
+        // either by *replacing* the icon would make it vanish mid-animation if
+        // the app took the foreground and the dock stopped redrawing.
+        const bool ghost = icon.launchPhase >= 0.0f &&
+                           (settings_.launchEffect == LaunchEffect::Zoom ||
+                            settings_.launchEffect == LaunchEffect::Glow);
+        if (ghost && instances < kMaxIconInstances) {
+            const float t = icon.launchPhase;
+            const float grow = (settings_.launchEffect == LaunchEffect::Zoom)
+                                   ? (1.0f + (design::magnify::kZoomScale - 1.0f) * t)
+                                   : 1.0f;
+            // Fades on a curve rather than a line: most of the visible life of
+            // a ghost is in its first third, and a linear fade spends half its
+            // time at an opacity nobody can see.
+            const float fade = (1.0f - t) * (1.0f - t);
+            const float ghostHalf = half * grow;
+            constants.rect[instances][0] = constants.rect[instances - 1][0];
+            constants.rect[instances][1] = constants.rect[instances - 1][1];
+            constants.rect[instances][2] = ghostHalf;
+            constants.rect[instances][3] = ghostHalf;
+            constants.source[instances][0] = constants.source[instances - 1][0];
+            constants.source[instances][1] = constants.source[instances - 1][1];
+            constants.source[instances][2] = fade;
+            constants.source[instances][3] = 0.0f;
+            ++instances;
+        }
     }
 
     // Running indicators. They sit on the resting icon row while the icon above

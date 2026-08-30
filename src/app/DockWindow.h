@@ -149,6 +149,9 @@ private:
     void StartIconLoad();
     void DrainLoadedIcons();
     void Launch(int itemIndex);
+    // Brings an already-running window forward. False if there was nothing to
+    // bring, or if Windows refused.
+    static bool Activate(HWND window);
     // One menu for the whole dock, which grows the item commands when the click
     // landed on an icon. `itemIndex` of -1 means the bar itself.
     void ShowDockMenu(int itemIndex, POINT screen);

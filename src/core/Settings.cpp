@@ -152,6 +152,7 @@ void Settings::Load() {
     lightIntensity = design::glass::kLightIntensity;
     tintAlpha = design::kBarTint[3];
     theme = Theme::Dark;
+    launchEffect = LaunchEffect::Zoom;
     tintColour[0] = design::kBarTint[0];
     tintColour[1] = design::kBarTint[1];
     tintColour[2] = design::kBarTint[2];
@@ -290,6 +291,12 @@ void Settings::ApplyPair(const std::wstring& key, const std::wstring& value) {
         } else {
             theme = Theme::Dark;
         }
+    } else if (key == L"launch-effect") {
+        launchEffect = (_wcsicmp(value.c_str(), L"none") == 0)     ? LaunchEffect::None
+                       : (_wcsicmp(value.c_str(), L"bounce") == 0) ? LaunchEffect::Bounce
+                       : (_wcsicmp(value.c_str(), L"pulse") == 0)  ? LaunchEffect::Pulse
+                       : (_wcsicmp(value.c_str(), L"glow") == 0)   ? LaunchEffect::Glow
+                                                                  : LaunchEffect::Zoom;
     } else if (key == L"tint-colour") {
         ParseColour(value, tintColour);
     } else if (key == L"label-font") {
@@ -522,6 +529,7 @@ const std::vector<std::wstring>& Settings::Keys() {
         L"max-scale",       L"influence",    L"icon-size",       L"icon-bulge",
         L"monitor",         L"reserve-space", L"auto-hide",      L"hide-when-covered",
         L"dwell-seconds",   L"slide-seconds", L"theme",          L"tint-colour",
+        L"launch-effect",
         L"label-font-size", L"label-bold",   L"label-font",      L"label-pad-x",
         L"label-pad-y",     L"label-radius", L"label-gap",       L"label-opacity",
         L"label-tail",
@@ -559,6 +567,15 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"label-bold") return labelBold ? L"on" : L"off";
     if (key == L"theme") {
         return theme == Theme::Light ? L"light" : (theme == Theme::System ? L"system" : L"dark");
+    }
+    if (key == L"launch-effect") {
+        switch (launchEffect) {
+            case LaunchEffect::None: return L"none";
+            case LaunchEffect::Bounce: return L"bounce";
+            case LaunchEffect::Pulse: return L"pulse";
+            case LaunchEffect::Glow: return L"glow";
+            default: return L"zoom";
+        }
     }
     if (key == L"tint-colour") return FormatColour(tintColour);
     if (key == L"label-font") return labelFont;
@@ -720,6 +737,12 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# hairline for a divider. Light inverts both.\n"
              L"theme = %s\n"
              L"\n"
+             L"# What an icon does when you click it: none, bounce, zoom, pulse\n"
+             L"# or glow. Bounce is the one everybody knows and the one people\n"
+             L"# tire of first, because it takes the icon out of the row and the\n"
+             L"# eye follows it. The rest stay put.\n"
+             L"launch-effect = %s\n"
+             L"\n"
              L"# The dark shoulder just inside the rim, as a fraction of the\n"
              L"# depth the design's own render has. Its job is to give the\n"
              L"# bright line something to stand on, so the edge reads as raised\n"
@@ -827,6 +850,7 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
              tintAlpha, FormatColour(tintColour).c_str(), ValueFor(L"theme").c_str(),
+             ValueFor(L"launch-effect").c_str(),
              innerShadow, rimOpacity,
              backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
              magnification ? L"on" : L"off", iconSize, maxScale, influencePx,

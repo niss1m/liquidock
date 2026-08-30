@@ -49,6 +49,12 @@ struct DockItem {
     // exactly the case people care about most: a themed icon set.
     std::wstring iconPath;
 
+    // Whether clicking again starts another copy. Off is what a dock is for:
+    // the icon is the app, and clicking the app you are already running means
+    // "show me it", not "give me a second one". Nexus offers the same choice
+    // per item and so does every dock worth the name.
+    bool allowMultiple = false;
+
     RunState runState = RunState::Normal;
     // Launch elevated. The shell's "runas" verb, which is the same thing the
     // Explorer context menu does, so it prompts through UAC rather than needing

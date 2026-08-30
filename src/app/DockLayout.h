@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "core/DesignTokens.h"
+#include "core/Settings.h"
 #include "model/DockItem.h"
 
 namespace liquidock {
@@ -16,6 +17,9 @@ struct PlacedIcon {
     float centerY = 0.0f;
     float size = 0.0f;  // edge length, magnification included
     float scale = 1.0f; // 1 at rest
+    // How far through its open animation this icon is, 0 to 1. Negative when it
+    // is not running one, which is almost always.
+    float launchPhase = -1.0f;
 };
 
 // A bulge in the glass under a raised icon, fused into the bar body with a
@@ -90,6 +94,9 @@ public:
 
     // Starts the launch bounce on one item.
     void Bounce(int itemIndex);
+    // Which animation a click runs. The layout needs it because two of them
+    // change where the icon is, and the others are drawn from the phase alone.
+    void SetLaunchEffect(LaunchEffect effect) { launchEffect_ = effect; }
 
     // Steps the springs and rebuilds the placement. Returns true while anything
     // is still moving, which is what keeps the dock presenting frames.
@@ -178,6 +185,7 @@ private:
     float influencePx_ = 1.0f;
     bool bulge_ = false;
     bool followCursor_ = false;
+    LaunchEffect launchEffect_ = LaunchEffect::Zoom;
     float dividerGap_ = design::kGroupGap;
     float iconGap_ = design::kIconGap;
     float userScale_ = 1.0f;

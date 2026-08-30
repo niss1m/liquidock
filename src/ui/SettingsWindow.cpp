@@ -650,6 +650,11 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Appearance, L"Strength", L"How much of that colour the glass takes",
            &settings_.tintAlpha, 0.0f, 0.60f, 2, 1, L"");
 
+    launchChoice_ = static_cast<int>(settings_.launchEffect);
+    section(Tab::Appearance, L"Opening an app", 0);
+    choice(Tab::Appearance, L"Effect", L"What the icon does when you click it", &launchChoice_,
+           {L"None", L"Bounce", L"Zoom", L"Pulse", L"Glow"}, 0);
+
     section(Tab::Appearance, L"The pill", 1);
     slider(Tab::Appearance, L"Padding across", L"Air to the left and right of the name",
            &settings_.labelPadX, 0.0f, 40.0f, 0, 1, L" px");
@@ -1745,6 +1750,8 @@ void SettingsWindow::CommitChange() {
     settings_.theme = (themeChoice_ == 1)   ? Theme::Light
                       : (themeChoice_ == 2) ? Theme::System
                                             : Theme::Dark;
+    settings_.launchEffect = static_cast<LaunchEffect>(
+        std::clamp(launchChoice_, 0, static_cast<int>(LaunchEffect::Glow)));
     settings_.backdrop =
         backdropChoice_ == 1 ? BackdropSource::Screen : BackdropSource::Wallpaper;
     if (onChanged_) {

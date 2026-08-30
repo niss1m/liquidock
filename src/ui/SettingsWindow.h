@@ -333,6 +333,8 @@ private:
     LARGE_INTEGER now_{};
     // Dark, Light or Auto. The setting is an enum; the row is an index.
     int themeChoice_ = 0;
+    // Which open animation, as an index into the same order the enum has.
+    int launchChoice_ = 0;
     // Which colour row has its picker open, and which part of it is being
     // dragged. -1 for none.
     int openColour_ = -1;

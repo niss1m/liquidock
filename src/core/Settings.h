@@ -30,6 +30,18 @@ enum class BackdropSource {
 // Where the dock takes its ink from.
 enum class Theme { Dark, Light, System };
 
+// What an icon does when you click it. Nexus calls these open animations and
+// ships several; the bounce is the one everybody knows and the one people tire
+// of first, because it moves the icon out of the row and the eye follows it.
+// The others all stay in place.
+enum class LaunchEffect {
+    None,
+    Bounce, // two hops, fading out - the dock convention
+    Zoom,   // a ghost of the icon swells and fades, the way Nexus opens
+    Pulse,  // presses in and comes back, like a key
+    Glow,   // brightens and settles
+};
+
 struct Settings {
     // --- Glass ------------------------------------------------------------
     // The defaults here are the shipping look, not the Figma glass panel's own
@@ -87,6 +99,7 @@ struct Settings {
     // which is what the design is; Light inverts it; System follows whatever
     // Windows is set to and changes with it.
     Theme theme = Theme::Dark;
+    LaunchEffect launchEffect = LaunchEffect::Zoom;
     // What System currently resolves to. Read from the registry when the
     // setting is System, and re-read when Windows says the colour set changed.
     bool LightInk() const;

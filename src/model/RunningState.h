@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -44,6 +45,17 @@ public:
         return index < running_.size() && running_[index];
     }
 
+    // One of the item's windows, or null. Which one is unspecified beyond
+    // "ordinary and visible" - an app with several windows has no canonical
+    // one, and the first found is as good an answer as any.
+    HWND WindowFor(size_t index) const {
+        if (index >= targets_.size() || targets_[index].empty()) {
+            return nullptr;
+        }
+        const auto found = windows_.find(targets_[index]);
+        return (found == windows_.end()) ? nullptr : found->second;
+    }
+
 private:
     static void CALLBACK EventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject,
                                    LONG idChild, DWORD thread, DWORD time);
@@ -57,6 +69,9 @@ private:
     std::vector<std::wstring> targets_;
     std::vector<bool> running_;
     std::unordered_set<std::wstring> live_;
+    // One window per executable, so a click can switch to what is already open
+    // rather than starting another copy of it.
+    std::unordered_map<std::wstring, HWND> windows_;
 };
 
 } // namespace liquidock
