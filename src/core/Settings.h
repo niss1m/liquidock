@@ -26,6 +26,9 @@ enum class BackdropSource {
 // The file is written once, with a comment on every setting, and never
 // rewritten: overwriting it would throw away whatever the user had typed around
 // their edits.
+// Where the dock takes its ink from.
+enum class Theme { Dark, Light, System };
+
 struct Settings {
     // --- Glass ------------------------------------------------------------
     // The defaults here are the shipping look, not the Figma glass panel's own
@@ -78,6 +81,14 @@ struct Settings {
     // tint is a wash over whatever is behind, so a colour here stains the
     // desktop showing through rather than painting over it.
     float tintColour[3] = {1.0f, 1.0f, 1.0f};
+
+    // Which way round the dock's ink runs. Dark is white ink on a dark pill,
+    // which is what the design is; Light inverts it; System follows whatever
+    // Windows is set to and changes with it.
+    Theme theme = Theme::Dark;
+    // What System currently resolves to. Read from the registry when the
+    // setting is System, and re-read when Windows says the colour set changed.
+    bool LightInk() const;
 
     float labelFontSize = 0.0f;
     bool labelBold = false;

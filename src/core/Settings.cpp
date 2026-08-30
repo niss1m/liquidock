@@ -91,6 +91,23 @@ float ParseFloat(const std::wstring& value, float fallback, float low, float hig
 
 } // namespace
 
+bool Settings::LightInk() const {
+    if (theme != Theme::System) {
+        return theme == Theme::Light;
+    }
+    // What Windows itself calls the apps theme. Read every time rather than
+    // cached: it is one registry query on a change notification, and a cache
+    // here is a cache that goes stale the one time it matters.
+    DWORD light = 0;
+    DWORD size = sizeof(light);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                     L"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                     L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size) != ERROR_SUCCESS) {
+        return false; // Windows not saying is Windows being dark
+    }
+    return light != 0;
+}
+
 std::wstring Settings::HexColour(const float rgb[3]) {
     return FormatColour(rgb);
 }
@@ -132,6 +149,7 @@ void Settings::Load() {
     lightAngleDegrees = design::glass::kLightAngleDegrees;
     lightIntensity = design::glass::kLightIntensity;
     tintAlpha = design::kBarTint[3];
+    theme = Theme::Dark;
     tintColour[0] = design::kBarTint[0];
     tintColour[1] = design::kBarTint[1];
     tintColour[2] = design::kBarTint[2];
@@ -242,6 +260,15 @@ bool Settings::ReadFile(const std::wstring& path) {
             labelFontSize = ParseFloat(value, labelFontSize, 9.0f, design::label::kMaxFontSize);
         } else if (key == L"label-bold") {
             labelBold = ParseBool(value, labelBold);
+        } else if (key == L"theme") {
+            if (_wcsicmp(value.c_str(), L"light") == 0) {
+                theme = Theme::Light;
+            } else if (_wcsicmp(value.c_str(), L"system") == 0 ||
+                       _wcsicmp(value.c_str(), L"auto") == 0) {
+                theme = Theme::System;
+            } else {
+                theme = Theme::Dark;
+            }
         } else if (key == L"tint-colour") {
             ParseColour(value, tintColour);
         } else if (key == L"label-font") {
@@ -316,6 +343,9 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"icon-size") return number(L"%.0f", iconSize);
     if (key == L"label-font-size") return number(L"%.1f", labelFontSize);
     if (key == L"label-bold") return labelBold ? L"on" : L"off";
+    if (key == L"theme") {
+        return theme == Theme::Light ? L"light" : (theme == Theme::System ? L"system" : L"dark");
+    }
     if (key == L"tint-colour") return FormatColour(tintColour);
     if (key == L"label-font") return labelFont;
     if (key == L"label-pad-x") return number(L"%.0f", labelPadX);
@@ -396,7 +426,7 @@ bool Settings::Save() const {
         L"follow-cursor", L"separator-image", L"divider-gap", L"icon-gap",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
-        L"tint-colour",
+        L"theme", L"tint-colour",
         L"label-font-size", L"label-bold", L"label-font", L"label-pad-x", L"label-pad-y",
         L"label-radius", L"label-gap", L"label-opacity", L"label-tail",
     };
@@ -479,6 +509,12 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# colour here stains the desktop showing through rather than\n"
              L"# painting over it." L"\n"
              L"tint-colour = %s\n"
+             L"\n"
+             L"# Which way round the ink runs: dark, light, or system to follow\n"
+             L"# whatever Windows is set to and change with it. Dark is the\n"
+             L"# design's own - white text on a near-black hover label, a white\n"
+             L"# hairline for a divider. Light inverts both.\n"
+             L"theme = %s\n"
              L"\n"
              L"# The dark shoulder just inside the rim, as a fraction of the\n"
              L"# depth the design's own render has. Its job is to give the\n"
@@ -586,7 +622,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"dwell-seconds = %.1f\n"
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
-             tintAlpha, FormatColour(tintColour).c_str(), innerShadow, rimOpacity,
+             tintAlpha, FormatColour(tintColour).c_str(), ValueFor(L"theme").c_str(),
+             innerShadow, rimOpacity,
              backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
              magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
              followCursor ? L"on" : L"off", separatorImage.c_str(), dividerGap, iconGap, labelFontSize,

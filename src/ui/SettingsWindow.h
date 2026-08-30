@@ -291,6 +291,8 @@ private:
     D2D1_RECT_F tabBounds_[kTabCount]{};
     // Which of the offered faces is selected. The setting itself is a name.
     int fontChoice_ = 0;
+    // Dark, Light or Auto. The setting is an enum; the row is an index.
+    int themeChoice_ = 0;
     // Which colour row has its picker open, and which part of it is being
     // dragged. -1 for none.
     int openColour_ = -1;

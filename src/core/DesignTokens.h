@@ -50,6 +50,10 @@ inline constexpr float kBarTint[4] = {1.0f, 1.0f, 1.0f, 0.05f};
 
 // separator, rgba(255,255,255,0.2)
 inline constexpr float kSeparatorTint[4] = {1.0f, 1.0f, 1.0f, 0.20f};
+// The same rule on a light theme. Darker and a shade stronger, because a black
+// hairline at twenty percent over a bright desktop is a rule you have to go
+// looking for.
+inline constexpr float kSeparatorTintLight[4] = {0.05f, 0.05f, 0.06f, 0.34f};
 
 // The glass, normalised to 0..1 from the 0..100 the Figma panel shows.
 //
@@ -207,6 +211,11 @@ inline constexpr unsigned kIdleMs = 1000;
 // with no idea what colour it is, and the only thing that reliably survives
 // that is black behind white.
 inline constexpr float kFill[4] = {0.03f, 0.03f, 0.04f, 0.94f};
+// The same pill on a light theme: near-white, with the text going the other
+// way. Not pure white - a label that is exactly the page it floats over has no
+// edge, and this one has no border to give it one.
+inline constexpr float kFillLight[4] = {0.97f, 0.97f, 0.98f, 0.94f};
+inline constexpr float kTextLight[4] = {0.05f, 0.05f, 0.07f, 0.95f};
 // None. Nexus's has no border at all - it is a flat black shape with the name
 // on it, and the hairline was reading as a glow around the pill rather than as
 // a definition of it. Kept as a token, at zero, because the tooltip is drawn

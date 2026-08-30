@@ -20,6 +20,11 @@ cbuffer IconConstants : register(b0)
 {
     float4 gViewport; // xy = viewport size (px), zw = 1 / viewport size
     float4 gCell;     // xy = one atlas cell in uv, zw unused
+    // What a solid instance is filled with. White on a dark theme, near-black
+    // on a light one - the hairline between runs and the dot under a running
+    // app both have to be visible against whatever the glass is over, and on a
+    // light desktop a white rule is not.
+    float4 gInk;
     // xy = centre (px), zw = half size (px)
     float4 gRect[MAX_INSTANCES];
     // xy = atlas cell origin in uv, z = opacity,
@@ -73,9 +78,10 @@ float4 PSMain(IconVaryings input) : SV_Target
     // so a sample needs nothing done to it but a fade.
     float4 colour = gIcons.Sample(gLinearClamp, input.uv);
 
-    // Solid instances ignore the atlas entirely: white, with the opacity
-    // carrying the tint's alpha. The hairline and the running indicators.
-    colour = lerp(colour, float4(1.0, 1.0, 1.0, 1.0), saturate(input.fill.y));
+    // Solid instances ignore the atlas entirely: the ink colour, with the
+    // opacity carrying the tint's alpha. The hairline and the running
+    // indicators.
+    colour = lerp(colour, float4(gInk.rgb, 1.0), saturate(input.fill.y));
 
     // Mode 2 clips that solid fill to a disc. A four-pixel square would read as
     // a speck of dirt rather than as a light under the icon, and a dot is not

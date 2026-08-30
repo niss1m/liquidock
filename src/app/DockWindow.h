@@ -37,6 +37,7 @@ inline constexpr int kMaxIconInstances = design::kMaxItems * 2 + 1;
 struct IconConstants {
     float viewport[4];                     // xy = viewport size (px), zw = 1 / size
     float cell[4];                         // xy = one atlas cell in uv
+    float ink[4];                          // what a solid instance is filled with
     float rect[kMaxIconInstances][4];      // xy = centre (px), zw = half size (px)
     float source[kMaxIconInstances][4];    // xy = uv origin, z = opacity, w = solid
 };

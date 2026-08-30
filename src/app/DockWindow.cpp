@@ -1510,6 +1510,13 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
     constants.viewport[1] = viewHeight;
     constants.viewport[2] = 1.0f / std::max(viewWidth, 1.0f);
     constants.viewport[3] = 1.0f / std::max(viewHeight, 1.0f);
+    const bool lightInk = settings_.LightInk();
+    const float* separatorTint =
+        lightInk ? design::kSeparatorTintLight : design::kSeparatorTint;
+    constants.ink[0] = separatorTint[0];
+    constants.ink[1] = separatorTint[1];
+    constants.ink[2] = separatorTint[2];
+    constants.ink[3] = 1.0f;
     // The readable part of a cell, inset so filtering cannot reach the next one.
     constants.cell[0] = static_cast<float>(atlas_.cell() - 2 * kIconCellInset) /
                         static_cast<float>(atlas_.width());
@@ -1589,7 +1596,7 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
             constants.rect[instances][2] = width * 0.5f;
             constants.rect[instances][3] = hairline.size * 0.5f * scale;
 
-            constants.source[instances][2] = design::kSeparatorTint[3];
+            constants.source[instances][2] = separatorTint[3];
             constants.source[instances][3] = 1.0f; // solid fill, not an atlas sample
             ++instances;
         }
@@ -1783,12 +1790,14 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     // The tail points at the icon, not at the middle of the pill: at either end
     // of the row the pill is pushed inward to stay on screen, and a tail centred
     // on it would then be pointing at a neighbour.
-    const float fill[4] = {design::label::kFill[0], design::label::kFill[1],
-                           design::label::kFill[2], settings_.labelOpacity};
+    const bool lightLabel = settings_.LightInk();
+    const float* base = lightLabel ? design::label::kFillLight : design::label::kFill;
+    const float* ink = lightLabel ? design::label::kTextLight : design::label::kText;
+    const float fill[4] = {base[0], base[1], base[2], settings_.labelOpacity};
     text_.FillTooltip(pill, settings_.labelRadius, icon->centerX,
                       settings_.labelTail ? design::label::kTailWidth : 0.0f, tail,
                       colour(fill, labelAlpha_), colour(design::label::kEdge, labelAlpha_));
-    text_.DrawInkCentred(name, pill, colour(design::label::kText, labelAlpha_));
+    text_.DrawInkCentred(name, pill, colour(ink, labelAlpha_));
     text_.End();
 
     return moving;
@@ -1955,13 +1964,20 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
 
         case WM_SETTINGCHANGE:
-            // Only two settings matter here. Reacting to every broadcast would
-            // resize the swap chain for things like a theme or locale change.
+            // Three broadcasts matter here. Reacting to every one of them would
+            // resize the swap chain for things like a locale change.
             if (wParam == SPI_SETWORKAREA) {
                 UpdatePlacement();
             } else if (wParam == SPI_SETDESKWALLPAPER) {
                 wallpaper_.Invalidate();
                 frostDirty_ = true;
+                RequestRedraw();
+            } else if (settings_.theme == Theme::System && lParam != 0 &&
+                       _wcsicmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") ==
+                           0) {
+                // Windows announces a theme switch by naming its colour set.
+                // Only worth acting on while the setting is following it.
+                LogInfo("System theme changed; the dock follows it");
                 RequestRedraw();
             }
             return 0;

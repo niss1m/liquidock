@@ -507,8 +507,8 @@ void SettingsWindow::BuildRows() {
            -180.0f, 180.0f, 0, 1, L"°");
     slider(Tab::Glass, L"Intensity", L"How bright the rim reflects", &settings_.lightIntensity,
            0.0f, 1.0f, 2, 1);
-    slider(Tab::Glass, L"Tint", L"The white the glass is tinted with", &settings_.tintAlpha, 0.0f,
-           0.4f, 2, 1);
+    // The tint's strength lives with its colour on Appearance now. Two controls
+    // for one number is two places to look and one of them wrong.
     slider(Tab::Glass, L"Inner shadow", L"The dark shoulder just inside the rim",
            &settings_.innerShadow, 0.0f, 1.0f, 2, 1);
     slider(Tab::Glass, L"Border", L"How opaque the bright edge is", &settings_.rimOpacity, 0.0f,
@@ -572,9 +572,16 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Appearance, L"Opacity", L"How solid the pill behind it is",
            &settings_.labelOpacity, 0.30f, 1.0f, 2, 0, L"");
 
+    themeChoice_ = (settings_.theme == Theme::Light)   ? 1
+                   : (settings_.theme == Theme::System) ? 2
+                                                        : 0;
     section(Tab::Appearance, L"The glass", 1);
+    choice(Tab::Appearance, L"Theme", L"Which way round the dock's ink runs", &themeChoice_,
+           {L"Dark", L"Light", L"Auto"}, 1);
     colour(Tab::Appearance, L"Tint", L"What colour the bar is washed with",
            settings_.tintColour, 1);
+    slider(Tab::Appearance, L"Strength", L"How much of that colour the glass takes",
+           &settings_.tintAlpha, 0.0f, 0.60f, 2, 1, L"");
 
     section(Tab::Appearance, L"The pill", 1);
     slider(Tab::Appearance, L"Padding across", L"Air to the left and right of the name",
@@ -856,9 +863,20 @@ void SettingsWindow::ResizeToHeight(int height) {
     height_ = height;
     RECT current{};
     GetWindowRect(hwnd_, &current);
-    // Top-left anchored: the strip stays exactly where it was clicked.
-    SetWindowPos(hwnd_, nullptr, current.left, current.top, width_, height_,
-                 SWP_NOACTIVATE | SWP_NOZORDER);
+    // Top-left anchored, but not off the screen: a page that is taller than the
+    // last one grows downward, and a window opened near the bottom edge grows
+    // straight off it. Pulled back onto the work area rather than clipped
+    // there, which is what "the panel stops half way down" turned out to be.
+    int left = current.left;
+    int top = current.top;
+    MONITORINFO info{sizeof(info)};
+    if (GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &info)) {
+        left = std::min(left, static_cast<int>(info.rcWork.right) - width_);
+        left = std::max(left, static_cast<int>(info.rcWork.left));
+        top = std::min(top, static_cast<int>(info.rcWork.bottom) - height_);
+        top = std::max(top, static_cast<int>(info.rcWork.top));
+    }
+    SetWindowPos(hwnd_, nullptr, left, top, width_, height_, SWP_NOACTIVATE | SWP_NOZORDER);
     if (target_.width()) {
         // The bitmap goes first. It wraps the swap chain's back buffer, and the
         // flip model refuses to resize while any reference to that buffer is
@@ -1620,6 +1638,9 @@ void SettingsWindow::CommitChange() {
     if (fontChoice_ >= 0 && fontChoice_ < static_cast<int>(std::size(layout::kLabelFonts))) {
         settings_.labelFont = layout::kLabelFonts[fontChoice_];
     }
+    settings_.theme = (themeChoice_ == 1)   ? Theme::Light
+                      : (themeChoice_ == 2) ? Theme::System
+                                            : Theme::Dark;
     settings_.backdrop =
         backdropChoice_ == 1 ? BackdropSource::Screen : BackdropSource::Wallpaper;
     if (onChanged_) {
