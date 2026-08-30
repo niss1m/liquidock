@@ -75,6 +75,14 @@ struct Settings {
 
     // --- Auto-hide --------------------------------------------------------
     bool autoHide = true;
+
+    // Whether auto-hide only applies while something is actually in the way.
+    // On - the default - the dock tucks away under a window and comes back the
+    // moment the desktop is clear, so minimising everything shows it. Off makes
+    // it hide on its dwell regardless, which is the stricter behaviour for
+    // people who want the screen edge kept empty.
+    bool hideWhenCovered = true;
+
     float dwellSeconds = 0.0f;
     float slideSeconds = 0.0f;
 

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "app/AppBar.h"
+#include "app/CoverWatch.h"
 #include "app/DockLayout.h"
 #include "app/EdgeTrigger.h"
 #include "core/DesignTokens.h"
@@ -101,6 +102,12 @@ private:
     // fully tucked below the screen edge and 1 is fully out.
     float AdvanceReveal(float deltaSeconds);
     void StartHideCountdown();
+    // Whether an ordinary window overlaps the strip the dock occupies. Only
+    // asked when something happened that could have changed the answer.
+    bool DockIsCovered() const;
+    // Re-reads coverage and, if it changed, either starts the dwell or brings
+    // the dock back out.
+    void CoverChanged();
     // Hides if the dwell has run out and nothing is using the dock. Called both
     // from the dwell timer and from the render loop, because a WM_TIMER is only
     // synthesised when the message queue is empty - and while live capture is
@@ -222,6 +229,11 @@ private:
     enum class RevealState { Hidden, Revealing, Shown, Hiding };
     EdgeTrigger trigger_;
     AppBar appBar_;
+    CoverWatch cover_;
+    // Whether something was in the dock's way as of the last check. Kept so a
+    // burst of window events that does not change the answer costs one scan and
+    // no state change.
+    bool covered_ = true;
     RevealState revealState_ = RevealState::Shown;
     float revealProgress_ = 1.0f; // 0 = tucked away, 1 = fully out
     // When the dock is due to slide away, as a timestamp rather than only as a

@@ -60,18 +60,36 @@ inline constexpr float kSeparatorTint[4] = {1.0f, 1.0f, 1.0f, 0.20f};
 // wallpaper behind the bar is still sharp, and the bar is legible almost
 // entirely from its rim. The heavier set is what made it look muddy.
 namespace glass {
-inline constexpr float kLightAngleDegrees = -45.0f;
+// The Figma glass panel's own numbers, and this time they are the numbers the
+// renderer is calibrated against rather than a starting point that got tuned
+// away from. Measuring the design's render - node 3:5, a 2.25x export - settles
+// every one of them:
+//
+//   * its interior is a quarter as sharp as the backdrop just outside the bar,
+//     which is a Gaussian of about 1.8 logical pixels. That is frost 0.04 at
+//     the calibration in DockWindow.cpp, and the panel says 4.
+//   * its rim measures +100/255 at the top edge, +83 at both sides and +59 at
+//     the bottom. A light coming from -45 degrees would put the two sides far
+//     apart; equal sides with a bright top is light from straight above, and
+//     -90 is what our own convention spells that.
+//   * its edge compresses the background over about four logical pixels, which
+//     is depth 0.20 against the bend the shader now applies.
+inline constexpr float kLightAngleDegrees = -90.0f;
 inline constexpr float kLightIntensity = 0.80f;
 inline constexpr float kRefraction = 0.80f;
-inline constexpr float kDepth = 1.00f;
+inline constexpr float kDepth = 0.20f;
 inline constexpr float kDispersion = 0.50f;
-// Essentially clear. This is the one that was most wrong: at 0.82 the dock is a
-// frosted slab and the desktop behind it is gone.
 inline constexpr float kFrost = 0.04f;
-// How far the edge optics reach across the face. The panel reads 64 now, not
-// the 100 it did before - with depth at full, 100 pushed the bending most of
-// the way across a 45 px bar and there was no flat middle left.
-inline constexpr float kSplay = 0.64f;
+// Full splay: the bending reaches the middle of the pane. This was 0.64 while
+// the band was measured in pixels, where anything above about a third already
+// covered a 45 px bar and the control had nothing left to move.
+inline constexpr float kSplay = 1.00f;
+
+// Blur radius at frost = 1.0, in logical pixels. Calibrated: the design's
+// render is a quarter as sharp inside the bar as immediately outside it, which
+// is a Gaussian of about 1.8 logical pixels, and the Figma panel calls that
+// frost 4 of 100. Shared so the dock and its menu cannot drift apart.
+inline constexpr float kMaxFrostSigmaPx = 44.0f;
 } // namespace glass
 
 // --- Magnification --------------------------------------------------------

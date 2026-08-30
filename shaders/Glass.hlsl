@@ -2,16 +2,19 @@
 //
 // Rather than tinting a blur, this reconstructs what you would see looking
 // *through* a thin sheet of glass at whatever is behind it. A rounded-rectangle
-// SDF gives the shape; its gradient gives a surface normal in a narrow band just
-// inside the rim; that band bends the backdrop, splits it by wavelength, and
+// SDF gives the shape; its gradient gives a surface normal in a band inside the
+// rim; that band bends what is behind the pane, splits it by wavelength, and
 // catches the light.
 //
-// The governing idea is that glass is a *sheet*, not a dome. Everything optical
-// happens in a few pixels at the edge: the middle of the panel is flat, and what
-// you see through it is simply the background, blurred and lifted. Letting the
-// bevel spread inward across the whole panel - and letting the sharp and blurred
-// samples sit half-mixed everywhere - is what turns a pane of glass into a
-// glossy balloon.
+// Everything the pane looks through comes from one texture: the frost chain's
+// output, which is the backdrop cropped to this window and blurred by the frost
+// setting. That is not a shortcut, it is the physics - frosting is a property
+// of the material, so light bent at the rim has passed through the same glass
+// as light crossing the middle. The earlier version sampled a *sharp* backdrop
+// for the rim and a blurred one for the middle and crossfaded between them,
+// which meant turning refraction up quietly cancelled frost: at the settings
+// this dock shipped with, a frost of 1.00 was re-sharpened back to nothing
+// across the whole panel and the two controls fought each other.
 //
 // Every parameter maps to a control in the preferences window, and the whole
 // file hot-reloads, so tuning is edit-and-save rather than edit-and-rebuild.
@@ -31,10 +34,8 @@ cbuffer GlassConstants : register(b0)
     float4 gViewportCenter; // xy = viewport size (px), zw = rect centre (px, window space)
     float4 gShape;          // xy = rect half size (px), z = corner radius (px), w = time (s)
     float4 gLight;          // x = angle (rad), y = intensity, z = refraction, w = depth
-    float4 gMaterial;       // x = dispersion, y = frost, z = splay, w = tiled flag
+    float4 gMaterial;       // x = dispersion, y = frost, z = splay, w = unused
     float4 gTint;           // straight alpha
-    float4 gWindowOrigin;   // xy = window origin (monitor px), zw = monitor size (px)
-    float4 gBackdropUv;     // xy = uv scale, zw = uv offset
     float4 gLensInfo;       // x = lens count, y = smooth-min radius (px), z = px per logical px
     // xy = centre (px), z = half width (px), w = half height (px). The corner
     // radius is min(z, w) - a lens is always as round as it can be - so it does
@@ -42,7 +43,9 @@ cbuffer GlassConstants : register(b0)
     float4 gLens[MAX_LENSES];
 };
 
-Texture2D gBackdrop : register(t0);
+// The backdrop, cropped to this window and frosted. Window space is its UV
+// space, which is why nothing in here needs to know about monitors, wallpaper
+// fit modes or tiling: the frost chain resolved all of that already.
 Texture2D gFrost : register(t1);
 SamplerState gLinearClamp : register(s0);
 
@@ -56,40 +59,42 @@ SamplerState gLinearClamp : register(s0);
 #define DEPTH           gLight.w
 #define DISPERSION      gMaterial.x
 #define SPLAY           gMaterial.z
-#define TILED           gMaterial.w
 #define LENS_COUNT      gLensInfo.x
 #define LENS_FUSE       gLensInfo.y
 #define PIXEL_SCALE     gLensInfo.z
 
-// The edge band, in logical pixels, at depth 0 and depth 1. A sheet of glass has
-// an edge you could measure with a ruler; these are that edge. The upper end is
-// already thick - past it the panel stops reading as glass and starts reading as
-// a bubble.
-static const float kMinBandPx = 3.0;
-static const float kMaxBandPx = 16.0;
+// How far the bending fans inward, as a fraction of the panel's own half
+// height, at splay 0 and splay 1. A fraction rather than a pixel count is the
+// whole point: the previous version measured the band in logical pixels, so on
+// this dock's 45 px bar it was already past the middle at half splay and the
+// control had nothing left to do. Sweeping it end to end changed the render by
+// less than a part in a thousand, which is why it read as having no effect.
+static const float kMinBandFraction = 0.08;
+static const float kMaxBandFraction = 1.00;
 
-// How far refraction can push a sample, as a multiple of the band width. Tied to
-// the band rather than to a fixed pixel count, which is what keeps a thin edge
-// looking like a thin edge: a three-pixel band displacing by fifty pixels would
-// smear the whole background through a slot.
-static const float kRefractionReach = 2.4;
+// How far the rim can displace what it is looking at, in logical pixels, at
+// full depth. Depth is the thickness of the sheet, and a thicker sheet bends
+// harder; the design's depth of 0.20 lands at about four pixels of squeeze at
+// the rim, which is what its own render measures.
+static const float kMaxBendPx = 20.0;
 
-// Wavelength spread at full dispersion, as a fraction of the refraction offset.
+// Wavelength spread at full dispersion, as a fraction of the bend.
 static const float kMaxDispersion = 0.16;
 
 // The bright line along the rim, in logical pixels. Crisp on purpose: a wide
-// soft one is a glow, and a glow is the single most Aero thing a surface can do.
-static const float kRimPx = 2.0;
+// soft one is a glow, and a glow is the single most Aero thing a surface can
+// do. The design's render puts it at two pixels of a 2.25x export, so a little
+// under one logical pixel, with the falloff either side taking it to this.
+static const float kRimPx = 1.2;
 
 Varyings VSMain(uint id : SV_VertexID)
 {
     return FullscreenTriangle(id);
 }
 
-float3 SampleBackdrop(float2 monitorPx)
+float3 LookThrough(float2 windowPx)
 {
-    const float2 uv = BackdropUv(monitorPx, gWindowOrigin.zw, gBackdropUv, TILED);
-    return gBackdrop.SampleLevel(gLinearClamp, uv, 0).rgb;
+    return gFrost.SampleLevel(gLinearClamp, windowPx / max(VIEWPORT, 1.0), 0).rgb;
 }
 
 float4 PSMain(Varyings input) : SV_Target
@@ -126,79 +131,54 @@ float4 PSMain(Varyings input) : SV_Target
 
     const float scale = max(PIXEL_SCALE, 0.5);
 
-    // --- The edge band -----------------------------------------------------
-    // Two parameters, two jobs. Depth is how thick the glass is: it sets the
-    // base width of the band and, further down, how hard the rim bends light.
-    // Splay is how far that bending fans inward from the rim, which means it
-    // has to scale the band's *width* - not merely reshape the profile inside
-    // it. Splay used to do only the latter, and inside a seven-pixel band an
-    // exponent change is invisible: sweeping it end to end moved the render by
-    // 0.6 of 765, which is to say the control did nothing.
+    // --- The bevel ---------------------------------------------------------
+    // Two parameters with two jobs, and they are now genuinely different ones.
+    // Splay is *how far in* the bending reaches; depth is *how hard* it bends.
+    // Previously both widened the band, so at any high setting one of them had
+    // nothing left to move.
     //
     // `edge` is 1 at the rim and falls to 0 across the band. The max() keeps the
     // pow base positive, since fxc's X3571 is fatal under warnings-as-errors.
-    const float baseBand = lerp(kMinBandPx, kMaxBandPx, saturate(DEPTH)) * scale;
-    const float band = baseBand * lerp(0.55, 3.2, saturate(SPLAY));
+    const float halfMin = max(min(HALF_SIZE.x, HALF_SIZE.y), 1.0);
+    const float band = halfMin * lerp(kMinBandFraction, kMaxBandFraction, saturate(SPLAY));
     const float inset = saturate(-dist / band);
-    const float edge = pow(max(1.0 - inset, 1e-5), lerp(3.5, 1.4, saturate(SPLAY)));
+    const float edge = pow(max(1.0 - inset, 1e-5), lerp(3.0, 1.15, saturate(SPLAY)));
 
     // The SDF gradient points outward, and the bevel tilts its normal the same
     // way: outward at the rim, straight at the viewer across the flat middle.
     const float2 outward = normalize(gradient + 1e-6);
     const float3 normal = normalize(float3(outward * edge, max(1.0 - edge, 0.12)));
 
-    // --- The body ----------------------------------------------------------
-    // Flat glass over a blurred background. The frost texture covers exactly
-    // this window, so window space *is* its UV space. It follows only a fraction
-    // of the refraction offset: at the full offset the blur smears visibly along
-    // the rim, and the point of a blur is that it has no detail worth smearing.
-    const float2 monitorPx = windowPx + gWindowOrigin.xy;
-    // How far a sample is displaced follows the glass's thickness, not its
-    // splay: a thicker edge bends light harder, a wider splay spreads the same
-    // bend over more of the face. Scaling the displacement by the splayed band
-    // instead would compound the two and warp the whole panel at high splay.
-    const float2 offset = normal.xy * (REFRACTION * kRefractionReach * baseBand * edge);
-    const float2 frostUv = (windowPx + offset * 0.3) / max(VIEWPORT, 1.0);
+    // --- Looking through ---------------------------------------------------
+    // The sample walks *outward* as it approaches the rim, so the rim shows a
+    // squeezed band of what lies just outside the panel. That compression is
+    // what a real edge does and it is the single strongest cue that the shape
+    // is a solid piece of glass rather than a translucent rectangle.
+    const float bend = REFRACTION * lerp(1.0, kMaxBendPx, saturate(DEPTH)) * scale;
+    const float2 offset = outward * (bend * edge * edge);
 
-    float3 body = gFrost.SampleLevel(gLinearClamp, frostUv, 0).rgb;
-
-    // A whisper of each, and no more. An earlier version pulled 38% of the
-    // saturation out, dragged the result a tenth of the way to mid grey and
-    // lifted it another twelfth - which is a lot of processing to apply to
-    // something the design intends you to see straight through, and it is what
-    // made the dock look like a smudge rather than a pane. The design's own
-    // frame shows the wallpaper behind the bar essentially untouched.
-    const float lum = dot(body, float3(0.2126, 0.7152, 0.0722));
-    body = lerp(lum.xxx, body, 0.94);
-    body = body + (1.0 - body) * 0.04;
-
-    // A sheet lit from above. This gradient across the face, rather than any
-    // amount of edge treatment, is what makes the surface read as a lit
-    // material instead of a cut-out - and unlike a bevel it adds no curvature,
-    // so it cannot turn the panel back into a dome. Kept slight: at clear glass
-    // there is nothing for a strong gradient to sit on.
-    const float topEdge = RECT_CENTER.y - HALF_SIZE.y;
-    const float vertical = saturate((windowPx.y - topEdge) / max(2.0 * HALF_SIZE.y, 1.0));
-    body += (1.0 - body) * 0.045 * (1.0 - vertical);
-    body *= 1.0 - 0.035 * vertical;
-
-    // --- The lens ring -----------------------------------------------------
     // Glass disperses because its refractive index varies with wavelength, so
     // the three channels are sampled at slightly different displacements. The
     // split scales with the offset itself, which confines the fringing to the
     // rim where the bending actually happens.
     const float spread = DISPERSION * kMaxDispersion;
-    const float3 refracted = float3(
-        SampleBackdrop(monitorPx + offset * (1.0 + spread)).r,
-        SampleBackdrop(monitorPx + offset).g,
-        SampleBackdrop(monitorPx + offset * (1.0 - spread)).b);
+    float3 colour = float3(
+        LookThrough(windowPx + offset * (1.0 + spread)).r,
+        LookThrough(windowPx + offset).g,
+        LookThrough(windowPx + offset * (1.0 - spread)).b);
 
-    // The sharp, warped background shows only in the band. A ring of
-    // distorted-but-legible background against a flat blurred middle is the
-    // thing that actually reads as a sheet of glass; mixing the two everywhere
-    // reads as fog.
-    float3 colour = lerp(body, refracted, saturate(edge * 0.85));
     colour = lerp(colour, float3(1.0, 1.0, 1.0), saturate(gTint.a));
+
+    // A sheet lit from above: a whisper brighter at the top than the bottom.
+    // Measured off the design's own render this is small - its interior is the
+    // backdrop, blurred, and very little else - so what used to be a tenth of a
+    // stop of lift and a desaturation is now barely a fortieth. That lift is
+    // what a previous pass turned up chasing "glassiness" and what made the
+    // dock read as a smudge.
+    const float topEdge = RECT_CENTER.y - HALF_SIZE.y;
+    const float vertical = saturate((windowPx.y - topEdge) / max(2.0 * HALF_SIZE.y, 1.0));
+    colour += (1.0 - colour) * 0.025 * (1.0 - vertical);
+    colour *= 1.0 - 0.02 * vertical;
 
     // --- The rim -----------------------------------------------------------
     // Screen space has y pointing down, hence the sign on the second component.
@@ -206,27 +186,28 @@ float4 PSMain(Varyings input) : SV_Target
     const float facing = dot(outward, lightPlane);
 
     // A crisp line just *inside* the boundary, not a broad Fresnel dome - and
-    // not on the boundary itself, which is where the shape's own antialiasing
-    // fades to nothing and takes the highlight with it. Sitting it a pixel and a
-    // half in is the difference between a visible edge and no edge at all.
-    const float rimCentre = kRimPx * 0.75 * scale;
-    const float rimHalf = kRimPx * 0.7 * scale;
+    // not on the boundary itself, where the shape's own antialiasing fades to
+    // nothing and takes the highlight with it.
+    //
+    // The weights are measured, not guessed. Sampling the design's render
+    // across its rim gives +100/255 at the top edge, +83 at both sides and +59
+    // at the bottom, at its stated light intensity of 0.80 - a bright line the
+    // whole way round that only leans towards the light rather than a highlight
+    // that appears on one side and a shadow on the other. An earlier version
+    // had it at 0.20 on the unlit side, which is a quarter of what the design
+    // shows, and is why the bottom of the bar had no edge to it at all.
+    const float rimCentre = kRimPx * 0.6 * scale;
+    const float rimHalf = kRimPx * 0.6 * scale;
     const float rim = saturate(1.0 - abs(-dist - rimCentre) / max(rimHalf, 1e-4));
 
     const float intensity = saturate(LIGHT_INTENSITY);
-    colour += rim * saturate(0.20 + 0.80 * facing) * intensity * 0.55;
-    // A whisper of shadow on the side facing away. Without it the rim reads as
-    // a glow around the whole shape rather than as light landing on an edge.
-    colour *= 1.0 - rim * saturate(-facing) * 0.30 * intensity;
+    colour += rim * (0.39 + 0.10 * facing) * intensity;
 
-    // A second, much softer treatment inside the rim: a sheen where the surface
-    // turns upward and a shadow where it turns down, both falling off over a
-    // dozen pixels. The crisp rim alone gives an outlined shape; this is what
-    // gives it thickness. It follows the distance field, so it wraps the corners
-    // and any bulge instead of being a band across the top.
+    // A far softer sheen inside the rim where the surface turns towards the
+    // light, falling off over a dozen pixels. It follows the distance field, so
+    // it wraps the corners and any bulge instead of being a band across the top.
     const float inner = pow(saturate(1.0 + dist / (16.0 * scale)), 2.0);
-    colour += saturate(-outward.y) * inner * 0.075 * intensity;
-    colour *= 1.0 - saturate(outward.y) * inner * 0.10 * intensity;
+    colour += saturate(-outward.y) * inner * 0.03 * intensity;
 
     // The backdrop has already been sampled and composited into `colour`, so
     // the dock is opaque wherever it covers - it is showing its own

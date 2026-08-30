@@ -12,8 +12,10 @@ it: refraction bending the backdrop through the bevel, chromatic dispersion at t
 specular edge driven by a light angle you control.
 
 - **Real liquid glass** — refraction, depth, dispersion, frost, splay and light, all live and all
-  tweakable. Save the settings file and the dock re-renders; it watches the file rather than
-  polling it, so tuning costs nothing when you are not tuning.
+  tweakable, and calibrated against the design rather than guessed at: the shipped defaults are the
+  numbers that reproduce the Figma frame's own measured blur, rim and edge. Save the settings file
+  and the dock re-renders; it watches the file rather than polling it, so tuning costs nothing when
+  you are not tuning.
 - **The macOS magnification wave** — icons swell under the cursor on a critically damped spring,
   and the one under it names itself.
 - **Survives a driver reset** — a TDR or a graphics driver updating itself mid-session rebuilds the
@@ -71,8 +73,14 @@ each line, so comments you add survive being edited from the UI.
 
 Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
 `light-intensity`, `tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`,
-`icon-bulge`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `dwell-seconds`,
-`slide-seconds`.
+`icon-bulge`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `hide-when-covered`,
+`dwell-seconds`, `slide-seconds`.
+
+`hide-when-covered` is **on** by default and is what makes auto-hide behave the way people expect:
+the dock tucks away under a window and comes straight back when the desktop is clear, so minimising
+everything shows it rather than hiding it from nothing. Turn it off to have the dock hide on its
+dwell whatever is behind it. Coverage is worked out from window events, not a timer — nothing is
+polled to answer it.
 
 `reserve-space` makes the dock an appbar, so maximised windows stop above it the way they do above
 the taskbar. It is off by default and ignored while auto-hide is on, where a dock that is not on

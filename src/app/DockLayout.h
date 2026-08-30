@@ -108,8 +108,23 @@ public:
     const std::vector<PlacedIcon>& separators() const { return separators_; }
 
     // True if the point is over the bar or over any icon standing above it.
-    // Logical window space, dock fully revealed.
+    // Logical window space, dock fully revealed. This is the dock's real
+    // silhouette, and it is what hit-testing uses so a click beside a raised
+    // icon still falls through to whatever is underneath.
     bool Contains(float x, float y) const;
+
+    // True if the point is in the region that drives the magnification.
+    //
+    // Deliberately *not* Contains. The silhouette grows as icons rise, so a
+    // cursor in the band above the bar can be inside a magnified icon and
+    // outside the resting one - and asking "is the cursor over the dock" of a
+    // shape whose size depends on the answer is a latch: hovered makes it
+    // bigger, bigger keeps it hovered. This region is a fixed rectangle that
+    // depends on no per-frame state, so the answer is a pure function of where
+    // the cursor is. It reaches as high as a fully magnified icon can, which
+    // also means the wave starts as the cursor approaches rather than at the
+    // instant it crosses the bar's edge.
+    bool HoverContains(float x, float y) const;
 
     // Index into the item list of the icon under the point, or -1.
     int ItemAt(float x, float y) const;

@@ -49,6 +49,7 @@ add_custom_target(liquidock_shaders DEPENDS "${EMBEDDED_SHADERS}")
 add_executable(liquidock WIN32
     src/app/main.cpp
     src/app/AppBar.cpp
+    src/app/CoverWatch.cpp
     src/app/DockLayout.cpp
     src/app/DockWindow.cpp
     src/app/EdgeTrigger.cpp
@@ -113,6 +114,7 @@ target_link_libraries(liquidock PRIVATE
     uuid
     comctl32
     dbghelp
+    dwmapi
     user32
     gdi32)
 

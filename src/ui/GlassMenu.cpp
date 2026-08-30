@@ -205,7 +205,7 @@ void GlassMenu::Render() {
 
     // Rebuilt every time the menu opens rather than cached: it is on screen for
     // a second and a half, and it has moved since last time.
-    frost_.Build(backdrop_, origin, size, design::menu::kFrost * 32.0f * scale);
+    frost_.Build(backdrop_, origin, size, design::menu::kFrost * design::glass::kMaxFrostSigmaPx * scale);
 
     const float viewWidth = static_cast<float>(target_.width());
     const float viewHeight = static_cast<float>(target_.height());
@@ -226,19 +226,8 @@ void GlassMenu::Render() {
     constants.material[1] = design::menu::kFrost;
     constants.material[2] = design::menu::kSplay;
     constants.material[3] = 0.0f;
-    constants.windowOrigin[0] = static_cast<float>(origin.x);
-    constants.windowOrigin[1] = static_cast<float>(origin.y);
-    constants.windowOrigin[2] = static_cast<float>(monitorRect.right - monitorRect.left);
-    constants.windowOrigin[3] = static_cast<float>(monitorRect.bottom - monitorRect.top);
-
-    float uvScale[2]{};
-    float uvOffset[2]{};
-    backdrop_.uv_scale(uvScale);
-    backdrop_.uv_offset(uvOffset);
-    constants.backdropUv[0] = uvScale[0];
-    constants.backdropUv[1] = uvScale[1];
-    constants.backdropUv[2] = uvOffset[0];
-    constants.backdropUv[3] = uvOffset[1];
+    // No window origin or backdrop transform: the glass pass reads one texture,
+    // the frost chain's output, which the menu builds over its own window.
     constants.lensInfo[2] = scale;
     constants.tint[0] = 1.0f;
     constants.tint[1] = 1.0f;

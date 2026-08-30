@@ -109,6 +109,7 @@ void Settings::Load() {
     reserveSpace = false;
 
     autoHide = true;
+    hideWhenCovered = true;
     dwellSeconds = design::kDwellSeconds;
     slideSeconds = design::kSlideSeconds;
 
@@ -188,6 +189,8 @@ bool Settings::ReadFile(const std::wstring& path) {
             reserveSpace = ParseBool(value, reserveSpace);
         } else if (key == L"auto-hide") {
             autoHide = ParseBool(value, autoHide);
+        } else if (key == L"hide-when-covered") {
+            hideWhenCovered = ParseBool(value, hideWhenCovered);
         } else if (key == L"dwell-seconds") {
             dwellSeconds = ParseFloat(value, dwellSeconds, 0.2f, 120.0f);
         } else if (key == L"slide-seconds") {
@@ -233,6 +236,7 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     }
     if (key == L"reserve-space") return reserveSpace ? L"on" : L"off";
     if (key == L"auto-hide") return autoHide ? L"on" : L"off";
+    if (key == L"hide-when-covered") return hideWhenCovered ? L"on" : L"off";
     if (key == L"dwell-seconds") return number(L"%.1f", dwellSeconds);
     if (key == L"slide-seconds") return number(L"%.2f", slideSeconds);
     return {};
@@ -292,7 +296,7 @@ bool Settings::Save() const {
         L"refraction", L"depth",        L"dispersion",    L"frost",         L"splay",
         L"light-angle", L"light-intensity", L"tint-alpha", L"backdrop",     L"magnification",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
-        L"auto-hide",  L"dwell-seconds", L"slide-seconds",
+        L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
         L"label-font-size", L"label-bold",
     };
     for (const wchar_t* key : kAllKeys) {
@@ -413,6 +417,12 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# --- Auto-hide -----------------------------------------------------\n"
              L"auto-hide = %s\n"
              L"\n"
+             L"# Whether auto-hide only applies while something is actually in the\n"
+             L"# way. On, the dock tucks under a window and comes straight back\n"
+             L"# when the desktop is clear, so minimising everything shows it. Off\n"
+             L"# hides it on its dwell whatever is behind.\n"
+             L"hide-when-covered = %s\n"
+             L"\n"
              L"# How long the dock stays out once nothing is using it, and how long\n"
              L"# the slide itself takes.\n"
              L"dwell-seconds = %.1f\n"
@@ -422,7 +432,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              magnification ? L"on" : L"off", iconSize, maxScale, influencePx, labelFontSize,
              labelBold ? L"on" : L"off",
              iconBulge ? L"on" : L"off", monitorText, reserveSpace ? L"on" : L"off",
-             autoHide ? L"on" : L"off", dwellSeconds, slideSeconds);
+             autoHide ? L"on" : L"off", hideWhenCovered ? L"on" : L"off", dwellSeconds,
+             slideSeconds);
 
     fclose(file);
     LogInfo("Wrote a default settings file");

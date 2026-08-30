@@ -8,11 +8,18 @@
 
 namespace liquidock {
 
-// Produces the blurred copy of the backdrop that the glass mixes in as frost.
+// Produces the blurred copy of the backdrop the glass looks through.
 //
-// Three passes at quarter resolution: crop the window's footprint out of the
-// wallpaper, then a separable Gaussian across and down. For a 745x148 dock that
-// is a 186x37 target, so the whole chain is a rounding error.
+// Three passes: crop the window's footprint out of the backdrop, then a
+// separable Gaussian across and down.
+//
+// The working resolution follows the blur radius rather than being fixed at a
+// quarter. A quarter-size buffer is free for a heavy frost, where there is
+// nothing left that full resolution would preserve - but resampling to a
+// quarter and back is *itself* about a pixel and a half of blur, and the
+// design's own frost is under two. Fixing the chain at a quarter therefore put
+// a floor under the frost that no setting could get below, which is why the
+// glass could never be clear.
 //
 // The important property is that it is *cached*. Build() is called only when
 // the wallpaper changes, the dock moves or resizes, or the frost amount is
@@ -29,7 +36,9 @@ public:
     // Drops every target and the constant buffer, for a device rebuild.
     void Reset();
 
-    // Reallocates the intermediate targets. Safe to call with an unchanged size.
+    // Records the window size the chain works over. The targets themselves are
+    // allocated in Build, once the blur radius says how big they need to be.
+    // Safe to call with an unchanged size.
     bool Resize(UINT windowWidth, UINT windowHeight);
 
     // Runs the three passes. `windowOrigin` is the window's top-left in
@@ -62,6 +71,10 @@ private:
     };
     static_assert(sizeof(BlurConstants) == 80, "BlurConstants must match the HLSL cbuffer");
 
+    // The divisor to work at for a given blur radius: 1 until the blur is wide
+    // enough to hide the resampling, then as coarse as the radius allows.
+    static UINT DownscaleFor(float sigmaPx);
+    bool EnsureTargets(UINT downscale);
     bool CreateTarget(Target& target, UINT width, UINT height);
     void RunPass(Target& destination, ID3D11ShaderResourceView* source, const char* entryPoint,
                  const BlurConstants& constants);
@@ -71,11 +84,15 @@ private:
     ComPtr<ID3D11Buffer> constantBuffer_;
     ComPtr<ID3D11SamplerState> sampler_;
 
-    Target quarter_;
+    Target cropped_;
     Target temp_;
     Target frost_;
+    // The full window, and the reduced size the passes actually run at.
+    UINT fullWidth_ = 0;
+    UINT fullHeight_ = 0;
     UINT width_ = 0;
     UINT height_ = 0;
+    UINT downscale_ = 0;
 };
 
 } // namespace liquidock

@@ -411,6 +411,18 @@ bool DockLayout::Contains(float x, float y) const {
     return false;
 }
 
+bool DockLayout::HoverContains(float x, float y) const {
+    if (elements_.empty()) {
+        return false;
+    }
+    // The *resting* bar, not the current one. barCenterX_ and barHalfWidth_ both
+    // move as the row swells, and that is exactly the feedback this region
+    // exists to avoid.
+    const float halfWidth = RestingBarWidth() * 0.5f;
+    return y >= magnified_icon_top() && y <= bar_bottom() &&
+           std::fabs(x - windowWidth_ * 0.5f) <= halfWidth;
+}
+
 int DockLayout::ItemAt(float x, float y) const {
     const float barBottom = bar_bottom();
     const float barTop = barBottom - kBarHeight * scale();

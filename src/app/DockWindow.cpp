@@ -59,12 +59,18 @@ constexpr UINT kRunningMessage = WM_APP + 4;
 constexpr UINT kAppBarMessage = WM_APP + 5;
 // Posted by the tray when Preferences is chosen.
 constexpr UINT kShowSettingsMessage = WM_APP + 7;
+// Posted by the cover watch when a window may have moved over or off the dock.
+constexpr UINT kCoverMessage = WM_APP + 8;
 // --simulate-device-loss, posted once at startup.
 constexpr UINT kSimulateDeviceLossMessage = WM_APP + 6;
-constexpr UINT_PTR kSimulateLossTimer = 6;
+constexpr UINT_PTR kSimulateLossTimer = 8; // 6 is the label timer
 constexpr UINT kSimulateLossDelayMs = 3000;
 // --stats only.
 constexpr UINT_PTR kStatsTimer = 7;
+// Coverage scans are debounced: switching apps can fire several events in a row
+// and one scan afterwards answers for all of them.
+constexpr UINT_PTR kCoverTimer = 9;
+constexpr UINT kCoverDebounceMs = 120;
 
 enum ItemMenuCommand : UINT {
     kCommandOpen = 1,
@@ -81,12 +87,10 @@ constexpr float kCornerRadius = design::kCornerRadius;
 constexpr float kBottomMargin = design::kScreenMargin;
 constexpr float kBleed = design::kBleed;
 
-// Blur radius at frost = 1.0, in logical pixels. The body of the panel is
-// always fully this blurred image, so the number is now the whole story: the
-// default of 0.82 lands at 26 px, heavy enough that what is behind the dock
-// reads as depth rather than as detail, and light enough that you can still tell
-// a window from a wallpaper.
-constexpr float kMaxFrostSigmaPx = 32.0f;
+// Everything the pane looks through is the frost chain's output, so this one
+// number is the whole story. It is calibrated against the design's own render -
+// see design::glass::kMaxFrostSigmaPx - and shared with the menu.
+constexpr float kMaxFrostSigmaPx = design::glass::kMaxFrostSigmaPx;
 
 float Radians(float degrees) {
     return degrees * std::numbers::pi_v<float> / 180.0f;
@@ -181,6 +185,8 @@ bool DockWindow::Create(GraphicsDevice& device, bool diagnostic,
     StartIconLoad();
     ApplyBackdropSource();
     running_.Initialize(hwnd_, kRunningMessage);
+    cover_.Initialize(hwnd_, kCoverMessage);
+    covered_ = DockIsCovered();
     menu_.Initialize(*device_, *shaders_);
     if (dumpBackdrop_) {
         SetTimer(hwnd_, kDumpTimer, kDumpDelayMs, nullptr);
@@ -289,12 +295,79 @@ void DockWindow::CheckHideDeadline() {
     float x = 0.0f;
     float y = 0.0f;
     const bool hovering = !menuOpen_ && GetCursorPos(&cursor) && CursorToLayout(cursor, &x, &y) &&
-                          layout_.Contains(x, y);
+                          layout_.HoverContains(x, y);
     const bool busy = menuOpen_ || (settingsWindow_ && settingsWindow_->visible());
     if (hovering || busy) {
         StartHideCountdown(); // still in use, so stay out
+        return;
+    }
+
+    if (settings_.hideWhenCovered) {
+        covered_ = DockIsCovered();
+        if (!covered_) {
+            // Nothing is in the way, so there is nothing to get out of the way
+            // of. Stay out and let the cover watch start the dwell when a window
+            // actually arrives - re-arming the timer here instead would be a
+            // wakeup every few seconds for the rest of the session, to keep
+            // asking a question whose answer only changes on an event we are
+            // already subscribed to.
+            KillTimer(hwnd_, kHideTimer);
+            return;
+        }
+    }
+
+    BeginHiding();
+}
+
+bool DockWindow::DockIsCovered() const {
+    if (!hwnd_) {
+        return false;
+    }
+    RECT window{};
+    if (!GetWindowRect(hwnd_, &window)) {
+        return false;
+    }
+    // The bar's own strip, not the window's. The window carries bleed on every
+    // side for the rim and for raised icons, and a window merely passing near
+    // the dock is not covering it.
+    const float scale = static_cast<float>(dpi_) / 96.0f;
+    const float bottom = layout_.bar_bottom();
+    const float top = bottom - 2.0f * layout_.bar_half_height();
+    // Horizontally the whole window, not the bar. The bar's own extent is only
+    // known once the layout has been placed - at startup it is still zero, and a
+    // degenerate rectangle intersects nothing, so the first scan would report a
+    // clear desktop however many windows were in front of it. The window is a
+    // little over a hundred pixels wider than the bar at each end, which for
+    // "is something in the way" is well inside the noise.
+    const RECT bar{window.left, window.top + static_cast<LONG>(top * scale), window.right,
+                   window.top + static_cast<LONG>(bottom * scale)};
+
+    char culprit[64]{};
+    const bool covered = CoverWatch::IsCovered(bar, culprit, std::size(culprit));
+    LogDebug("Dock strip ({},{})-({},{}) is {}{}", bar.left, bar.top, bar.right, bar.bottom,
+             covered ? "covered by " : "clear", culprit);
+    return covered;
+}
+
+void DockWindow::CoverChanged() {
+    if (!autoHide_ || !settings_.hideWhenCovered || !hwnd_) {
+        return;
+    }
+    const bool covered = DockIsCovered();
+    if (covered == covered_) {
+        return;
+    }
+    covered_ = covered;
+    if (covered) {
+        // Something moved in front of the dock. If it is out, start its dwell;
+        // if it is already away, there is nothing to do.
+        if (revealState_ != RevealState::Hidden) {
+            StartHideCountdown();
+        }
     } else {
-        BeginHiding();
+        // The desktop is clear. Reveal() re-arms the dwell, and the check above
+        // will decline to hide for as long as it stays clear.
+        Reveal();
     }
 }
 
@@ -1075,7 +1148,7 @@ void DockWindow::Render() {
     float cursorY = 0.0f;
     bool hovered = false;
     if (!menuOpen_ && GetCursorPos(&cursor) && CursorToLayout(cursor, &cursorX, &cursorY)) {
-        hovered = layout_.Contains(cursorX, cursorY);
+        hovered = layout_.HoverContains(cursorX, cursorY);
     }
     layout_.SetCursor(cursorX, hovered);
     const bool layoutMoving = layout_.Advance(deltaSeconds);
@@ -1097,21 +1170,6 @@ void DockWindow::Render() {
     constants.material[0] = settings_.dispersion;
     constants.material[1] = settings_.frost;
     constants.material[2] = settings_.splay;
-    constants.material[3] = backdrop.tiled() ? 1.0f : 0.0f;
-
-    constants.windowOrigin[0] = static_cast<float>(windowOrigin.x);
-    constants.windowOrigin[1] = static_cast<float>(windowOrigin.y);
-    constants.windowOrigin[2] = static_cast<float>(monitorRect.right - monitorRect.left);
-    constants.windowOrigin[3] = static_cast<float>(monitorRect.bottom - monitorRect.top);
-
-    float uvScale[2]{};
-    float uvOffset[2]{};
-    backdrop.uv_scale(uvScale);
-    backdrop.uv_offset(uvOffset);
-    constants.backdropUv[0] = uvScale[0];
-    constants.backdropUv[1] = uvScale[1];
-    constants.backdropUv[2] = uvOffset[0];
-    constants.backdropUv[3] = uvOffset[1];
 
     // The bulges under raised icons. At rest there are none, and the shader's
     // loop does not run at all.
@@ -1276,7 +1334,18 @@ void DockWindow::Render() {
     // Drive the next animation frame. Present blocked on vblank, so this paces
     // itself at the refresh rate; when the slide and the springs have both
     // settled the dock falls silent again and presents nothing at all.
-    if ((animating_ || layoutMoving || labelMoving) && !deviceLost_) {
+    //
+    // `hovered` is in the list for a reason that is not animation. The wave is
+    // computed directly from the cursor rather than sprung toward it, so while
+    // the cursor is on the dock nothing is "moving" in the sense the other
+    // flags mean, and frames were being driven purely by WM_MOUSEMOVE. That
+    // makes the whole thing hostage to receiving a mouse message on the way
+    // out: miss the WM_MOUSELEAVE - the cursor leaves onto a window that has
+    // taken capture, or across a monitor edge, or the dock hides underneath it -
+    // and the last frame drawn is a magnified one that nothing will ever
+    // correct. Presenting while hovered costs frames only while the dock is
+    // actually being used, and it means the release cannot be missed.
+    if ((animating_ || layoutMoving || labelMoving || hovered) && !deviceLost_) {
         PostMessageW(hwnd_, kAnimateMessage, 0, 0);
     }
 }
@@ -1706,6 +1775,14 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             // Debounced rather than acted on directly: a single app launch can
             // fire this a dozen times as its windows appear.
             SetTimer(hwnd_, kRunningTimer, kRunningDebounceMs, nullptr);
+            // A window appearing or closing is also the other way the dock can
+            // become covered or uncovered, so it feeds the same debounce as the
+            // cover watch's own events.
+            SetTimer(hwnd_, kCoverTimer, kCoverDebounceMs, nullptr);
+            return 0;
+
+        case kCoverMessage:
+            SetTimer(hwnd_, kCoverTimer, kCoverDebounceMs, nullptr);
             return 0;
 
         case kCaptureMessage:
@@ -1729,6 +1806,9 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     frostDirty_ = true;
                     RequestRedraw();
                 }
+            } else if (wParam == kCoverTimer) {
+                KillTimer(hwnd_, kCoverTimer);
+                CoverChanged();
             } else if (wParam == kLabelTimer) {
                 // A second with the cursor still. Put the name away - it has
                 // been read by now, and leaving it up parks a black pill over

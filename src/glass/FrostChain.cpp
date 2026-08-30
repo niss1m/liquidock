@@ -1,6 +1,7 @@
 #include "glass/FrostChain.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "core/Check.h"
@@ -9,16 +10,28 @@
 namespace liquidock {
 namespace {
 
-// Quarter resolution. The frost is heavily blurred by definition, so there is
-// nothing in it that a full-resolution buffer would preserve - it only costs
-// sixteen times the bandwidth.
-constexpr UINT kDownscale = 4;
-
-UINT Scaled(UINT value) {
-    return std::max<UINT>(1, value / kDownscale);
-}
+// Reducing by N and sampling back up is itself a blur of roughly N/2.6 pixels -
+// the cost of the bilinear filter on the way down and again on the way up. So
+// a divisor is only free once the blur it is helping with is comfortably wider
+// than that, and running at a quarter unconditionally put a floor of about a
+// pixel and a half under a setting whose whole design range starts below two.
+//
+// This keeps the resampling error under about a fifth of the radius being
+// asked for, which is imperceptible, and still drops to a quarter for the
+// heavy frosts where the bandwidth actually matters.
+constexpr float kSigmaPerDivisor = 2.6f;
+constexpr UINT kMaxDownscale = 4;
 
 } // namespace
+
+UINT FrostChain::DownscaleFor(float sigmaPx) {
+    const float allowed = sigmaPx / kSigmaPerDivisor;
+    UINT divisor = 1;
+    while (divisor < kMaxDownscale && static_cast<float>(divisor + 1) <= allowed) {
+        ++divisor;
+    }
+    return divisor;
+}
 
 bool FrostChain::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
     device_ = &device;
@@ -42,13 +55,16 @@ bool FrostChain::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
 }
 
 void FrostChain::Reset() {
-    quarter_.Reset();
+    cropped_.Reset();
     temp_.Reset();
     frost_.Reset();
     sampler_.Reset();
     constantBuffer_.Reset();
+    fullWidth_ = 0;
+    fullHeight_ = 0;
     width_ = 0;
     height_ = 0;
+    downscale_ = 0;
 }
 
 bool FrostChain::CreateTarget(Target& target, UINT width, UINT height) {
@@ -71,20 +87,33 @@ bool FrostChain::CreateTarget(Target& target, UINT width, UINT height) {
 }
 
 bool FrostChain::Resize(UINT windowWidth, UINT windowHeight) {
-    const UINT width = Scaled(windowWidth);
-    const UINT height = Scaled(windowHeight);
-    if (width == width_ && height == height_ && frost_.srv) {
+    if (windowWidth == fullWidth_ && windowHeight == fullHeight_) {
+        return true;
+    }
+    fullWidth_ = windowWidth;
+    fullHeight_ = windowHeight;
+    // Force the next Build to reallocate: the divisor it wants may not have
+    // changed, but the size underneath it has.
+    downscale_ = 0;
+    return true;
+}
+
+bool FrostChain::EnsureTargets(UINT downscale) {
+    if (downscale == downscale_ && frost_.srv) {
         return true;
     }
 
-    if (!CreateTarget(quarter_, width, height) || !CreateTarget(temp_, width, height) ||
+    const UINT width = std::max<UINT>(1, fullWidth_ / downscale);
+    const UINT height = std::max<UINT>(1, fullHeight_ / downscale);
+    if (!CreateTarget(cropped_, width, height) || !CreateTarget(temp_, width, height) ||
         !CreateTarget(frost_, width, height)) {
         return false;
     }
 
     width_ = width;
     height_ = height;
-    LogDebug("Frost chain resized to {}x{}", width, height);
+    downscale_ = downscale;
+    LogDebug("Frost chain {}x{} at 1/{}", width, height, downscale);
     return true;
 }
 
@@ -140,7 +169,10 @@ void FrostChain::RunPass(Target& destination, ID3D11ShaderResourceView* source,
 
 bool FrostChain::Build(const Backdrop& backdrop, POINT windowOrigin, SIZE windowSize,
                        float sigmaPx) {
-    if (!frost_.rtv || !backdrop.srv()) {
+    if (!backdrop.srv() || fullWidth_ == 0) {
+        return false;
+    }
+    if (!EnsureTargets(DownscaleFor(sigmaPx))) {
         return false;
     }
 
@@ -161,22 +193,30 @@ bool FrostChain::Build(const Backdrop& backdrop, POINT windowOrigin, SIZE window
     constants.window[3] = static_cast<float>(windowSize.cy);
     constants.monitor[0] = static_cast<float>(monitor.right - monitor.left);
     constants.monitor[1] = static_cast<float>(monitor.bottom - monitor.top);
-    // Sigma is quoted in full-resolution pixels but applied to a quarter-size
-    // target, so it has to come down by the same factor.
-    constants.monitor[2] = sigmaPx / static_cast<float>(kDownscale);
+    // Sigma is quoted in full-resolution pixels but applied to a reduced
+    // target, so it has to come down by the same factor. The resampling either
+    // side of the blur contributes its own width, and subtracting it in
+    // quadrature - blurs compose as the root of the sum of squares, not the sum -
+    // is what keeps the result the radius that was asked for rather than that
+    // radius plus whatever the divisor cost.
+    const float divisor = static_cast<float>(downscale_);
+    const float resampling = (divisor > 1.0f) ? (divisor / kSigmaPerDivisor) : 0.0f;
+    const float corrected =
+        std::sqrt(std::max(sigmaPx * sigmaPx - resampling * resampling, 0.0f));
+    constants.monitor[2] = corrected / divisor;
     constants.monitor[3] = backdrop.tiled() ? 1.0f : 0.0f;
     constants.backdropUv[0] = uvScale[0];
     constants.backdropUv[1] = uvScale[1];
     constants.backdropUv[2] = uvOffset[0];
     constants.backdropUv[3] = uvOffset[1];
 
-    // Pass 1: crop the backdrop to the window footprint at quarter size.
-    RunPass(quarter_, backdrop.srv(), "PSDownsample", constants);
+    // Pass 1: crop the backdrop to the window footprint.
+    RunPass(cropped_, backdrop.srv(), "PSDownsample", constants);
 
     // Pass 2: horizontal.
     constants.direction[0] = constants.target[2];
     constants.direction[1] = 0.0f;
-    RunPass(temp_, quarter_.srv.Get(), "PSBlur", constants);
+    RunPass(temp_, cropped_.srv.Get(), "PSBlur", constants);
 
     // Pass 3: vertical.
     constants.direction[0] = 0.0f;
