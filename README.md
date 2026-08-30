@@ -83,13 +83,17 @@ the row, which is separate from the structural hairline between the two groups a
 **Glass**, **Dock** and **Behaviour** hold the rest. The window is an ordinary one — it is in the
 taskbar and in Alt+Tab, it minimises, and it stays where you put it.
 
+A slider takes the mouse wheel and the arrow keys while the pointer is on it, moving by one unit of
+whatever it displays — 0.01 for a value shown to two decimals, 1 for one shown to none. Useful when
+the value you want is a number rather than a feeling.
+
 That file — `%LOCALAPPDATA%\LiquiDock\settings.txt`, `key = value`, with a comment on every
 setting — stays a first-class way in, and *Edit settings file…* opens it. The dock watches it, so
 saving takes effect without a restart, and the preferences panel rewrites only the value half of
 each line, so comments you add survive being edited from the UI.
 
 Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
-`light-intensity`, `tint-alpha`, `inner-shadow`. Magnification: `magnification`, `max-scale`, `influence`,
+`light-intensity`, `tint-alpha`, `inner-shadow`, `rim-opacity`. Magnification: `magnification`, `max-scale`, `influence`,
 `icon-bulge`, `follow-cursor`. Appearance: `separator-image`, `divider-gap`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `hide-when-covered`,
 `dwell-seconds`, `slide-seconds`.
 

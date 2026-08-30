@@ -44,6 +44,11 @@ struct Settings {
     // something to stand on so the edge reads as raised rather than drawn -
     // which is a strong effect, and one worth being able to turn off.
     float innerShadow = 0.0f;
+
+    // How opaque the bright edge is. Distinct from the light's intensity: that
+    // is how hard the light falls on the glass, this is how much of the edge
+    // you want to see at all.
+    float rimOpacity = 0.0f;
     BackdropSource backdrop = BackdropSource::Screen;
 
     // --- Magnification ----------------------------------------------------

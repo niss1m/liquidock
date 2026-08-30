@@ -663,6 +663,14 @@ void DockWindow::ReloadSettings() {
     LogInfo("Settings reloaded (frost {:.2f}, refraction {:.2f}, icon bulge {})", settings_.frost,
             settings_.refraction, settings_.iconBulge ? "on" : "off");
 
+    // The preferences window keeps its own copy and writes all of it on every
+    // change, so it has to hear about the file changing too. Without this, an
+    // edit made anywhere else while the window is open survived only until the
+    // next slider anyone touched.
+    if (settingsWindow_) {
+        settingsWindow_->ReloadFromDisk();
+    }
+
     // How wide the dock can get is a function of the magnification, and the
     // window is sized for that once rather than resized per frame - so these two
     // are the only settings that have to reach all the way back to the window.
@@ -1279,6 +1287,7 @@ void DockWindow::Render() {
     // quoted in logical ones, because a two-pixel rim at 200% DPI is a one-pixel
     // rim, which is to say no rim at all.
     constants.lensInfo[2] = scale;
+    constants.lensInfo[3] = settings_.rimOpacity;
     for (int i = 0; i < lensCount; ++i) {
         constants.lens[i][0] = lenses[static_cast<size_t>(i)].centerX * scale;
         constants.lens[i][1] = (lenses[static_cast<size_t>(i)].centerY + slide) * scale;

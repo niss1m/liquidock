@@ -51,6 +51,16 @@ public:
                 ItemsCallback onItemsChanged);
     void Destroy();
 
+    // Re-reads the settings file into the window's own copy.
+    //
+    // The window holds a whole Settings and writes all of it on every change,
+    // so anything edited in the file while the window is open was reverted by
+    // the next slider it touched - an edit silently undone by a program that
+    // had no idea it had been made. Ignored mid-drag, where the file is being
+    // written by this window anyway and re-reading would fight the pointer.
+    void ReloadFromDisk();
+    bool interacting() const { return dragRow_ >= 0 || pressItem_ >= 0 || editItem_ >= 0; }
+
     // Brings the window up, centred on `nearMonitor`, loading the current
     // values first so an edit made in the text file is not overwritten.
     void Show(HMONITOR nearMonitor);
@@ -144,6 +154,12 @@ private:
     // Which system cursor belongs over this point: a hand where a click does
     // something, a caret where typing does, an arrow everywhere else.
     const wchar_t* CursorFor(float x, float y) const;
+    // Nudges a slider by whole units of whatever it displays: a setting shown
+    // to two decimals steps by 0.01, one shown to none steps by 1. Taking the
+    // step from the format means the keyboard and the wheel move a value by
+    // exactly the amount the reader can see change, with nothing to configure.
+    bool StepSlider(int index, int steps);
+
     // Applies a click or drag at `x` to the row, and returns true if the value
     // actually moved - a redraw and a save are only worth it if it did.
     bool ApplyPointer(int row, float x, bool dragging);

@@ -36,7 +36,8 @@ cbuffer GlassConstants : register(b0)
     float4 gLight;          // x = angle (rad), y = intensity, z = refraction, w = depth
     float4 gMaterial;       // x = dispersion, y = frost, z = splay, w = inner shadow
     float4 gTint;           // straight alpha
-    float4 gLensInfo;       // x = lens count, y = smooth-min radius (px), z = px per logical px
+    float4 gLensInfo;       // x = lens count, y = smooth-min radius (px), z = px per logical px,
+                            // w = rim opacity
     // xy = centre (px), z = half width (px), w = half height (px). The corner
     // radius is min(z, w) - a lens is always as round as it can be - so it does
     // not need a slot of its own.
@@ -63,6 +64,7 @@ SamplerState gLinearClamp : register(s0);
 #define LENS_COUNT      gLensInfo.x
 #define LENS_FUSE       gLensInfo.y
 #define PIXEL_SCALE     gLensInfo.z
+#define RIM_OPACITY     gLensInfo.w
 
 // How far the bending fans inward, as a fraction of the panel's own half
 // height, at splay 0 and splay 1. A fraction rather than a pixel count is the
@@ -302,8 +304,8 @@ float4 PSMain(Varyings input) : SV_Target
     // what a specular highlight does, and the whole reason glass looks like
     // glass rather than like a rectangle with a border.
     const float intensity = saturate(LIGHT_INTENSITY);
-    const float lift =
-        saturate(intensity * (kRimBase + square * (kRimAmp + kRimLean * facing)) / 0.80);
+    const float lift = saturate(intensity * saturate(RIM_OPACITY) *
+                                (kRimBase + square * (kRimAmp + kRimLean * facing)) / 0.80);
     colour = lerp(colour, float3(1.0, 1.0, 1.0), rim * lift);
 
     // A far softer sheen inside the rim where the surface turns towards the

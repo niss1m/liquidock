@@ -353,6 +353,8 @@ void SettingsWindow::BuildRows() {
            0.4f, 2, 1);
     slider(Tab::Glass, L"Inner shadow", L"The dark shoulder just inside the rim",
            &settings_.innerShadow, 0.0f, 1.0f, 2, 1);
+    slider(Tab::Glass, L"Border", L"How opaque the bright edge is", &settings_.rimOpacity, 0.0f,
+           1.0f, 2, 1);
 
     // --- Dock -------------------------------------------------------------
     section(Tab::Dock, L"Size", 0);
@@ -791,6 +793,17 @@ bool SettingsWindow::active() const {
     return hwnd_ && visible_ && GetForegroundWindow() == hwnd_;
 }
 
+void SettingsWindow::ReloadFromDisk() {
+    if (!hwnd_ || !visible_ || interacting()) {
+        return;
+    }
+    settings_.Load();
+    items_.Load();
+    BuildRows();
+    LayoutRows();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
 void SettingsWindow::Hide() {
     if (!hwnd_ || !visible_) {
         return;
@@ -827,6 +840,31 @@ int SettingsWindow::RowAt(float x, float y) const {
         }
     }
     return -1;
+}
+
+bool SettingsWindow::StepSlider(int index, int steps) {
+    if (index < 0 || index >= static_cast<int>(rows_.size()) || steps == 0) {
+        return false;
+    }
+    Row& row = rows_[static_cast<size_t>(index)];
+    if (row.kind != Row::Kind::Slider || !row.number) {
+        return false;
+    }
+    // One unit of what the row displays: 1, 0.1 or 0.01.
+    float unit = 1.0f;
+    for (int i = 0; i < row.decimals; ++i) {
+        unit *= 0.1f;
+    }
+    const float value =
+        std::clamp(*row.number + unit * static_cast<float>(steps), row.minimum, row.maximum);
+    if (std::fabs(value - *row.number) < unit * 0.01f) {
+        return false;
+    }
+    // Snapped to the unit, or a value nudged from something a drag left at
+    // 0.5037 would keep its stray digits forever and the readout would stop
+    // agreeing with what the arrows do to it.
+    *row.number = std::round(value / unit) * unit;
+    return true;
 }
 
 bool SettingsWindow::ApplyPointer(int index, float x, bool dragging) {
@@ -2165,6 +2203,19 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             ScreenToClient(hwnd, &point);
             const float x = static_cast<float>(point.x) / scale;
+            const float y = static_cast<float>(point.y) / scale;
+
+            // A slider under the pointer takes the wheel; the list only gets it
+            // when the pointer is not on something the wheel can adjust.
+            const int over = RowAt(x, y);
+            if (over >= 0 && rows_[static_cast<size_t>(over)].kind == Row::Kind::Slider) {
+                const int notches = GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
+                if (StepSlider(over, notches)) {
+                    CommitChange();
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
             if (itemScrollMax_ > 0.0f && x >= itemsClip_.left && x <= itemsClip_.right) {
                 const float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
                 itemScroll_ = std::clamp(itemScroll_ - delta * layout::kItemHeight, 0.0f,
@@ -2241,6 +2292,20 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 }
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
+            }
+            // Arrows nudge whatever the pointer is resting on. No focus ring
+            // and no tabbing to a control first: the pointer is already saying
+            // which setting is meant, and a settings window where the keyboard
+            // and the pointer disagree about that is a window with two
+            // selections in it.
+            if (wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_UP ||
+                wParam == VK_DOWN) {
+                const int steps = (wParam == VK_RIGHT || wParam == VK_UP) ? 1 : -1;
+                if (StepSlider(hoverRow_, steps)) {
+                    CommitChange();
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
             }
             if (wParam == VK_ESCAPE) {
                 Hide();

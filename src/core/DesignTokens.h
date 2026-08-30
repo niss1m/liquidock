@@ -90,6 +90,10 @@ inline constexpr float kSplay = 1.00f;
 // its own.
 inline constexpr float kInnerShadow = 1.00f;
 
+// How opaque the rim is. Separate from the light's intensity, which is about
+// how hard the light falls; this is about how much of the edge you want to see.
+inline constexpr float kRimOpacity = 1.00f;
+
 // Blur radius at frost = 1.0, in logical pixels. Calibrated: the design's
 // render is a quarter as sharp inside the bar as immediately outside it, which
 // is a Gaussian of about 1.8 logical pixels, and the Figma panel calls that
