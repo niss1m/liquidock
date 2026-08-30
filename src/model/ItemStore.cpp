@@ -297,6 +297,41 @@ bool ItemStore::Remove(size_t index) {
     return true;
 }
 
+int ItemStore::MoveTo(size_t from, size_t to) {
+    if (from >= items_.size() || to > items_.size()) {
+        return -1;
+    }
+    DockItem moving = items_[from];
+    items_.erase(items_.begin() + static_cast<ptrdiff_t>(from));
+    if (to > from) {
+        --to; // the erase shifted everything after it down one
+    }
+    to = std::min(to, items_.size());
+
+    // The group comes from where it landed. Dropping something to the right of
+    // the hairline is how you say "this belongs over there", and asking the user
+    // to then set the group separately would be asking them twice.
+    if (!items_.empty()) {
+        const size_t neighbour = (to < items_.size()) ? to : items_.size() - 1;
+        moving.group = items_[neighbour].group;
+    }
+    items_.insert(items_.begin() + static_cast<ptrdiff_t>(to), std::move(moving));
+    Save();
+    return static_cast<int>(to);
+}
+
+bool ItemStore::Replace(size_t index, DockItem item) {
+    if (index >= items_.size()) {
+        return false;
+    }
+    if (item.label.empty()) {
+        item.label = LabelFromPath(item.path);
+    }
+    items_[index] = std::move(item);
+    Save();
+    return true;
+}
+
 bool ItemStore::Add(DockItem item) {
     if (static_cast<int>(items_.size()) >= design::kMaxItems) {
         LogWarn("The dock is full ({} items); not adding another", design::kMaxItems);
@@ -378,6 +413,60 @@ bool ItemStore::PickProgram(HWND owner, DockItem* out) {
     out->label = LabelFromPath(out->path);
     CoTaskMemFree(path);
     return true;
+}
+
+namespace {
+
+// Both pickers are the same dialog with different options, so the shared part
+// is written once. Returns the chosen path, or false on cancel.
+bool PickPath(HWND owner, const wchar_t* title, const COMDLG_FILTERSPEC* types, UINT typeCount,
+              bool folders, std::wstring* out) {
+    if (!out) {
+        return false;
+    }
+    ComPtr<IFileOpenDialog> dialog;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&dialog)))) {
+        return false;
+    }
+    if (types && typeCount > 0) {
+        dialog->SetFileTypes(typeCount, types);
+    }
+    dialog->SetTitle(title);
+
+    FILEOPENDIALOGOPTIONS options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM |
+                       (folders ? FOS_PICKFOLDERS : 0));
+
+    if (FAILED(dialog->Show(owner))) {
+        return false; // cancelled
+    }
+    ComPtr<IShellItem> result;
+    PWSTR path = nullptr;
+    if (FAILED(dialog->GetResult(&result)) ||
+        FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &path)) || !path) {
+        return false;
+    }
+    *out = path;
+    CoTaskMemFree(path);
+    return true;
+}
+
+} // namespace
+
+bool ItemStore::PickImage(HWND owner, std::wstring* out) {
+    // Everything WIC decodes. The extension list is a convenience for the
+    // dialog, not a check: the loader sniffs the file itself.
+    static const COMDLG_FILTERSPEC kTypes[] = {
+        {L"Images", L"*.png;*.ico;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp"},
+        {L"All files", L"*.*"},
+    };
+    return PickPath(owner, L"Choose an icon", kTypes, ARRAYSIZE(kTypes), false, out);
+}
+
+bool ItemStore::PickFolder(HWND owner, std::wstring* out) {
+    return PickPath(owner, L"Start in", nullptr, 0, true, out);
 }
 
 void ItemStore::SeedDefaults() {

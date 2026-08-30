@@ -130,6 +130,19 @@ private:
     void DrawToggle(const Row& row, bool hovered);
     void DrawChoice(const Row& row, float pointerX);
     void DrawItem(const Row& row, bool hovered, float pointerX);
+    // The open editor under an item row. Returns the field rectangles in the
+    // order the enum below gives them, so drawing and hit testing cannot drift.
+    enum class Field { Name, Path, Arguments, WorkingDir, Icon, Count };
+    void EditorRects(const Row& row, D2D1_RECT_F* fields, D2D1_RECT_F* buttons) const;
+    void DrawEditor(const Row& row);
+    // Handles a click inside an open editor. True if anything changed.
+    bool HandleEditorClick(const Row& row, float x, float y);
+    // Commits whatever is being typed back into the item.
+    void CommitEdit();
+    void BeginEdit(int itemIndex, Field field);
+    // The item index a drop at `y` would land on.
+    int DropIndexAt(float y) const;
+    void DrawDetailBar();
     // Chevrons and crosses drawn from line segments rather than glyphs, so they
     // do not depend on a symbol font being present and are crisp at any size.
     void DrawChevron(const D2D1_RECT_F& box, bool up, const D2D1_COLOR_F& colour);
@@ -175,9 +188,30 @@ private:
     float itemScrollMax_ = 0.0f;
     D2D1_RECT_F itemsClip_{};
     int dragRow_ = -1;
+    // The item whose editor is open, or -1. Opening one is a click on the row;
+    // it is the same gesture as selecting, because there is nothing else
+    // selecting an item would be for.
+    int expandedItem_ = -1;
+    // Press-and-move on a row is a drag; press-and-release is a click. Both
+    // start the same way, so the press is remembered until it turns into one.
+    int pressItem_ = -1;
+    float pressY_ = 0.0f;
+    bool draggingItem_ = false;
+    int dropIndex_ = -1;
+    // The field being typed into, its buffer and the caret's position in it.
+    // Deliberately a plain buffer with a caret and no selection: this edits a
+    // path and a couple of short strings, and a full text control - selection,
+    // IME composition, undo - is a project in itself.
+    Field editField_ = Field::Count;
+    int editItem_ = -1;
+    std::wstring editText_;
+    size_t caret_ = 0;
     float pointerX_ = 0.0f;
     float pointerY_ = 0.0f;
     bool visible_ = false;
+    // Whether the window has been positioned once. It is centred on first use
+    // and then left wherever the user put it.
+    bool placed_ = false;
     bool mouseTracking_ = false;
     int width_ = 0;
     int height_ = 0;

@@ -49,6 +49,20 @@ public:
     // Returns the item's new index, or -1 if it could not move.
     int Move(size_t index, int direction);
 
+    // Moves an item to a new index, taking the group of wherever it lands.
+    // Distinct from Move: that is the up/down buttons stepping one place, this
+    // is a drag dropping somewhere entirely. Returns the resulting index.
+    int MoveTo(size_t from, size_t to);
+
+    // Rewrites one item in place and saves. Used by the preferences editor,
+    // which edits a copy so a half-typed path is never what gets written.
+    bool Replace(size_t index, DockItem item);
+
+    // The same dialog, asked for an image and for a folder. Both live here for
+    // the same reason PickProgram does: one place for the flags to be right.
+    static bool PickImage(HWND owner, std::wstring* out);
+    static bool PickFolder(HWND owner, std::wstring* out);
+
     // Asks for a program with the standard file dialog. False if cancelled.
     // Lives here because acquiring an item is the item store's business, and
     // because both the dock's context menu and the preferences window need it -

@@ -68,11 +68,15 @@ Downloads and the Recycle Bin.
 *Preferences…* in the tray menu opens a custom-drawn panel, in four tabs. Changes apply to the
 running dock immediately and are written back to the settings file.
 
-**Items** is the dock's contents, with each entry's real icon, what it points at, and — on the row
-under the pointer — buttons to move it up, down, or off the dock. Moving an item past the group
-boundary puts it in that group rather than refusing. *Add app…* opens a file picker; *Add divider*
-drops a rule into the row, which is separate from the structural hairline between the two groups and
-can go anywhere. **Glass**, **Dock** and **Behaviour** hold the rest.
+**Items** is the dock's contents, one line each with its real icon. Hovering a row names what it
+actually runs in the bar underneath; **dragging one reorders the dock**, and dropping it on the far
+side of the group boundary moves it into that group. Clicking a row opens it: name, target,
+arguments, working directory and icon, each editable in place. The buttons on the hovered row still
+step it up, down, or off the dock. *Add app…* opens a file picker; *Add divider* drops a rule into
+the row, which is separate from the structural hairline between the two groups and can go anywhere.
+
+**Glass**, **Dock** and **Behaviour** hold the rest. The window is an ordinary one — it is in the
+taskbar and in Alt+Tab, it minimises, and it stays where you put it.
 
 That file — `%LOCALAPPDATA%\LiquiDock\settings.txt`, `key = value`, with a comment on every
 setting — stays a first-class way in, and *Edit settings file…* opens it. The dock watches it, so

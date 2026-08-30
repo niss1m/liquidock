@@ -38,10 +38,19 @@ constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
 constexpr float kValueWidth = 48.0f;
 constexpr float kFooterHeight = 34.0f;
-// Tall enough for a 32 px icon with air round it. The list is the one place
-// where recognising a thing at a glance matters more than fitting more in.
-constexpr float kItemHeight = 44.0f;
-constexpr float kItemIcon = 28.0f;
+// One line per item. The path used to sit under the name on a second line,
+// which is a lot of vertical space spent on something you only want when you
+// are asking "which one is this?" - so it moved to the bar under the list and
+// the row got its height back.
+constexpr float kItemHeight = 34.0f;
+constexpr float kItemIcon = 24.0f;
+// Added to a row while its editor is open.
+constexpr float kEditorRow = 34.0f;
+constexpr float kEditorHeight = 5.0f * kEditorRow + 16.0f;
+constexpr float kEditorLabel = 104.0f;
+constexpr float kEditorButton = 92.0f;
+// The line under the list that says what the hovered row actually is.
+constexpr float kDetailBar = 30.0f;
 constexpr float kItemButton = 28.0f;
 constexpr int kMaxColumns = 2;
 // The tallest the list is allowed to make the window. Forty pinned apps is
@@ -112,12 +121,19 @@ bool SettingsWindow::Create(GraphicsDevice& device, const Settings& settings,
     wc.lpszClassName = kWindowClass;
     RegisterClassExW(&wc);
 
-    // TOOLWINDOW keeps it out of the taskbar and Alt+Tab - it belongs to the
-    // dock rather than standing on its own - but unlike the dock it is
-    // deliberately activatable, because it has to take the keyboard for Escape.
-    hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-                            kWindowClass, L"LiquiDock Preferences", WS_POPUP, 0, 0, 1, 1, nullptr,
-                            nullptr, wc.hInstance, this);
+    // An ordinary top-level window, not a panel belonging to the dock. It was
+    // a TOOLWINDOW - out of the taskbar, out of Alt+Tab - and dismissed itself
+    // the moment it lost focus, which together meant that glancing at anything
+    // else closed it and there was no way back except the tray. A window you
+    // cannot Alt+Tab to is a window you cannot leave.
+    //
+    // WS_POPUP with APPWINDOW rather than a real frame: the panel draws its own
+    // rounded shape on a composition swapchain, and a system caption above that
+    // would be a second, differently-coloured window edge. SYSMENU and
+    // MINIMIZEBOX are what make Alt+Space and the taskbar's own restore work.
+    hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_APPWINDOW, kWindowClass,
+                            L"LiquiDock Preferences", WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX, 0, 0,
+                            1, 1, nullptr, nullptr, wc.hInstance, this);
     if (!hwnd_) {
         LogError("Preferences window creation failed: {}", GetLastError());
         return false;
@@ -306,13 +322,17 @@ float SettingsWindow::MeasureTab(Tab tab) const {
             y[column] += layout::kSectionHeight;
         } else if (row.kind == Row::Kind::Item) {
             y[column] += layout::kItemHeight;
+            if (row.itemIndex == expandedItem_) {
+                y[column] += layout::kEditorHeight;
+            }
         } else {
             y[column] += layout::kRowHeight;
         }
     }
     float tallest = *std::max_element(y, y + columns);
     if (tab == Tab::Items) {
-        tallest = std::min(tallest, layout::kListMaxHeight) + layout::kActionRow;
+        tallest = std::min(tallest, layout::kListMaxHeight) + layout::kActionRow +
+                  layout::kDetailBar;
     }
     return tallest;
 }
@@ -356,6 +376,9 @@ void SettingsWindow::LayoutRows() {
             height = layout::kSectionHeight;
         } else if (listRow) {
             height = layout::kItemHeight;
+            if (row.itemIndex == expandedItem_) {
+                height += layout::kEditorHeight;
+            }
         }
 
         // Only the list scrolls.
@@ -364,7 +387,8 @@ void SettingsWindow::LayoutRows() {
             D2D1::RectF(left, y[column] - scroll, left + columnWidth, y[column] + height - scroll);
 
         if (listRow) {
-            // Three equal buttons hugging the right edge: up, down, remove.
+            // Three equal buttons hugging the right edge of the row's *first*
+            // line, so an open editor underneath does not carry them down with it.
             const float top = row.bounds.top + (layout::kItemHeight - layout::kItemButton) * 0.5f;
             row.control = D2D1::RectF(row.bounds.right - 3.0f * layout::kItemButton, top,
                                       row.bounds.right, top + layout::kItemButton);
@@ -388,8 +412,9 @@ void SettingsWindow::LayoutRows() {
     height_ = static_cast<int>(std::lround((content + layout::kFooterHeight) * scale));
     width_ = static_cast<int>(std::lround(layout::kWidth * scale));
 
+    const float listBottom = listTab ? (content - layout::kDetailBar) : content;
     itemsClip_ = D2D1::RectF(layout::kPadding, listTop - 4.0f, layout::kWidth - layout::kPadding,
-                             content);
+                             listBottom);
     if (!listTab) {
         itemScrollMax_ = 0.0f;
         itemScroll_ = 0.0f;
@@ -496,7 +521,17 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     const int x = work.left + ((work.right - work.left) - width_) / 2;
     const int y = work.top + ((work.bottom - work.top) - height_) / 2;
 
-    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width_, height_, SWP_NOACTIVATE);
+    // Centred the first time and never again: a window the user has dragged
+    // somewhere should still be there when they open it a second time.
+    if (placed_) {
+        RECT current{};
+        GetWindowRect(hwnd_, &current);
+        SetWindowPos(hwnd_, nullptr, current.left, current.top, width_, height_,
+                     SWP_NOACTIVATE | SWP_NOZORDER);
+    } else {
+        SetWindowPos(hwnd_, nullptr, x, y, width_, height_, SWP_NOACTIVATE | SWP_NOZORDER);
+        placed_ = true;
+    }
 
     if (!target_.width()) {
         if (!target_.Initialize(*device_, hwnd_, static_cast<UINT>(width_),
@@ -516,7 +551,9 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     StartIconLoad();
 
     visible_ = true;
-    ShowWindow(hwnd_, SW_SHOW);
+    // SW_SHOW on a minimised window leaves it minimised; RESTORE is what brings
+    // it back from the taskbar as well as showing it the first time.
+    ShowWindow(hwnd_, IsIconic(hwnd_) ? SW_RESTORE : SW_SHOW);
     SetForegroundWindow(hwnd_);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -525,9 +562,13 @@ void SettingsWindow::Hide() {
     if (!hwnd_ || !visible_) {
         return;
     }
+    CommitEdit();
     visible_ = false;
     dragRow_ = -1;
     hoverRow_ = -1;
+    pressItem_ = -1;
+    draggingItem_ = false;
+    dropIndex_ = -1;
     ShowWindow(hwnd_, SW_HIDE);
     // Whatever was still pending is written now rather than on the next open.
     KillTimer(hwnd_, kSaveTimer);
@@ -655,9 +696,126 @@ void SettingsWindow::CommitItems() {
     }
     BuildRows();
     LayoutRows();
+    ApplyWindowSize();
     StartIconLoad();
     hoverRow_ = -1;
     InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+int SettingsWindow::DropIndexAt(float y) const {
+    // Where an insertion at `y` would land: the first row whose midpoint is
+    // below the pointer. Measured against the rows as drawn, so it follows the
+    // scroll without having to know about it.
+    int index = 0;
+    for (const Row& row : rows_) {
+        if (row.tab != Tab::Items || row.kind != Row::Kind::Item) {
+            continue;
+        }
+        const float mid = row.bounds.top + layout::kItemHeight * 0.5f;
+        if (y < mid) {
+            return row.itemIndex;
+        }
+        index = row.itemIndex + 1;
+    }
+    return index;
+}
+
+void SettingsWindow::BeginEdit(int itemIndex, Field field) {
+    CommitEdit();
+    const auto& items = items_.items();
+    if (itemIndex < 0 || static_cast<size_t>(itemIndex) >= items.size()) {
+        return;
+    }
+    const DockItem& item = items[static_cast<size_t>(itemIndex)];
+    switch (field) {
+        case Field::Name: editText_ = item.label; break;
+        case Field::Arguments: editText_ = item.arguments; break;
+        case Field::WorkingDir: editText_ = item.workingDirectory; break;
+        default: return; // path and icon are chosen, not typed
+    }
+    editItem_ = itemIndex;
+    editField_ = field;
+    caret_ = editText_.size();
+}
+
+void SettingsWindow::CommitEdit() {
+    if (editItem_ < 0 || editField_ == Field::Count) {
+        return;
+    }
+    const size_t index = static_cast<size_t>(editItem_);
+    if (index < items_.items().size()) {
+        DockItem item = items_.items()[index];
+        switch (editField_) {
+            case Field::Name: item.label = editText_; break;
+            case Field::Arguments: item.arguments = editText_; break;
+            case Field::WorkingDir: item.workingDirectory = editText_; break;
+            default: break;
+        }
+        items_.Replace(index, std::move(item));
+        if (onItemsChanged_) {
+            onItemsChanged_();
+        }
+    }
+    editItem_ = -1;
+    editField_ = Field::Count;
+    editText_.clear();
+    caret_ = 0;
+}
+
+bool SettingsWindow::HandleEditorClick(const Row& row, float x, float y) {
+    D2D1_RECT_F fields[static_cast<int>(Field::Count)];
+    D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
+    EditorRects(row, fields, buttons);
+
+    const size_t index = static_cast<size_t>(row.itemIndex);
+    if (index >= items_.items().size()) {
+        return false;
+    }
+
+    for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
+        const D2D1_RECT_F& button = buttons[i];
+        if (x >= button.left && x <= button.right && y >= button.top && y <= button.bottom &&
+            button.right > button.left) {
+            DockItem item = items_.items()[index];
+            if (i == static_cast<int>(Field::Path)) {
+                DockItem picked;
+                if (!ItemStore::PickProgram(hwnd_, &picked)) {
+                    return false;
+                }
+                item.path = picked.path;
+                // The name follows the target unless it was set by hand, which
+                // is the behaviour that makes repointing an entry one action.
+                if (item.label.empty()) {
+                    item.label = picked.label;
+                }
+            } else if (i == static_cast<int>(Field::Icon)) {
+                std::wstring chosen;
+                if (!ItemStore::PickImage(hwnd_, &chosen)) {
+                    return false;
+                }
+                item.iconPath = chosen;
+            } else {
+                std::wstring chosen;
+                if (!ItemStore::PickFolder(hwnd_, &chosen)) {
+                    return false;
+                }
+                item.workingDirectory = chosen;
+            }
+            items_.Replace(index, std::move(item));
+            CommitItems();
+            return true;
+        }
+
+        const D2D1_RECT_F& field = fields[i];
+        if (x >= field.left && x <= field.right && y >= field.top && y <= field.bottom) {
+            if (i == static_cast<int>(Field::Path) || i == static_cast<int>(Field::Icon)) {
+                return false; // read-only: use the button beside it
+            }
+            BeginEdit(row.itemIndex, static_cast<Field>(i));
+            return true;
+        }
+    }
+    return false;
 }
 
 void SettingsWindow::StartIconLoad() {
@@ -862,9 +1020,8 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
     const auto& items = items_.items();
 
     if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
-        const D2D1_RECT_F pill =
-            D2D1::RectF(row.bounds.left, row.bounds.top + 7.0f, row.bounds.left + 124.0f,
-                        row.bounds.bottom - 7.0f);
+        const D2D1_RECT_F pill = D2D1::RectF(row.bounds.left, row.bounds.top + 7.0f,
+                                             row.bounds.right, row.bounds.bottom - 7.0f);
         brush_->SetColor(hovered ? Grey(1.0f, 0.16f) : Grey(1.0f, 0.10f));
         d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 6.0f, 6.0f), brush_.Get());
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -879,56 +1036,56 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
         return;
     }
     const DockItem& item = items[index];
+    const bool expanded = (row.itemIndex == expandedItem_);
+    const bool dragged = draggingItem_ && row.itemIndex == pressItem_;
 
-    if (hovered) {
-        brush_->SetColor(kRowHover);
+    // The row's first line. The editor, if any, is drawn under it.
+    const D2D1_RECT_F line =
+        D2D1::RectF(row.bounds.left, row.bounds.top, row.bounds.right,
+                    row.bounds.top + layout::kItemHeight);
+    const float mid = (line.top + line.bottom) * 0.5f;
+
+    if (dragged) {
+        // Lifted: dimmed in place, with the insertion line showing where it goes.
+        brush_->SetColor(Grey(1.0f, 0.05f));
         d2d_->FillRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(row.bounds.left - 6.0f, row.bounds.top + 1.0f,
-                                          row.bounds.right + 6.0f, row.bounds.bottom - 1.0f),
+            D2D1::RoundedRect(D2D1::RectF(line.left - 6.0f, line.top + 1.0f, line.right + 6.0f,
+                                          line.bottom - 1.0f),
+                              6.0f, 6.0f),
+            brush_.Get());
+    } else if (expanded || hovered) {
+        brush_->SetColor(expanded ? Grey(1.0f, 0.09f) : kRowHover);
+        d2d_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(line.left - 6.0f, line.top + 1.0f, line.right + 6.0f,
+                                          expanded ? row.bounds.bottom - 2.0f : line.bottom - 1.0f),
                               6.0f, 6.0f),
             brush_.Get());
     }
 
-    const float mid = (row.bounds.top + row.bounds.bottom) * 0.5f;
     const float textLeft = row.bounds.left + layout::kItemIcon + 12.0f;
     const float textRight = row.control.left - 90.0f;
 
     if (item.kind == ItemKind::Separator) {
-        // Drawn as what it is. A divider that appeared in the list as the word
-        // "Divider" and nothing else would be a row you have to read to
-        // identify, in a list whose whole job is being scannable.
         brush_->SetColor(Grey(1.0f, 0.30f));
         const float left = row.bounds.left + layout::kItemIcon * 0.5f;
-        d2d_->FillRectangle(D2D1::RectF(left, mid - 9.0f, left + 1.0f, mid + 9.0f), brush_.Get());
+        d2d_->FillRectangle(D2D1::RectF(left, mid - 8.0f, left + 1.0f, mid + 8.0f), brush_.Get());
         DrawText(L"Divider", labelFormat_.Get(),
-                 D2D1::RectF(textLeft, row.bounds.top + 12.0f, textRight, row.bounds.bottom),
-                 kValue);
+                 D2D1::RectF(textLeft, mid - 11.0f, textRight, line.bottom), kValue);
     } else {
-        ID2D1Bitmap* icon =
-            (index < itemIcons_.size()) ? itemIcons_[index].Get() : nullptr;
+        ID2D1Bitmap* icon = (index < itemIcons_.size()) ? itemIcons_[index].Get() : nullptr;
         const D2D1_RECT_F box =
             D2D1::RectF(row.bounds.left, mid - layout::kItemIcon * 0.5f,
                         row.bounds.left + layout::kItemIcon, mid + layout::kItemIcon * 0.5f);
         if (icon) {
             d2d_->DrawBitmap(icon, box, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         } else {
-            // A placeholder rather than a gap, so a slow icon does not make the
-            // row look broken while it is still being fetched.
             brush_->SetColor(Grey(1.0f, 0.08f));
             d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, 6.0f, 6.0f), brush_.Get());
         }
-
         DrawText(item.label, labelFormat_.Get(),
-                 D2D1::RectF(textLeft, row.bounds.top + 4.0f, textRight, row.bounds.top + 26.0f),
-                 kLabel);
-        // What it actually points at. The name alone stops being enough the
-        // moment someone has two entries for the same program.
-        DrawText(item.path, hintFormat_.Get(),
-                 D2D1::RectF(textLeft, row.bounds.top + 22.0f, textRight, row.bounds.bottom - 2.0f),
-                 kHint);
+                 D2D1::RectF(textLeft, mid - 11.0f, textRight, line.bottom), kLabel);
     }
 
-    // Which run of the bar it sits in, and the only place that is visible.
     if (item.group == ItemGroup::Utility) {
         const D2D1_RECT_F pill = D2D1::RectF(row.control.left - 78.0f, mid - 9.0f,
                                              row.control.left - 18.0f, mid + 9.0f);
@@ -940,9 +1097,13 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
 
+    if (expanded) {
+        DrawEditor(row);
+    }
+
     // Only shown on hover: three sets of buttons against every row is noise, and
     // the row you are pointing at is the only one you can act on anyway.
-    if (!hovered) {
+    if (!hovered || draggingItem_) {
         return;
     }
     const float third = (row.control.right - row.control.left) / 3.0f;
@@ -963,6 +1124,137 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
             DrawCross(box, ink);
         }
     }
+}
+
+void SettingsWindow::EditorRects(const Row& row, D2D1_RECT_F* fields,
+                                 D2D1_RECT_F* buttons) const {
+    const float left = row.bounds.left + layout::kItemIcon + 12.0f;
+    const float right = row.bounds.right - 8.0f;
+    float y = row.bounds.top + layout::kItemHeight + 8.0f;
+    for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
+        const bool hasButton = (i == static_cast<int>(Field::Path) ||
+                                i == static_cast<int>(Field::Icon) ||
+                                i == static_cast<int>(Field::WorkingDir));
+        const float fieldRight = hasButton ? (right - layout::kEditorButton - 8.0f) : right;
+        fields[i] = D2D1::RectF(left + layout::kEditorLabel, y + 4.0f, fieldRight,
+                                y + layout::kEditorRow - 4.0f);
+        buttons[i] = hasButton ? D2D1::RectF(right - layout::kEditorButton, y + 4.0f, right,
+                                             y + layout::kEditorRow - 4.0f)
+                               : D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+        y += layout::kEditorRow;
+    }
+}
+
+void SettingsWindow::DrawEditor(const Row& row) {
+    const auto& items = items_.items();
+    const size_t index = static_cast<size_t>(row.itemIndex);
+    if (index >= items.size()) {
+        return;
+    }
+    const DockItem& item = items[index];
+
+    static const wchar_t* const kNames[] = {L"Name", L"Opens", L"Arguments", L"Start in", L"Icon"};
+    const std::wstring values[] = {item.label, item.path, item.arguments, item.workingDirectory,
+                                   item.iconPath};
+    static const wchar_t* const kButtons[] = {nullptr, L"Choose…", nullptr, L"Browse…", L"Choose…"};
+
+    D2D1_RECT_F fields[static_cast<int>(Field::Count)];
+    D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
+    EditorRects(row, fields, buttons);
+
+    const float labelLeft = row.bounds.left + layout::kItemIcon + 12.0f;
+    for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
+        const D2D1_RECT_F& field = fields[i];
+        DrawText(kNames[i], hintFormat_.Get(),
+                 D2D1::RectF(labelLeft, field.top + 3.0f, labelLeft + layout::kEditorLabel,
+                             field.bottom),
+                 kHint);
+
+        const bool editing = (editItem_ == row.itemIndex && static_cast<int>(editField_) == i);
+        const bool typable = (i != static_cast<int>(Field::Path) &&
+                              i != static_cast<int>(Field::Icon));
+        if (typable) {
+            brush_->SetColor(editing ? Grey(1.0f, 0.14f) : Grey(1.0f, 0.06f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(field, 5.0f, 5.0f), brush_.Get());
+        }
+
+        const std::wstring text = editing ? editText_ : values[i];
+        const bool empty = text.empty();
+        DrawText(empty ? L"—" : text, labelFormat_.Get(),
+                 D2D1::RectF(field.left + 8.0f, field.top + 2.0f, field.right - 8.0f, field.bottom),
+                 empty ? kHint : kLabel);
+
+        if (editing) {
+            // The caret, measured rather than guessed: a fixed advance per
+            // character would sit visibly wrong in a proportional face.
+            float caretX = field.left + 8.0f;
+            ComPtr<IDWriteTextLayout> layout;
+            const std::wstring head = editText_.substr(0, caret_);
+            if (!head.empty() && dwrite_ &&
+                SUCCEEDED(dwrite_->CreateTextLayout(head.c_str(),
+                                                    static_cast<UINT32>(head.size()),
+                                                    labelFormat_.Get(), 4000.0f, 40.0f, &layout))) {
+                DWRITE_TEXT_METRICS metrics{};
+                if (SUCCEEDED(layout->GetMetrics(&metrics))) {
+                    caretX += metrics.widthIncludingTrailingWhitespace;
+                }
+            }
+            brush_->SetColor(Grey(1.0f, 0.85f));
+            d2d_->FillRectangle(
+                D2D1::RectF(caretX, field.top + 4.0f, caretX + 1.0f, field.bottom - 4.0f),
+                brush_.Get());
+        }
+
+        if (kButtons[i]) {
+            const D2D1_RECT_F& button = buttons[i];
+            const bool under = pointerX_ >= button.left && pointerX_ <= button.right &&
+                               pointerY_ >= button.top && pointerY_ <= button.bottom;
+            brush_->SetColor(under ? Grey(1.0f, 0.18f) : Grey(1.0f, 0.10f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(button, 5.0f, 5.0f), brush_.Get());
+            valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            DrawText(kButtons[i], valueFormat_.Get(),
+                     D2D1::RectF(button.left, button.top + 3.0f, button.right, button.bottom),
+                     kLabel);
+            valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+        }
+    }
+}
+
+void SettingsWindow::DrawDetailBar() {
+    const float scale = static_cast<float>(dpi_) / 96.0f;
+    const float top = static_cast<float>(height_) / scale - layout::kFooterHeight -
+                      layout::kDetailBar;
+    brush_->SetColor(Grey(1.0f, 0.05f));
+    d2d_->FillRectangle(
+        D2D1::RectF(layout::kPadding, top, layout::kWidth - layout::kPadding, top + 1.0f),
+        brush_.Get());
+
+    std::wstring detail;
+    if (hoverRow_ >= 0 && static_cast<size_t>(hoverRow_) < rows_.size()) {
+        const Row& row = rows_[static_cast<size_t>(hoverRow_)];
+        if (row.kind == Row::Kind::Item && row.itemIndex >= 0 &&
+            static_cast<size_t>(row.itemIndex) < items_.items().size()) {
+            const DockItem& item = items_.items()[static_cast<size_t>(row.itemIndex)];
+            if (item.kind == ItemKind::Separator) {
+                detail = L"A divider. It launches nothing; drag it where you want the break.";
+            } else {
+                detail = item.path;
+                if (!item.arguments.empty()) {
+                    detail += L"   " + item.arguments;
+                }
+                if (!item.workingDirectory.empty()) {
+                    detail += L"   · in " + item.workingDirectory;
+                }
+            }
+        }
+    }
+    if (detail.empty()) {
+        detail = L"Drag a row to reorder it · click it to edit";
+    }
+    DrawText(detail, hintFormat_.Get(),
+             D2D1::RectF(layout::kPadding, top + 7.0f, layout::kWidth - layout::kPadding,
+                         top + layout::kDetailBar),
+             kHint);
 }
 
 void SettingsWindow::Render() {
@@ -1088,6 +1380,29 @@ void SettingsWindow::Render() {
         d2d_->PopAxisAlignedClip();
     }
 
+    if (activeTab_ == Tab::Items) {
+        if (draggingItem_ && dropIndex_ >= 0) {
+            // Where it would land. Drawn after the rows so it is not clipped
+            // away by the one it happens to be sitting on.
+            float y = itemsClip_.bottom;
+            for (const Row& row : rows_) {
+                if (row.tab == Tab::Items && row.kind == Row::Kind::Item &&
+                    row.itemIndex == dropIndex_) {
+                    y = row.bounds.top;
+                    break;
+                }
+            }
+            y = std::clamp(y, itemsClip_.top, itemsClip_.bottom);
+            brush_->SetColor(kOn);
+            d2d_->FillRoundedRectangle(
+                D2D1::RoundedRect(D2D1::RectF(layout::kPadding, y - 1.0f,
+                                              layout::kWidth - layout::kPadding, y + 1.0f),
+                                  1.0f, 1.0f),
+                brush_.Get());
+        }
+        DrawDetailBar();
+    }
+
     DrawText(L"Esc to close  ·  these are the same values as settings.txt", hintFormat_.Get(),
              D2D1::RectF(layout::kPadding, static_cast<float>(height_) / scale - 28.0f,
                          layout::kWidth - layout::kPadding,
@@ -1163,6 +1478,19 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 }
                 return 0;
             }
+
+            if (pressItem_ >= 0) {
+                // Four pixels of slop, so a click with a shaky hand is still a
+                // click. Past that it is a drag and stays one.
+                if (!draggingItem_ && std::fabs(pointerY_ - pressY_) > 4.0f) {
+                    draggingItem_ = true;
+                }
+                if (draggingItem_) {
+                    dropIndex_ = DropIndexAt(pointerY_);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
             const int row = RowAt(pointerX_, pointerY_);
             if (TabAt(pointerX_, pointerY_) >= 0) {
                 InvalidateRect(hwnd, nullptr, FALSE); // the strip highlights under the pointer
@@ -1189,9 +1517,11 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             const int tab = TabAt(x, y);
             if (tab >= 0) {
                 if (static_cast<Tab>(tab) != activeTab_) {
+                    CommitEdit();
                     activeTab_ = static_cast<Tab>(tab);
                     itemScroll_ = 0.0f;
                     hoverRow_ = -1;
+                    expandedItem_ = -1;
                     LayoutRows();
                     ApplyWindowSize();
                     InvalidateRect(hwnd, nullptr, FALSE);
@@ -1202,9 +1532,34 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             const int row = RowAt(x, y);
             if (row >= 0) {
                 const Row::Kind kind = rows_[static_cast<size_t>(row)].kind;
-                if (kind == Row::Kind::Item || kind == Row::Kind::AddItem ||
-                    kind == Row::Kind::AddSeparator) {
+                if (kind == Row::Kind::AddItem || kind == Row::Kind::AddSeparator) {
                     HandleItemClick(row, x);
+                    return 0;
+                }
+                if (kind == Row::Kind::Item) {
+                    const Row& item = rows_[static_cast<size_t>(row)];
+                    // The buttons first: they sit on the row and are not a drag
+                    // handle.
+                    if (x >= item.control.left && x <= item.control.right &&
+                        y >= item.control.top && y <= item.control.bottom) {
+                        HandleItemClick(row, x);
+                        return 0;
+                    }
+                    if (item.itemIndex == expandedItem_ &&
+                        y > item.bounds.top + layout::kItemHeight) {
+                        if (HandleEditorClick(item, x, y)) {
+                            InvalidateRect(hwnd, nullptr, FALSE);
+                        }
+                        return 0;
+                    }
+                    // Otherwise this is either a click that opens the editor or
+                    // the start of a drag; which one is decided on the way up.
+                    CommitEdit();
+                    pressItem_ = item.itemIndex;
+                    pressY_ = y;
+                    draggingItem_ = false;
+                    dropIndex_ = -1;
+                    SetCapture(hwnd);
                     return 0;
                 }
                 if (ApplyPointer(row, x, false)) {
@@ -1222,6 +1577,29 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             if (dragRow_ >= 0) {
                 dragRow_ = -1;
                 ReleaseCapture();
+                return 0;
+            }
+            if (pressItem_ >= 0) {
+                const int pressed = pressItem_;
+                const bool dragged = draggingItem_;
+                const int target = dropIndex_;
+                pressItem_ = -1;
+                draggingItem_ = false;
+                dropIndex_ = -1;
+                ReleaseCapture();
+                if (dragged && target >= 0) {
+                    items_.MoveTo(static_cast<size_t>(pressed), static_cast<size_t>(target));
+                    expandedItem_ = -1;
+                    CommitItems();
+                } else if (!dragged) {
+                    // A click on a row opens it. Clicking the open one closes
+                    // it again, because there is nowhere else for the gesture
+                    // to go and a row that cannot be closed is a trap.
+                    expandedItem_ = (expandedItem_ == pressed) ? -1 : pressed;
+                    LayoutRows();
+                    ApplyWindowSize();
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
             }
             return 0;
 
@@ -1239,18 +1617,72 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return 0;
         }
 
+        case WM_CHAR:
+            if (editItem_ >= 0 && editField_ != Field::Count) {
+                const wchar_t ch = static_cast<wchar_t>(wParam);
+                if (ch == VK_BACK) {
+                    if (caret_ > 0) {
+                        editText_.erase(caret_ - 1, 1);
+                        --caret_;
+                    }
+                } else if (ch == VK_RETURN || ch == VK_ESCAPE) {
+                    // Handled in WM_KEYDOWN; swallowed here so Enter does not
+                    // insert a control character into the field.
+                } else if (ch >= 0x20) {
+                    editText_.insert(caret_, 1, ch);
+                    ++caret_;
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            return 0;
+
         case WM_KEYDOWN:
+            if (editItem_ >= 0 && editField_ != Field::Count) {
+                switch (wParam) {
+                    case VK_LEFT:
+                        if (caret_ > 0) {
+                            --caret_;
+                        }
+                        break;
+                    case VK_RIGHT:
+                        if (caret_ < editText_.size()) {
+                            ++caret_;
+                        }
+                        break;
+                    case VK_HOME: caret_ = 0; break;
+                    case VK_END: caret_ = editText_.size(); break;
+                    case VK_DELETE:
+                        if (caret_ < editText_.size()) {
+                            editText_.erase(caret_, 1);
+                        }
+                        break;
+                    case VK_RETURN:
+                        CommitEdit();
+                        CommitItems();
+                        break;
+                    case VK_ESCAPE:
+                        // Escape leaves the field rather than the window: the
+                        // nearer thing wins, which is what Escape means.
+                        editItem_ = -1;
+                        editField_ = Field::Count;
+                        editText_.clear();
+                        break;
+                    default: break;
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (wParam == VK_ESCAPE) {
                 Hide();
             }
             return 0;
 
         case WM_ACTIVATE:
-            // Clicking away is how a preferences panel is dismissed; it has no
-            // business staying on top of whatever the user turned to next.
-            if (LOWORD(wParam) == WA_INACTIVE) {
-                Hide();
-            }
+            // Deliberately nothing. This used to hide on losing focus, which is
+            // reasonable for a popover and wrong for a window: it made the
+            // window impossible to Alt+Tab back to, because switching away was
+            // what destroyed it.
             return 0;
 
         case kIconsMessage:
