@@ -351,6 +351,8 @@ void SettingsWindow::BuildRows() {
            0.0f, 1.0f, 2, 1);
     slider(Tab::Glass, L"Tint", L"The white the glass is tinted with", &settings_.tintAlpha, 0.0f,
            0.4f, 2, 1);
+    slider(Tab::Glass, L"Inner shadow", L"The dark shoulder just inside the rim",
+           &settings_.innerShadow, 0.0f, 1.0f, 2, 1);
 
     // --- Dock -------------------------------------------------------------
     section(Tab::Dock, L"Size", 0);

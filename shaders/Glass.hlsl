@@ -34,7 +34,7 @@ cbuffer GlassConstants : register(b0)
     float4 gViewportCenter; // xy = viewport size (px), zw = rect centre (px, window space)
     float4 gShape;          // xy = rect half size (px), z = corner radius (px), w = time (s)
     float4 gLight;          // x = angle (rad), y = intensity, z = refraction, w = depth
-    float4 gMaterial;       // x = dispersion, y = frost, z = splay, w = unused
+    float4 gMaterial;       // x = dispersion, y = frost, z = splay, w = inner shadow
     float4 gTint;           // straight alpha
     float4 gLensInfo;       // x = lens count, y = smooth-min radius (px), z = px per logical px
     // xy = centre (px), z = half width (px), w = half height (px). The corner
@@ -59,6 +59,7 @@ SamplerState gLinearClamp : register(s0);
 #define DEPTH           gLight.w
 #define DISPERSION      gMaterial.x
 #define SPLAY           gMaterial.z
+#define INNER_SHADOW    gMaterial.w
 #define LENS_COUNT      gLensInfo.x
 #define LENS_FUSE       gLensInfo.y
 #define PIXEL_SCALE     gLensInfo.z
@@ -273,7 +274,8 @@ float4 PSMain(Varyings input) : SV_Target
     const float inward = -dist;
     const float u = saturate((inward - kRimCentrePx * scale) / (kShoulderPx * scale));
     const float shoulder = u * pow(1.0 - u, 3.0) / 0.1055;
-    colour *= 1.0 - shoulder * kShoulderDepth * lerp(kShoulderSide, 1.0, square);
+    colour *= 1.0 - shoulder * kShoulderDepth * saturate(INNER_SHADOW) *
+                        lerp(kShoulderSide, 1.0, square);
 
     // --- The rim -----------------------------------------------------------
 

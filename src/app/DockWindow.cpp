@@ -1266,6 +1266,7 @@ void DockWindow::Render() {
     constants.material[0] = settings_.dispersion;
     constants.material[1] = settings_.frost;
     constants.material[2] = settings_.splay;
+    constants.material[3] = settings_.innerShadow;
 
     // The bulges under raised icons. At rest there are none, and the shader's
     // loop does not run at all.

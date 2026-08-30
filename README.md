@@ -89,7 +89,7 @@ saving takes effect without a restart, and the preferences panel rewrites only t
 each line, so comments you add survive being edited from the UI.
 
 Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
-`light-intensity`, `tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`,
+`light-intensity`, `tint-alpha`, `inner-shadow`. Magnification: `magnification`, `max-scale`, `influence`,
 `icon-bulge`, `follow-cursor`. Appearance: `separator-image`, `divider-gap`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `hide-when-covered`,
 `dwell-seconds`, `slide-seconds`.
 

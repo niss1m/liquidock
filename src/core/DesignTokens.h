@@ -85,6 +85,11 @@ inline constexpr float kFrost = 0.04f;
 // covered a 45 px bar and the control had nothing left to move.
 inline constexpr float kSplay = 1.00f;
 
+// The dark shoulder inside the rim, as a fraction of the depth measured off the
+// design. 1.00 is the design's own; 0 removes it, leaving the bright line on
+// its own.
+inline constexpr float kInnerShadow = 1.00f;
+
 // Blur radius at frost = 1.0, in logical pixels. Calibrated: the design's
 // render is a quarter as sharp inside the bar as immediately outside it, which
 // is a Gaussian of about 1.8 logical pixels, and the Figma panel calls that

@@ -95,6 +95,7 @@ void Settings::Load() {
     lightAngleDegrees = design::glass::kLightAngleDegrees;
     lightIntensity = design::glass::kLightIntensity;
     tintAlpha = design::kBarTint[3];
+    innerShadow = design::glass::kInnerShadow;
     backdrop = BackdropSource::Screen;
 
     magnification = true;
@@ -160,6 +161,8 @@ bool Settings::ReadFile(const std::wstring& path) {
             lightIntensity = ParseFloat(value, lightIntensity, 0.0f, 1.0f);
         } else if (key == L"tint-alpha") {
             tintAlpha = ParseFloat(value, tintAlpha, 0.0f, 1.0f);
+        } else if (key == L"inner-shadow") {
+            innerShadow = ParseFloat(value, innerShadow, 0.0f, 1.0f);
         } else if (key == L"backdrop") {
             if (_wcsicmp(value.c_str(), L"screen") == 0) {
                 backdrop = BackdropSource::Screen;
@@ -228,6 +231,7 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"light-angle") return number(L"%.0f", lightAngleDegrees);
     if (key == L"light-intensity") return number(L"%.2f", lightIntensity);
     if (key == L"tint-alpha") return number(L"%.2f", tintAlpha);
+    if (key == L"inner-shadow") return number(L"%.2f", innerShadow);
     if (key == L"backdrop") return backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper";
     if (key == L"magnification") return magnification ? L"on" : L"off";
     if (key == L"follow-cursor") return followCursor ? L"on" : L"off";
@@ -306,7 +310,7 @@ bool Settings::Save() const {
     // rather than lost, so upgrading never silently drops a setting.
     static const wchar_t* const kAllKeys[] = {
         L"refraction", L"depth",        L"dispersion",    L"frost",         L"splay",
-        L"light-angle", L"light-intensity", L"tint-alpha", L"backdrop",     L"magnification",
+        L"light-angle", L"light-intensity", L"tint-alpha", L"inner-shadow", L"backdrop", L"magnification",
         L"follow-cursor", L"separator-image", L"divider-gap",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
@@ -380,6 +384,12 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# as glass because of what the shader does to the backdrop, not\n"
              L"# because of this. Raising it is how the design gets muddy.\n"
              L"tint-alpha = %.2f\n"
+             L"\n"
+             L"# The dark shoulder just inside the rim, as a fraction of the\n"
+             L"# depth the design's own render has. Its job is to give the\n"
+             L"# bright line something to stand on, so the edge reads as raised\n"
+             L"# rather than drawn on. 0 removes it and leaves the line alone.\n"
+             L"inner-shadow = %.2f\n"
              L"\n"
              L"# What the glass refracts. `wallpaper` decodes your desktop background\n"
              L"# once and costs nothing after that - it is exactly right whenever\n"
@@ -458,7 +468,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"dwell-seconds = %.1f\n"
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
-             tintAlpha, backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
+             tintAlpha, innerShadow,
+             backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
              magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
              followCursor ? L"on" : L"off", separatorImage.c_str(), dividerGap, labelFontSize,
              labelBold ? L"on" : L"off",

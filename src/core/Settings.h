@@ -38,6 +38,12 @@ struct Settings {
     float lightAngleDegrees = 0.0f;
     float lightIntensity = 0.0f;
     float tintAlpha = 0.0f;
+
+    // The dark shoulder just inside the rim, as a fraction of the depth the
+    // design's own render has. Its whole job is to give the bright line
+    // something to stand on so the edge reads as raised rather than drawn -
+    // which is a strong effect, and one worth being able to turn off.
+    float innerShadow = 0.0f;
     BackdropSource backdrop = BackdropSource::Screen;
 
     // --- Magnification ----------------------------------------------------
