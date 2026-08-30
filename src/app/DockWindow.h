@@ -231,6 +231,9 @@ private:
     int pressedItem_ = -1;
     bool menuOpen_ = false;
     bool mouseTracking_ = false;
+    // Whether the hover watchdog is armed, so the timer is set and killed on
+    // the transitions rather than re-armed every frame.
+    bool hoverWatch_ = false;
 
     // Auto-hide. The dock is a window that is mostly not there: it sits tucked
     // below the screen edge until EdgeTrigger reports the cursor arriving, then

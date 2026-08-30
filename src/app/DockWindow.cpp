@@ -70,6 +70,12 @@ constexpr UINT_PTR kStatsTimer = 7;
 // Coverage scans are debounced: switching apps can fire several events in a row
 // and one scan afterwards answers for all of them.
 constexpr UINT_PTR kCoverTimer = 9;
+// The watchdog that catches a missed WM_MOUSELEAVE. Five times a second is
+// plenty for something that should never happen, and a timer is the right
+// mechanism precisely because WM_TIMER is the *lowest* priority message there
+// is - it can wait behind anything, and it can starve nothing.
+constexpr UINT_PTR kHoverWatchTimer = 10;
+constexpr UINT kHoverWatchMs = 200;
 constexpr UINT kCoverDebounceMs = 120;
 
 enum ItemMenuCommand : UINT {
@@ -1391,18 +1397,32 @@ void DockWindow::Render() {
     // itself at the refresh rate; when the slide and the springs have both
     // settled the dock falls silent again and presents nothing at all.
     //
-    // `hovered` is in the list for a reason that is not animation. The wave is
-    // computed directly from the cursor rather than sprung toward it, so while
-    // the cursor is on the dock nothing is "moving" in the sense the other
-    // flags mean, and frames were being driven purely by WM_MOUSEMOVE. That
-    // makes the whole thing hostage to receiving a mouse message on the way
-    // out: miss the WM_MOUSELEAVE - the cursor leaves onto a window that has
-    // taken capture, or across a monitor edge, or the dock hides underneath it -
-    // and the last frame drawn is a magnified one that nothing will ever
-    // correct. Presenting while hovered costs frames only while the dock is
-    // actually being used, and it means the release cannot be missed.
-    if ((animating_ || layoutMoving || labelMoving || hovered) && !deviceLost_) {
+    if ((animating_ || layoutMoving || labelMoving) && !deviceLost_) {
         PostMessageW(hwnd_, kAnimateMessage, 0, 0);
+    }
+
+    // `hovered` used to be in that condition, and it was a bad way to solve a
+    // real problem. GetMessage hands back *posted* messages before hardware
+    // input, so a message that reposts itself every frame outranks the user's
+    // own clicks for as long as it keeps doing it - and while the cursor rests
+    // on the dock, that is forever. Right-clicking an icon then meant waiting
+    // seconds for a menu whose drawing takes six milliseconds.
+    //
+    // The problem it was solving is still real: the wave is computed from the
+    // cursor rather than sprung toward it, so while hovering nothing is
+    // "moving", frames come only from WM_MOUSEMOVE, and a missed WM_MOUSELEAVE -
+    // the cursor leaving onto a window that takes capture, or across a monitor
+    // edge, or the dock hiding out from under it - would leave a magnified icon
+    // that nothing ever corrects. So it is a watchdog now rather than a frame
+    // pump: five checks a second, on the one message class that cannot starve
+    // anything, and the release is caught within 200 ms instead of never.
+    if (hovered != hoverWatch_) {
+        hoverWatch_ = hovered;
+        if (hovered) {
+            SetTimer(hwnd_, kHoverWatchTimer, kHoverWatchMs, nullptr);
+        } else {
+            KillTimer(hwnd_, kHoverWatchTimer);
+        }
     }
 }
 
@@ -1796,6 +1816,12 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
 
         case WM_RBUTTONUP: {
+            // How long the click sat in the queue before we got to it.
+            // GetMessageTime is when it was posted, so this is queue latency
+            // and nothing else - which is the only way to tell "the menu is
+            // slow to draw" apart from "the click was slow to arrive".
+            LogDebug("Right click waited {} ms in the queue",
+                     GetTickCount() - static_cast<DWORD>(GetMessageTime()));
             float x = 0.0f;
             float y = 0.0f;
             POINT screen{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
@@ -1920,6 +1946,8 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     frostDirty_ = true;
                     RequestRedraw();
                 }
+            } else if (wParam == kHoverWatchTimer) {
+                RequestRedraw();
             } else if (wParam == kCoverTimer) {
                 KillTimer(hwnd_, kCoverTimer);
                 CoverChanged();
