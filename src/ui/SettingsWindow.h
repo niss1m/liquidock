@@ -115,6 +115,13 @@ private:
         // instead of sliding in from nowhere when the window opens.
         float anim = -1.0f;
         float hover = 0.0f;
+        // A choice's pill travels between its options rather than appearing on
+        // the one you picked: `animFrom` is where it set off, `animTo` where it
+        // is going, and `animElapsed` how far through the journey it is. Negative
+        // elapsed means "not travelling".
+        float animFrom = 0.0f;
+        float animTo = 0.0f;
+        float animElapsed = -1.0f;
         int itemIndex = -1; // for Kind::Item
         D2D1_RECT_F bounds{};  // the whole row, for hit testing and hover
         D2D1_RECT_F control{}; // the interactive part on the right
@@ -264,6 +271,11 @@ private:
     D2D1_RECT_F tabBounds_[kTabCount]{};
     // Which of the offered faces is selected. The setting itself is a name.
     int fontChoice_ = 0;
+    // The tab strip's pill, travelling the same way a choice's does.
+    float tabAnim_ = -1.0f;
+    float tabFrom_ = 0.0f;
+    float tabTo_ = 0.0f;
+    float tabElapsed_ = -1.0f;
     D2D1_RECT_F buttonBounds_[2]{};
     // Where the rule between the two grids sits, in the panel's own space.
     float gridRuleY_ = 0.0f;

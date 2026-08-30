@@ -177,6 +177,44 @@ float Smooth(float t) {
     return t * t * (3.0f - 2.0f * t);
 }
 
+// Overshoots and comes back. A pill that slides between two stops on a smooth
+// curve arrives correctly and reads as slow whatever its duration; the same
+// travel that goes a little past its stop and settles reads as quick, because
+// the eye takes the overshoot as momentum. This is the standard back-out curve,
+// which is a cubic with one knob: 1.70158 is the constant that puts the peak
+// about a tenth of the distance beyond the target.
+float Overshoot(float t) {
+    if (t <= 0.0f) {
+        return 0.0f;
+    }
+    if (t >= 1.0f) {
+        return 1.0f;
+    }
+    constexpr float kBack = 1.70158f;
+    const float u = t - 1.0f;
+    return 1.0f + u * u * ((kBack + 1.0f) * u + kBack);
+}
+
+// A travel between two stops. Quick, because it is answering a click that has
+// already happened.
+constexpr float kTravelSeconds = 0.30f;
+
+// Where a travelling pill has got to, as a straight lerp between the stop it
+// left and the stop it is heading for. Deliberately not clamped to that pair:
+// the overshoot at the end of the curve is the whole point, and pinning it to
+// the target is what makes an eased slide look like a plain one.
+D2D1_RECT_F Between(const D2D1_RECT_F& a, const D2D1_RECT_F& b, float t) {
+    return D2D1::RectF(a.left + (b.left - a.left) * t, a.top + (b.top - a.top) * t,
+                       a.right + (b.right - a.right) * t, a.bottom + (b.bottom - a.bottom) * t);
+}
+
+// How far along its journey a travel is, given where it started, where it is
+// going and where it has reached. One when it is not going anywhere.
+float TravelFraction(float value, float from, float to) {
+    const float span = to - from;
+    return (std::fabs(span) < 0.0001f) ? 1.0f : (value - from) / span;
+}
+
 // Black, and opaque. The dock is glass because you are meant to look past it;
 // preferences are meant to be read, and every other surface in the window is
 // defined as a percentage of white - so a black ground is the one that makes
@@ -1469,6 +1507,34 @@ bool SettingsWindow::AdvanceAnimation() {
     delta = std::clamp(delta, 0.0f, 0.05f);
 
     bool moving = false;
+    // Sets a travel going when the target changes, and carries it forward when
+    // it has not. The first sight of a control snaps rather than sliding, so a
+    // window that has just opened is not full of things arriving.
+    auto travel = [&](float& value, float& from, float& to, float& elapsed, float target) {
+        if (value < 0.0f) {
+            value = target;
+            from = target;
+            to = target;
+            elapsed = -1.0f;
+            return;
+        }
+        if (to != target) {
+            from = value;
+            to = target;
+            elapsed = 0.0f;
+        }
+        if (elapsed < 0.0f) {
+            return;
+        }
+        elapsed += delta;
+        if (elapsed >= kTravelSeconds) {
+            value = to;
+            elapsed = -1.0f;
+            return;
+        }
+        value = from + (to - from) * Overshoot(elapsed / kTravelSeconds);
+        moving = true;
+    };
     auto approach = [&](float& value, float target, float seconds) {
         if (value < 0.0f) {
             value = target; // first sight of this row: no journey to make
@@ -1492,14 +1558,14 @@ bool SettingsWindow::AdvanceAnimation() {
             approach(row.anim, *row.flag ? 1.0f : 0.0f, layout::kToggleSeconds);
         }
         if (row.kind == Row::Kind::Choice && row.choice) {
-            // The same journey the switch makes, over as many stops as there
-            // are options: the pill slides to the one you picked rather than
-            // appearing there.
-            approach(row.anim, static_cast<float>(*row.choice), layout::kToggleSeconds * 2.0f);
+            travel(row.anim, row.animFrom, row.animTo, row.animElapsed,
+                   static_cast<float>(*row.choice));
         }
         approach(row.hover, (static_cast<int>(i) == hoverRow_) ? 1.0f : 0.0f,
                  layout::kHoverSeconds);
     }
+
+    travel(tabAnim_, tabFrom_, tabTo_, tabElapsed_, static_cast<float>(activeTab_));
 
     // The tooltip waits out its dwell, then fades in and follows the pointer.
     // It is kept alive by the pointer moving as much as by it resting, so the
@@ -1673,17 +1739,15 @@ void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
     }
     const float height = layout::kChoiceHeight;
 
-    // The travelling pill, interpolated between the cell it left and the one it
-    // is heading for, so it changes width on the way as well as position.
-    const float where = std::clamp(row.anim < 0.0f ? static_cast<float>(*row.choice) : row.anim,
-                                   0.0f, static_cast<float>(count - 1));
-    const int from = static_cast<int>(where);
-    const int to = std::min(from + 1, count - 1);
-    const float t = Smooth(where - static_cast<float>(from));
-    const D2D1_RECT_F& a = cells[static_cast<size_t>(from)];
-    const D2D1_RECT_F& b = cells[static_cast<size_t>(to)];
-    const D2D1_RECT_F marker = D2D1::RectF(a.left + (b.left - a.left) * t, a.top,
-                                           a.right + (b.right - a.right) * t, a.bottom);
+    // The travelling pill, between the cell it left and the one it is heading
+    // for, so it changes width on the way as well as position - the options
+    // being different lengths.
+    const float where = (row.anim < 0.0f) ? static_cast<float>(*row.choice) : row.anim;
+    const int from = std::clamp(static_cast<int>(std::lround(row.animFrom)), 0, count - 1);
+    const int to = std::clamp(static_cast<int>(std::lround(row.animTo)), 0, count - 1);
+    const D2D1_RECT_F marker = Between(cells[static_cast<size_t>(from)],
+                                       cells[static_cast<size_t>(to)],
+                                       TravelFraction(where, row.animFrom, row.animTo));
     brush_->SetColor(Grey(1.0f, 0.16f));
     d2d_->FillRoundedRectangle(D2D1::RoundedRect(marker, height * 0.5f, height * 0.5f),
                                brush_.Get());
@@ -1918,21 +1982,38 @@ void SettingsWindow::DrawTabs() {
         tabBounds_[i] =
             D2D1::RectF(x, layout::kTabsTop, x + width, layout::kTabsTop + layout::kTabHeight);
         x += width + layout::kTabGap;
+    }
 
-        const bool active = (static_cast<Tab>(i) == activeTab_);
+    // One pill, drawn once, between the two tabs it is travelling between - so
+    // it changes width on the way as well as position, the tabs not being the
+    // same size. Drawn before the labels so every one of them sits on top of it.
+    const float where = (tabAnim_ < 0.0f) ? static_cast<float>(activeTab_) : tabAnim_;
+    const int from = std::clamp(static_cast<int>(std::lround(tabFrom_)), 0, kTabCount - 1);
+    const int to = std::clamp(static_cast<int>(std::lround(tabTo_)), 0, kTabCount - 1);
+    const D2D1_RECT_F pill =
+        Between(tabBounds_[from], tabBounds_[to], TravelFraction(where, tabFrom_, tabTo_));
+    brush_->SetColor(Grey(1.0f, 0.12f));
+    d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 8.0f, 8.0f), brush_.Get());
+
+    for (int i = 0; i < kTabCount; ++i) {
+        const std::wstring name = kTabNames[i];
         const bool under = pointerX_ >= tabBounds_[i].left && pointerX_ <= tabBounds_[i].right &&
                            pointerY_ >= tabBounds_[i].top && pointerY_ <= tabBounds_[i].bottom;
-        if (active || under) {
-            brush_->SetColor(active ? Grey(1.0f, 0.12f) : Grey(1.0f, 0.06f));
+        if (under && static_cast<Tab>(i) != activeTab_) {
+            brush_->SetColor(Grey(1.0f, 0.06f));
             d2d_->FillRoundedRectangle(D2D1::RoundedRect(tabBounds_[i], 8.0f, 8.0f), brush_.Get());
         }
-        // The label alone carries the state as well as a box does, so the active
-        // tab is simply the one you can read.
+        // Brightness follows the pill rather than the selection, so the label
+        // lights up as the pill arrives instead of a step ahead of it.
+        const float lit = 1.0f - std::min(1.0f, std::fabs(where - static_cast<float>(i)));
+        const D2D1_COLOR_F resting = under ? kLabel : kSection;
         labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         DrawText(name, labelFormat_.Get(),
-                 D2D1::RectF(tabBounds_[i].left, tabBounds_[i].top + 8.0f, tabBounds_[i].right,
+                 D2D1::RectF(tabBounds_[i].left, tabBounds_[i].top, tabBounds_[i].right,
                              tabBounds_[i].bottom),
-                 active ? kTitle : (under ? kLabel : kSection));
+                 Mix(resting, kTitle, lit));
+        labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
         labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
     }
 }
