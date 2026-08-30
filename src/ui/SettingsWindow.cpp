@@ -57,6 +57,16 @@ constexpr float kPillPadX = 16.0f;
 constexpr float kKnobWidth = 3.0f;
 constexpr float kKnobHeight = 26.0f;
 constexpr float kKnobInset = kPillRadius + 5.0f;
+// The track begins after the label, so zero is past the text rather than under
+// it. The knob then cannot cross the label at any value - not at the minimum,
+// and not on the way up either, which is the half of the problem that indenting
+// the label alone would have left.
+constexpr float kLabelIndent = 16.0f;
+constexpr float kLabelGap = 14.0f;
+
+// The window's own buttons, top right.
+constexpr float kWindowButton = 30.0f;
+constexpr float kWindowButtonTop = 18.0f;
 
 // The switch. Measured off the reference and held as ratios of the circle,
 // which is the only measurement that matters: ring 0.14 of the diameter, bar
@@ -77,8 +87,8 @@ constexpr float kHoverSeconds = 0.11f;
 // stopping to ask feels answered rather than waited for.
 constexpr float kTooltipDelay = 0.28f;
 constexpr float kTooltipFade = 0.12f;
-constexpr float kTooltipPadX = 11.0f;
-constexpr float kTooltipHeight = 28.0f;
+constexpr float kTooltipPadX = 13.0f;
+constexpr float kTooltipHeight = 32.0f;
 // Clear of the pointer, below and to the right, the way every tooltip is.
 constexpr float kTooltipOffsetX = 16.0f;
 constexpr float kTooltipOffsetY = 20.0f;
@@ -496,11 +506,16 @@ void SettingsWindow::LayoutRows() {
                 row.bounds.left, row.bounds.top,
                 row.bounds.right, row.bounds.top + layout::kPillHeight);
             if (row.kind == Row::Kind::Slider) {
-                // The knob's travel: the card less the value's column, less the
-                // margin that keeps the knob off the rounded end. The fill runs
-                // a knob-inset past the knob, so at the top of the range it
-                // finishes exactly where the track does.
-                row.control = D2D1::RectF(pill.left + layout::kKnobInset, pill.top,
+                // The knob's travel: from the end of the label to the start of
+                // the value's column. Measured per row rather than reserving one
+                // column for the widest label on the page - "Reach" would then
+                // start its track where "Magnify under the cursor" ends, and
+                // most of its card would be empty for the sake of an alignment
+                // nobody is looking for.
+                const float labelEnd = pill.left + layout::kLabelIndent +
+                                       MeasureText(labelFormat_.Get(), row.label ? row.label : L"") +
+                                       layout::kLabelGap;
+                row.control = D2D1::RectF(labelEnd + layout::kKnobWidth, pill.top,
                                           pill.right - layout::kValueGutter - layout::kKnobInset,
                                           pill.bottom);
             } else {
@@ -570,7 +585,7 @@ void SettingsWindow::ApplyWindowSize() {
 }
 
 const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
-    if (TabAt(x, y) >= 0) {
+    if (WindowButtonAt(x, y) >= 0 || TabAt(x, y) >= 0) {
         return IDC_HAND;
     }
     const int index = RowAt(x, y);
@@ -584,8 +599,10 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
         case Row::Kind::Toggle:
             return IDC_HAND; // the whole row flips it
         case Row::Kind::Slider:
-            // The whole card, because the whole card is the track.
-            return (y <= PillRect(row).bottom) ? IDC_HAND : IDC_ARROW;
+            // The track, which is the card from the end of the label onward.
+            return (y <= PillRect(row).bottom && x >= row.control.left - layout::kKnobWidth)
+                       ? IDC_HAND
+                       : IDC_ARROW;
         case Row::Kind::Choice:
             return inControl ? IDC_HAND : IDC_ARROW;
         case Row::Kind::AddItem:
@@ -679,6 +696,14 @@ bool SettingsWindow::CreateDeviceResources() {
     hintFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     labelFormat_->SetTrimming(&trimming, ellipsis.Get());
     hintFormat_->SetTrimming(&trimming, ellipsis.Get());
+    // A size up from the label it explains. It was set in the hint's 11.5,
+    // which is a footnote size - fine under a label where the eye is already
+    // there, too small for something the pointer has to be held still to read.
+    LD_CHECK(format(14.5f, DWRITE_FONT_WEIGHT_NORMAL, &tipFormat_));
+    tipFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    tipFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    tipFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
     LD_CHECK(format(12.5f, DWRITE_FONT_WEIGHT_NORMAL, &valueFormat_));
     valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     // The value is drawn into the whole height of the card now, not onto a
@@ -739,6 +764,10 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     if (!CreateDeviceResources()) {
         return;
     }
+    // Again, now that the text formats exist: the track's start is measured
+    // from the label, and the first pass ran before there was anything to
+    // measure with.
+    LayoutRows();
 
     // After the device resources, because turning the pixels into D2D bitmaps
     // needs the context that CreateDeviceResources builds.
@@ -1181,22 +1210,17 @@ void SettingsWindow::DrawSlider(const Row& row, float hover) {
     const float t = std::clamp((*row.number - row.minimum) / span, 0.0f, 1.0f);
     const float knobX = row.control.left + t * (row.control.right - row.control.left);
 
-    // The filled part, clipped to the card so its square right edge cannot
-    // escape the rounding at either end. Drawn as a plain rectangle inside that
-    // clip rather than a second rounded rect: a rounded right edge would read as
-    // a separate pill sitting on the track instead of as part of it.
-    if (t > 0.001f) {
-        d2d_->PushLayer(D2D1::LayerParameters(pill, nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                                              D2D1::IdentityMatrix(), 1.0f, nullptr,
-                                              D2D1_LAYER_OPTIONS_NONE),
-                        nullptr);
+    // The filled part runs from the start of the track, which is past the
+    // label, to the knob. It used to start at the card's left edge and sweep
+    // under the label on its way; at a low value that put a rounded cap through
+    // the first letters of the very setting it belonged to.
+    const float trackLeft = row.control.left - layout::kKnobWidth;
+    if (knobX - trackLeft > 2.0f) {
         brush_->SetColor(Mix(kFill, kFillHover, hover));
         d2d_->FillRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(pill.left, pill.top, knobX + layout::kKnobInset,
-                                          pill.bottom),
+            D2D1::RoundedRect(D2D1::RectF(trackLeft, pill.top, knobX, pill.bottom),
                               layout::kPillRadius, layout::kPillRadius),
             brush_.Get());
-        d2d_->PopLayer();
     }
 
     // The knob. A bar rather than a circle: a circle on a track this tall reads
@@ -1350,7 +1374,7 @@ void SettingsWindow::DrawTooltip() {
     }
 
     const std::wstring text = hint;
-    const float width = MeasureText(labelFormat_.Get(), text) + 2.0f * layout::kTooltipPadX;
+    const float width = MeasureText(tipFormat_.Get(), text) + 2.0f * layout::kTooltipPadX;
     const float panelWidth = layout::kWidth;
     const float panelHeight = static_cast<float>(height_) / (static_cast<float>(dpi_) / 96.0f);
 
@@ -1371,19 +1395,64 @@ void SettingsWindow::DrawTooltip() {
 
     // Lifted off the ground rather than sunk into it. Everything else on this
     // page is a percentage of white over black, so a *darker* tooltip would be
-    // invisible; this one is brighter than the cards it floats over, with a
-    // hairline to hold its shape against them.
-    brush_->SetColor(Grey(0.15f, 0.98f * tooltipAlpha_));
+    // invisible; this one is simply brighter than the cards it floats over. No
+    // outline: it is already the lightest thing on the page, and a hairline on
+    // top of that reads as a second edge rather than as a definition of the
+    // first.
+    brush_->SetColor(Grey(0.17f, 0.98f * tooltipAlpha_));
     d2d_->FillRoundedRectangle(rounded, brush_.Get());
-    brush_->SetColor(Grey(1.0f, 0.16f * tooltipAlpha_));
-    d2d_->DrawRoundedRectangle(rounded, brush_.Get(), 1.0f);
 
-    labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    DrawText(text, labelFormat_.Get(),
+    DrawText(text, tipFormat_.Get(),
              D2D1::RectF(pill.left + layout::kTooltipPadX, pill.top,
                          pill.right - layout::kTooltipPadX, pill.bottom),
-             Grey(1.0f, 0.92f * tooltipAlpha_));
-    labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+             Grey(1.0f, 0.95f * tooltipAlpha_));
+}
+
+void SettingsWindow::DrawWindowButtons() {
+    const float right = layout::kWidth - layout::kPadding;
+    for (int i = 0; i < 2; ++i) {
+        // Close on the outside, where the corner is, and minimise inboard of
+        // it - the order every window on the system uses, so the muscle memory
+        // that reaches for the corner finds the right one.
+        const float left = right - (2 - i) * layout::kWindowButton;
+        buttonBounds_[i] =
+            D2D1::RectF(left, layout::kWindowButtonTop, left + layout::kWindowButton,
+                        layout::kWindowButtonTop + layout::kWindowButton);
+
+        const D2D1_RECT_F& box = buttonBounds_[i];
+        const bool under = pointerX_ >= box.left && pointerX_ <= box.right &&
+                           pointerY_ >= box.top && pointerY_ <= box.bottom;
+        if (under) {
+            // Close goes red on the way in, the way it does everywhere. It is
+            // the one button here that loses something if it is hit by mistake.
+            brush_->SetColor(i == 1 ? D2D1::ColorF(0.90f, 0.24f, 0.26f, 0.90f) : Grey(1.0f, 0.13f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, 7.0f, 7.0f), brush_.Get());
+        }
+
+        const float cx = (box.left + box.right) * 0.5f;
+        const float cy = (box.top + box.bottom) * 0.5f;
+        brush_->SetColor(Grey(1.0f, under ? 1.0f : 0.55f));
+        if (i == 0) {
+            d2d_->DrawLine(D2D1::Point2F(cx - 5.0f, cy), D2D1::Point2F(cx + 5.0f, cy),
+                           brush_.Get(), 1.4f);
+        } else {
+            d2d_->DrawLine(D2D1::Point2F(cx - 4.5f, cy - 4.5f), D2D1::Point2F(cx + 4.5f, cy + 4.5f),
+                           brush_.Get(), 1.4f);
+            d2d_->DrawLine(D2D1::Point2F(cx + 4.5f, cy - 4.5f), D2D1::Point2F(cx - 4.5f, cy + 4.5f),
+                           brush_.Get(), 1.4f);
+        }
+    }
+}
+
+int SettingsWindow::WindowButtonAt(float x, float y) const {
+    for (int i = 0; i < 2; ++i) {
+        const D2D1_RECT_F& box = buttonBounds_[i];
+        if (box.right > box.left && x >= box.left && x <= box.right && y >= box.top &&
+            y <= box.bottom) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 void SettingsWindow::DrawTabs() {
@@ -1732,6 +1801,7 @@ void SettingsWindow::Render() {
              D2D1::RectF(layout::kPadding, 40.0f, 460.0f, 60.0f), kHint);
 
     DrawTabs();
+    DrawWindowButtons();
 
     bool clipped = false;
     for (size_t i = 0; i < rows_.size(); ++i) {
@@ -1780,7 +1850,7 @@ void SettingsWindow::Render() {
         const D2D1_RECT_F pill = PillRect(row);
         // The value is right-aligned inside the card; the label and its
         // explanation stack against the left, stopping short of the value.
-        const float textLeft = pill.left + layout::kPillPadX;
+        const float textLeft = pill.left + layout::kLabelIndent;
         const float textRight = (row.kind == Row::Kind::Slider)
                                     ? (pill.right - layout::kValueGutter)
                                     : (row.control.left - 14.0f);
@@ -1882,10 +1952,17 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         }
 
         case WM_NCHITTEST: {
-            // The panel has no title bar, so the header area is the grab handle.
+            // The panel has no title bar, so the header area is the grab handle -
+            // except over the buttons, which would otherwise be a drag handle
+            // that happens to look like a close box.
             POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             ScreenToClient(hwnd, &point);
-            if (static_cast<float>(point.y) / scale < layout::kTitleHeight) {
+            const float x = static_cast<float>(point.x) / scale;
+            const float y = static_cast<float>(point.y) / scale;
+            if (WindowButtonAt(x, y) >= 0) {
+                return HTCLIENT;
+            }
+            if (y < layout::kTitleHeight) {
                 return HTCAPTION;
             }
             return HTCLIENT;
@@ -1960,6 +2037,17 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             const float x = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
             const float y = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
 
+            const int button = WindowButtonAt(x, y);
+            if (button >= 0) {
+                CommitEdit();
+                if (button == 0) {
+                    ShowWindow(hwnd, SW_MINIMIZE);
+                } else {
+                    Hide();
+                }
+                return 0;
+            }
+
             const int tab = TabAt(x, y);
             if (tab >= 0) {
                 if (static_cast<Tab>(tab) != activeTab_) {
@@ -2021,8 +2109,13 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     control.kind != Row::Kind::Choice) {
                     return 0;
                 }
-                if (control.kind == Row::Kind::Slider && y > PillRect(control).bottom) {
-                    return 0; // the gap under the card is not the track
+                if (control.kind == Row::Kind::Slider &&
+                    (y > PillRect(control).bottom ||
+                     x < control.control.left - layout::kKnobWidth)) {
+                    // The gap under the card is not the track, and neither is
+                    // the label: clicking a name should not set its value to
+                    // the minimum.
+                    return 0;
                 }
                 if (ApplyPointer(row, x, false)) {
                     CommitChange();

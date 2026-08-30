@@ -120,6 +120,11 @@ private:
     // The explanation for whatever the pointer is on, drawn last so nothing
     // clips it, and following the cursor rather than living under the label.
     void DrawTooltip();
+    // Close and minimise, drawn from line segments like the item buttons - no
+    // symbol font to be missing, and crisp at any DPI.
+    void DrawWindowButtons();
+    // 0 = minimise, 1 = close, -1 = neither.
+    int WindowButtonAt(float x, float y) const;
     float MeasureText(IDWriteTextFormat* format, const std::wstring& text) const;
     // Advances the row animations. Returns true while anything is still
     // moving, which is what keeps the redraw timer armed.
@@ -191,6 +196,7 @@ private:
     ComPtr<IDWriteTextFormat> labelFormat_;
     ComPtr<IDWriteTextFormat> hintFormat_;
     ComPtr<IDWriteTextFormat> valueFormat_;
+    ComPtr<IDWriteTextFormat> tipFormat_;
 
     Settings settings_;
     ItemStore items_;
@@ -199,6 +205,7 @@ private:
     std::vector<ComPtr<ID2D1Bitmap>> itemIcons_;
     Tab activeTab_ = Tab::Items;
     D2D1_RECT_F tabBounds_[kTabCount]{};
+    D2D1_RECT_F buttonBounds_[2]{};
     ChangedCallback onChanged_;
     ItemsCallback onItemsChanged_;
     std::vector<Row> rows_;
