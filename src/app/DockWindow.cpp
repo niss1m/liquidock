@@ -1050,8 +1050,10 @@ void DockWindow::UpdatePlacement() {
     frostDirty_ = true;
 
     if (target_.width() > 0) {
-        target_.Resize(static_cast<UINT>(width), static_cast<UINT>(height));
+        // Invalidate first: the text layer holds a bitmap wrapping the back
+        // buffer, and the flip model refuses to resize while it is alive.
         text_.Invalidate();
+        target_.Resize(static_cast<UINT>(width), static_cast<UINT>(height));
         frost_.Resize(static_cast<UINT>(width), static_cast<UINT>(height));
         RequestRedraw();
     }

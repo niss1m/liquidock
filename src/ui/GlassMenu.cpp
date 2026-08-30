@@ -148,8 +148,16 @@ void GlassMenu::Place(POINT screen) {
         target_.Initialize(*device_, hwnd_, static_cast<UINT>(windowWidth),
                            static_cast<UINT>(windowHeight));
     } else {
-        target_.Resize(static_cast<UINT>(windowWidth), static_cast<UINT>(windowHeight));
+        // The text layer's cached bitmap wraps the back buffer, so it has to go
+        // before the resize, not after. Released afterwards, ResizeBuffers
+        // fails with DXGI_ERROR_INVALID_CALL, the swap chain keeps the previous
+        // menu's size, and a taller menu is drawn into a buffer too small for
+        // it - which is a menu with its last two commands cut off. The failed
+        // resize also leaves the frame-latency semaphore unbalanced, so the
+        // next few BeginFrames each wait out their full one-second timeout:
+        // the same bug was both the clipping and the several-second delay.
         text_.Invalidate();
+        target_.Resize(static_cast<UINT>(windowWidth), static_cast<UINT>(windowHeight));
     }
 }
 
