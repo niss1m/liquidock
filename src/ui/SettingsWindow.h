@@ -151,6 +151,10 @@ private:
     // The explanation for whatever the pointer is on, drawn last so nothing
     // clips it, and following the cursor rather than living under the label.
     void DrawTooltip();
+    // A rounded rectangle with one square corner - the one the pointer is
+    // beside, so the shape has a point aimed back at what it is describing.
+    void FillPointed(const D2D1_RECT_F& rect, float radius, int squareCorner,
+                     const D2D1_COLOR_F& colour);
     // Close and minimise, drawn from line segments like the item buttons - no
     // symbol font to be missing, and crisp at any DPI.
     void DrawWindowButtons();
@@ -161,6 +165,11 @@ private:
     // moving, which is what keeps the redraw timer armed.
     bool AdvanceAnimation();
     void DrawHeader();
+    // The two links beside the headline. Built once, drawn scaled into their
+    // own boxes; -1 when the pointer is on neither.
+    void DrawLinks();
+    int LinkAt(float x, float y) const;
+    D2D1_RECT_F LinkRect(int index) const;
     void DrawTabs();
     // -1 when the point is over no tab.
     int TabAt(float x, float y) const;
@@ -261,6 +270,10 @@ private:
     ComPtr<ID2D1DeviceContext> d2d_;
     ComPtr<ID2D1Bitmap1> backBuffer_;
     ComPtr<ID2D1SolidColorBrush> brush_;
+    ComPtr<ID2D1PathGeometry> gitHubMark_;
+    ComPtr<ID2D1PathGeometry> discordMark_;
+    // Where the headline ends, which is where the links start.
+    float linksLeft_ = 0.0f;
 
     ComPtr<IDWriteFactory> dwrite_;
     ComPtr<IDWriteTextFormat> titleFormat_;

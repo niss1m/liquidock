@@ -1,5 +1,9 @@
 #include "ui/SettingsWindow.h"
 
+#include <shellapi.h>
+
+#include "ui/PathIcon.h"
+
 #include <shellscalingapi.h>
 #include <windowsx.h>
 
@@ -118,6 +122,19 @@ constexpr float kControlWidth = 120.0f;
 constexpr float kChoicePadX = 13.0f;
 constexpr float kChoiceHeight = 29.0f;
 constexpr float kEmptyHeight = 30.0f;
+
+// The two links in the header. Published path data, pasted rather than
+// transcribed - see PathIcon.h for why - with the viewBox each was drawn in.
+constexpr float kLinkSize = 17.0f;
+constexpr float kLinkGap = 12.0f;
+const char kGitHubPath[] =
+    "M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27s-1.36.09-2 .27c-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z";
+constexpr float kGitHubBox = 16.0f;
+const char kDiscordPath[] =
+    "M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z";
+constexpr float kDiscordBox = 24.0f;
+const wchar_t kGitHubUrl[] = L"https://github.com/niss1m/liquidock";
+const wchar_t kDiscordUrl[] = L"https://discord.gg/Xxe3zs3sNZ";
 
 // The picker. A square for saturation and value, a rail for hue under it, and
 // one row of presets - which is the shape every colour picker worth using has,
@@ -909,7 +926,7 @@ void SettingsWindow::ResizeToHeight(int height) {
 }
 
 const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
-    if (WindowButtonAt(x, y) >= 0 || TabAt(x, y) >= 0) {
+    if (WindowButtonAt(x, y) >= 0 || TabAt(x, y) >= 0 || LinkAt(x, y) >= 0) {
         return IDC_HAND;
     }
     if (openColour_ >= 0 && static_cast<size_t>(openColour_) < rows_.size()) {
@@ -2232,6 +2249,60 @@ float SettingsWindow::MeasureText(IDWriteTextFormat* format, const std::wstring&
     return metrics.widthIncludingTrailingWhitespace;
 }
 
+void SettingsWindow::FillPointed(const D2D1_RECT_F& rect, float radius, int squareCorner,
+                                 const D2D1_COLOR_F& colour) {
+    // Corners run clockwise from the top left: 0 top-left, 1 top-right,
+    // 2 bottom-right, 3 bottom-left.
+    ComPtr<ID2D1PathGeometry> geometry;
+    if (!d2dFactory_ || FAILED(d2dFactory_->CreatePathGeometry(&geometry))) {
+        brush_->SetColor(colour);
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), brush_.Get());
+        return;
+    }
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(geometry->Open(&sink))) {
+        brush_->SetColor(colour);
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), brush_.Get());
+        return;
+    }
+
+    const D2D1_POINT_2F points[4] = {D2D1::Point2F(rect.left, rect.top),
+                                     D2D1::Point2F(rect.right, rect.top),
+                                     D2D1::Point2F(rect.right, rect.bottom),
+                                     D2D1::Point2F(rect.left, rect.bottom)};
+    // Which way each corner turns in, as a unit step along the edge arriving at
+    // it and the edge leaving it.
+    const D2D1_POINT_2F in[4] = {D2D1::Point2F(0.0f, -1.0f), D2D1::Point2F(1.0f, 0.0f),
+                                 D2D1::Point2F(0.0f, 1.0f), D2D1::Point2F(-1.0f, 0.0f)};
+    const D2D1_POINT_2F out[4] = {D2D1::Point2F(1.0f, 0.0f), D2D1::Point2F(0.0f, 1.0f),
+                                  D2D1::Point2F(-1.0f, 0.0f), D2D1::Point2F(0.0f, -1.0f)};
+
+    auto entry = [&](int i) {
+        const float r = (i == squareCorner) ? 0.0f : radius;
+        return D2D1::Point2F(points[i].x - in[i].x * r, points[i].y - in[i].y * r);
+    };
+    auto exit = [&](int i) {
+        const float r = (i == squareCorner) ? 0.0f : radius;
+        return D2D1::Point2F(points[i].x + out[i].x * r, points[i].y + out[i].y * r);
+    };
+
+    sink->BeginFigure(exit(0), D2D1_FIGURE_BEGIN_FILLED);
+    for (int i = 1; i <= 4; ++i) {
+        const int c = i % 4;
+        sink->AddLine(entry(c));
+        if (c != squareCorner) {
+            sink->AddArc(D2D1::ArcSegment(exit(c), D2D1::SizeF(radius, radius), 0.0f,
+                                          D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                                          D2D1_ARC_SIZE_SMALL));
+        }
+    }
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+
+    brush_->SetColor(colour);
+    d2d_->FillGeometry(geometry.Get(), brush_.Get());
+}
+
 void SettingsWindow::DrawTooltip() {
     if (tooltipAlpha_ <= 0.01f || hoverRow_ < 0 ||
         static_cast<size_t>(hoverRow_) >= rows_.size()) {
@@ -2273,7 +2344,15 @@ void SettingsWindow::DrawTooltip() {
     left = std::clamp(left, 8.0f, std::max(8.0f, panelWidth - width - 8.0f));
 
     const D2D1_RECT_F pill = D2D1::RectF(left, top, left + width, top + layout::kTooltipHeight);
-    const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(pill, 7.0f, 7.0f);
+
+    // The corner beside the pointer is left square, so the pill has a point
+    // aimed back at whatever it is describing - which is the job the dock's
+    // hover label gives to a tail, done without one. Which corner that is falls
+    // out of the flips above: the tooltip sits below and right of the pointer
+    // unless an edge pushed it the other way.
+    const bool flippedX = left < pointerX_;
+    const bool flippedY = top < pointerY_;
+    const int corner = flippedY ? (flippedX ? 2 : 3) : (flippedX ? 1 : 0);
 
     // Lifted off the ground rather than sunk into it. Everything else on this
     // page is a percentage of white over black, so a *darker* tooltip would be
@@ -2281,8 +2360,7 @@ void SettingsWindow::DrawTooltip() {
     // outline: it is already the lightest thing on the page, and a hairline on
     // top of that reads as a second edge rather than as a definition of the
     // first.
-    brush_->SetColor(Grey(0.17f, 0.98f * tooltipAlpha_));
-    d2d_->FillRoundedRectangle(rounded, brush_.Get());
+    FillPointed(pill, 7.0f, corner, Grey(0.17f, 0.98f * tooltipAlpha_));
 
     DrawText(text, tipFormat_.Get(),
              D2D1::RectF(pill.left + layout::kTooltipPadX, pill.top,
@@ -2337,6 +2415,56 @@ int SettingsWindow::WindowButtonAt(float x, float y) const {
     return -1;
 }
 
+D2D1_RECT_F SettingsWindow::LinkRect(int index) const {
+    const float left = linksLeft_ + index * (layout::kLinkSize + layout::kLinkGap);
+    // Centred on the headline rather than hung from its box, which is taller
+    // than the word in it.
+    const float centreY = 33.0f;
+    return D2D1::RectF(left, centreY - layout::kLinkSize * 0.5f, left + layout::kLinkSize,
+                       centreY + layout::kLinkSize * 0.5f);
+}
+
+int SettingsWindow::LinkAt(float x, float y) const {
+    for (int i = 0; i < 2; ++i) {
+        const D2D1_RECT_F box = LinkRect(i);
+        // Four pixels of slop all round: a seventeen-pixel mark is a small
+        // thing to hit, and the space beside it belongs to nothing else.
+        if (x >= box.left - 4.0f && x <= box.right + 4.0f && y >= box.top - 4.0f &&
+            y <= box.bottom + 4.0f) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void SettingsWindow::DrawLinks() {
+    if (!gitHubMark_) {
+        gitHubMark_ = BuildPathGeometry(d2dFactory_.Get(), layout::kGitHubPath);
+        discordMark_ = BuildPathGeometry(d2dFactory_.Get(), layout::kDiscordPath);
+    }
+    ID2D1PathGeometry* marks[2] = {gitHubMark_.Get(), discordMark_.Get()};
+    const float boxes[2] = {layout::kGitHubBox, layout::kDiscordBox};
+    const int under = LinkAt(pointerX_, pointerY_);
+
+    D2D1_MATRIX_3X2_F panel{};
+    d2d_->GetTransform(&panel);
+    for (int i = 0; i < 2; ++i) {
+        if (!marks[i]) {
+            continue;
+        }
+        const D2D1_RECT_F box = LinkRect(i);
+        // Drawn at its own scale into its own corner, then handed back to the
+        // panel's transform - the geometry is in the units it was published in
+        // and knows nothing about this window.
+        const float k = layout::kLinkSize / boxes[i];
+        d2d_->SetTransform(D2D1::Matrix3x2F::Scale(k, k) *
+                           D2D1::Matrix3x2F::Translation(box.left, box.top) * panel);
+        brush_->SetColor(Grey(1.0f, (i == under) ? 0.95f : 0.42f));
+        d2d_->FillGeometry(marks[i], brush_.Get());
+    }
+    d2d_->SetTransform(panel);
+}
+
 void SettingsWindow::DrawHeader() {
     const bool listTab = (activeTab_ == Tab::Items);
     const float bottom = listTab ? itemsClip_.top : layout::kContentTop;
@@ -2371,8 +2499,8 @@ void SettingsWindow::DrawHeader() {
 
     DrawText(L"LiquiDock", titleFormat_.Get(),
              D2D1::RectF(layout::kPadding, 18.0f, 400.0f, 52.0f), kTitle);
-    DrawText(L"Every change applies straight away", hintFormat_.Get(),
-             D2D1::RectF(layout::kPadding, 40.0f, 460.0f, 60.0f), kHint);
+    linksLeft_ = layout::kPadding + MeasureText(titleFormat_.Get(), L"LiquiDock") + 14.0f;
+    DrawLinks();
 
     DrawTabs();
     DrawWindowButtons();
@@ -3250,6 +3378,14 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 } else {
                     Hide();
                 }
+                return 0;
+            }
+
+            const int link = LinkAt(x, y);
+            if (link >= 0) {
+                ShellExecuteW(nullptr, L"open",
+                              (link == 0) ? layout::kGitHubUrl : layout::kDiscordUrl, nullptr,
+                              nullptr, SW_SHOWNORMAL);
                 return 0;
             }
 
