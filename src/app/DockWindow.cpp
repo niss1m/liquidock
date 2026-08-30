@@ -271,8 +271,12 @@ void DockWindow::StartHideCountdown() {
     if (!autoHide_ || !hwnd_) {
         return;
     }
-    if (settingsWindow_ && settingsWindow_->visible()) {
-        return; // the dock stays put while its own preferences are open
+    if (settingsWindow_ && settingsWindow_->active()) {
+        // The dock holds still while its preferences are being adjusted. This
+        // used to test `visible()`, which was fine when the window dismissed
+        // itself on losing focus - and became "the dock never hides again" the
+        // moment it was made an ordinary window that stays open.
+        return;
     }
     revealState_ = (revealProgress_ >= 1.0f) ? RevealState::Shown : revealState_;
 
@@ -307,7 +311,7 @@ void DockWindow::CheckHideDeadline() {
     float y = 0.0f;
     const bool hovering = !menuOpen_ && GetCursorPos(&cursor) && CursorToLayout(cursor, &x, &y) &&
                           layout_.HoverContains(x, y);
-    const bool busy = menuOpen_ || (settingsWindow_ && settingsWindow_->visible());
+    const bool busy = menuOpen_ || (settingsWindow_ && settingsWindow_->active());
     if (hovering || busy) {
         StartHideCountdown(); // still in use, so stay out
         return;
@@ -409,7 +413,7 @@ void DockWindow::BeginHiding() {
     if (!autoHide_ || menuOpen_ || revealState_ == RevealState::Hidden) {
         return;
     }
-    if (settingsWindow_ && settingsWindow_->visible()) {
+    if (settingsWindow_ && settingsWindow_->active()) {
         return;
     }
     revealState_ = RevealState::Hiding;

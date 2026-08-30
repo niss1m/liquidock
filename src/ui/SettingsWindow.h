@@ -56,6 +56,12 @@ public:
     void Show(HMONITOR nearMonitor);
     void Hide();
     bool visible() const { return visible_; }
+    // Visible *and* the window you are using. The dock holds still while its
+    // own preferences are being adjusted - you cannot judge `frost` against a
+    // dock that has slid away - but "being adjusted" has to mean focused, not
+    // merely open, or a preferences window left up pins the dock on screen for
+    // the rest of the session.
+    bool active() const;
 
     HWND hwnd() const { return hwnd_; }
 

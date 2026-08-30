@@ -583,6 +583,10 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     Render();
 }
 
+bool SettingsWindow::active() const {
+    return hwnd_ && visible_ && GetForegroundWindow() == hwnd_;
+}
+
 void SettingsWindow::Hide() {
     if (!hwnd_ || !visible_) {
         return;
