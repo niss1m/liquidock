@@ -1267,7 +1267,8 @@ void DockWindow::Render() {
     constants.shape[2] = layout_.corner_radius() * scale;
     constants.shape[3] = elapsed;
 
-    constants.light[0] = Radians(settings_.lightAngleDegrees);
+    constants.light[0] =
+        Radians(settings_.lightAngleDegrees + design::glass::kLightAngleOffset);
     constants.light[1] = settings_.lightIntensity;
     constants.light[2] = settings_.refraction;
     constants.light[3] = settings_.depth;

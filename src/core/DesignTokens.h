@@ -74,7 +74,18 @@ namespace glass {
 //     -90 is what our own convention spells that.
 //   * its edge compresses the background over about four logical pixels, which
 //     is depth 0.20 against the bend the shader now applies.
-inline constexpr float kLightAngleDegrees = -90.0f;
+// The Figma panel's own number. It reads as -45 there and it is -45 here,
+// because the offset below makes the two conventions agree rather than asking
+// anyone to translate between them.
+inline constexpr float kLightAngleDegrees = -45.0f;
+
+// What to add before the shader uses it. Figma's angle and ours are not the
+// same zero: the design's render, at its stated -45, has its bright edges along
+// the top and the bottom with the sides dark, and reproducing that in our own
+// terms takes -90. One calibration point only fixes an offset, not a direction,
+// so this is exactly that - the amount that makes the panel's number produce
+// the panel's picture.
+inline constexpr float kLightAngleOffset = -45.0f;
 inline constexpr float kLightIntensity = 0.80f;
 inline constexpr float kRefraction = 0.80f;
 inline constexpr float kDepth = 0.20f;
