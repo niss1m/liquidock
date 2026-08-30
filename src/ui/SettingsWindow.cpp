@@ -65,6 +65,8 @@ constexpr float kPillPadX = 16.0f;
 constexpr float kKnobWidth = 3.0f;
 constexpr float kKnobHeight = 26.0f;
 constexpr float kKnobInset = kPillRadius + 5.0f;
+// How far either side of the thumb still counts as the thumb.
+constexpr float kKnobGrab = 7.0f;
 // The track begins after the label, so zero is past the text rather than under
 // it. The knob then cannot cross the label at any value - not at the minimum,
 // and not on the way up either, which is the half of the problem that indenting
@@ -955,6 +957,15 @@ void SettingsWindow::ResizeToHeight(int height) {
 }
 
 const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
+    // A drag in progress owns the cursor. The pointer routinely leaves the row
+    // while dragging - that is what dragging a slider looks like - and the
+    // cursor flickering back to an arrow on the way is worse than useless.
+    if (dragRow_ >= 0) {
+        return IDC_SIZEWE;
+    }
+    if (pickerDrag_ >= 0) {
+        return IDC_HAND;
+    }
     if (WindowButtonAt(x, y) >= 0 || TabAt(x, y) >= 0 || LinkAt(x, y) >= 0) {
         return IDC_HAND;
     }
@@ -984,11 +995,16 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
     switch (row.kind) {
         case Row::Kind::Toggle:
             return IDC_HAND; // the whole row flips it
-        case Row::Kind::Slider:
-            // The track, which is the card from the end of the label onward.
-            return (y <= PillRect(row).bottom && x >= row.control.left - layout::kKnobWidth)
-                       ? IDC_HAND
-                       : IDC_ARROW;
+        case Row::Kind::Slider: {
+            if (y > PillRect(row).bottom || x < row.control.left - layout::kKnobWidth) {
+                return IDC_ARROW;
+            }
+            // On the thumb itself, the cursor that says "this slides". The
+            // grabbable half of the row is a three-pixel bar, so the test is
+            // generous either side of it - a cursor that only changes when you
+            // are exactly on the thumb is a cursor nobody sees.
+            return (std::fabs(x - KnobX(row)) <= layout::kKnobGrab) ? IDC_SIZEWE : IDC_HAND;
+        }
         case Row::Kind::Choice:
             return inControl ? IDC_HAND : IDC_ARROW;
         case Row::Kind::AddItem:
@@ -1871,6 +1887,15 @@ D2D1_RECT_F SettingsWindow::PillRect(const Row& row) const {
                        row.bounds.top + layout::kPillHeight);
 }
 
+float SettingsWindow::KnobX(const Row& row) const {
+    if (!row.number) {
+        return row.control.left;
+    }
+    const float span = std::max(row.maximum - row.minimum, 1e-5f);
+    const float t = std::clamp((*row.number - row.minimum) / span, 0.0f, 1.0f);
+    return row.control.left + t * (row.control.right - row.control.left);
+}
+
 void SettingsWindow::DrawSlider(const Row& row, float hover) {
     const D2D1_RECT_F pill = PillRect(row);
     const D2D1_ROUNDED_RECT card =
@@ -1879,9 +1904,7 @@ void SettingsWindow::DrawSlider(const Row& row, float hover) {
     brush_->SetColor(Mix(kTrack, kTrackHover, hover));
     d2d_->FillRoundedRectangle(card, brush_.Get());
 
-    const float span = std::max(row.maximum - row.minimum, 1e-5f);
-    const float t = std::clamp((*row.number - row.minimum) / span, 0.0f, 1.0f);
-    const float knobX = row.control.left + t * (row.control.right - row.control.left);
+    const float knobX = KnobX(row);
 
     // The fill runs from the card's left edge, under the label, the way the
     // reference does - the label sits on filled track. Only the *thumb* is kept
