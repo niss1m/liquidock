@@ -2678,18 +2678,24 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 }
             }
 
+            // The editor is a panel between the two grids, not a row - so RowAt
+            // finds nothing over it, and a test that lives inside "found a row"
+            // never runs. Which is why every field in it was dead: the cursor
+            // turned into an I-beam on the way past, because that check was
+            // already out here, and then the click went nowhere.
+            if (activeTab_ == Tab::Items && expandedItem_ >= 0 && x >= editorPanel_.left &&
+                x <= editorPanel_.right && y >= editorPanel_.top && y <= editorPanel_.bottom) {
+                if (HandleEditorClick(editorPanel_, expandedItem_, x, y)) {
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
+
             const int row = RowAt(x, y);
             if (row >= 0) {
                 const Row::Kind kind = rows_[static_cast<size_t>(row)].kind;
                 if (kind == Row::Kind::AddItem || kind == Row::Kind::AddSeparator) {
                     HandleItemClick(row, x);
-                    return 0;
-                }
-                if (expandedItem_ >= 0 && x >= editorPanel_.left && x <= editorPanel_.right &&
-                    y >= editorPanel_.top && y <= editorPanel_.bottom) {
-                    if (HandleEditorClick(editorPanel_, expandedItem_, x, y)) {
-                        InvalidateRect(hwnd, nullptr, FALSE);
-                    }
                     return 0;
                 }
                 if (kind == Row::Kind::Suggestion) {
