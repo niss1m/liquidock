@@ -145,6 +145,7 @@ private:
     // Advances the row animations. Returns true while anything is still
     // moving, which is what keeps the redraw timer armed.
     bool AdvanceAnimation();
+    void DrawHeader();
     void DrawTabs();
     // -1 when the point is over no tab.
     int TabAt(float x, float y) const;

@@ -1848,6 +1848,57 @@ int SettingsWindow::WindowButtonAt(float x, float y) const {
     return -1;
 }
 
+void SettingsWindow::DrawHeader() {
+    const bool listTab = (activeTab_ == Tab::Items);
+    const float bottom = listTab ? itemsClip_.top : layout::kContentTop;
+
+    // Opaque, and the panel's own colour: the list runs underneath, and a
+    // header you can read the list through is not a header. Rounded at the top
+    // to keep the panel's corners, squared off below by a second fill - a
+    // rounded rectangle would have rounded the bottom two as well, and a plain
+    // one would have squared off all four.
+    brush_->SetColor(kPanel);
+    d2d_->FillRoundedRectangle(
+        D2D1::RoundedRect(D2D1::RectF(0.5f, 0.5f, layout::kWidth - 0.5f, bottom), layout::kCorner,
+                          layout::kCorner),
+        brush_.Get());
+    d2d_->FillRectangle(D2D1::RectF(0.5f, layout::kCorner, layout::kWidth - 0.5f, bottom),
+                        brush_.Get());
+    // The panel's own edge, redrawn over the fill that just covered it.
+    brush_->SetColor(kPanelEdge);
+    d2d_->DrawLine(D2D1::Point2F(0.5f, layout::kCorner), D2D1::Point2F(0.5f, bottom), brush_.Get(),
+                   1.0f);
+    d2d_->DrawLine(D2D1::Point2F(layout::kWidth - 0.5f, layout::kCorner),
+                   D2D1::Point2F(layout::kWidth - 0.5f, bottom), brush_.Get(), 1.0f);
+
+    // A hairline under it, but only while there is something to scroll. A
+    // header separated from a page that cannot move is a line for its own sake.
+    if (itemScrollMax_ > 0.0f) {
+        brush_->SetColor(Grey(1.0f, 0.07f));
+        d2d_->FillRectangle(D2D1::RectF(1.0f, bottom - 1.0f, layout::kWidth - 1.0f, bottom),
+                            brush_.Get());
+    }
+
+    DrawText(L"LiquiDock", titleFormat_.Get(),
+             D2D1::RectF(layout::kPadding, 18.0f, 400.0f, 52.0f), kTitle);
+    DrawText(L"Every change applies straight away", hintFormat_.Get(),
+             D2D1::RectF(layout::kPadding, 40.0f, 460.0f, 60.0f), kHint);
+
+    DrawTabs();
+    DrawWindowButtons();
+
+    // The two add buttons live in the header's own strip, so they are painted
+    // with it rather than left underneath.
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        const Row& row = rows_[i];
+        if (row.tab != activeTab_ ||
+            (row.kind != Row::Kind::AddItem && row.kind != Row::Kind::AddSeparator)) {
+            continue;
+        }
+        DrawItem(row, static_cast<int>(i) == hoverRow_, pointerX_);
+    }
+}
+
 void SettingsWindow::DrawTabs() {
     float x = layout::kPadding;
     for (int i = 0; i < kTabCount; ++i) {
@@ -2235,8 +2286,10 @@ void SettingsWindow::DrawSearch() {
     const D2D1_RECT_F text = D2D1::RectF(searchRect_.left + 2.0f, searchRect_.top,
                                          searchRect_.right, searchRect_.bottom);
     if (search_.empty()) {
+        hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         DrawText(L"Search installed apps", hintFormat_.Get(), text,
                  Grey(1.0f, searchFocused_ ? 0.35f : 0.28f));
+        hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     } else {
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         DrawText(search_, valueFormat_.Get(), text, kValue);
@@ -2354,14 +2407,6 @@ void SettingsWindow::Render() {
     brush_->SetColor(kPanelEdge);
     d2d_->DrawRoundedRectangle(panel, brush_.Get(), 1.0f);
 
-    DrawText(L"LiquiDock", titleFormat_.Get(),
-             D2D1::RectF(layout::kPadding, 18.0f, 400.0f, 52.0f), kTitle);
-    DrawText(L"Every change applies straight away", hintFormat_.Get(),
-             D2D1::RectF(layout::kPadding, 40.0f, 460.0f, 60.0f), kHint);
-
-    DrawTabs();
-    DrawWindowButtons();
-
     bool clipped = false;
     for (size_t i = 0; i < rows_.size(); ++i) {
         const Row& row = rows_[i];
@@ -2391,8 +2436,7 @@ void SettingsWindow::Render() {
             continue;
         }
         if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
-            DrawItem(row, hovered, pointerX_);
-            continue;
+            continue; // drawn with the header, which is drawn last
         }
 
         if (row.kind == Row::Kind::Section) {
@@ -2441,6 +2485,11 @@ void SettingsWindow::Render() {
     }
 
     if (activeTab_ == Tab::Items) {
+        // Everything below scrolls, so all of it is clipped to the same box the
+        // tiles are. The editor panel was outside this, which is how a scrolled
+        // list ended up drawing its fields over the title and the tab strip.
+        d2d_->PushAxisAlignedClip(itemsClip_, D2D1_ANTIALIAS_MODE_ALIASED);
+
         // The rule between what is on the dock and what could be.
         if (!suggestions_.empty() && gridRuleY_ > itemsClip_.top - layout::kSearchHeight &&
             gridRuleY_ < itemsClip_.bottom) {
@@ -2448,10 +2497,17 @@ void SettingsWindow::Render() {
             d2d_->FillRectangle(D2D1::RectF(layout::kPadding, gridRuleY_,
                                             layout::kWidth - layout::kPadding, gridRuleY_ + 1.0f),
                                 brush_.Get());
+            // Centred in the field's own box rather than hung from its top
+            // edge, and so is everything drawn into that box - the placeholder
+            // at eleven and a half, the typed text at twelve and a half. Three
+            // sizes, one line: hanging them all from the same top left each of
+            // them sitting a different distance below it.
+            hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             DrawText(L"Installed, not on the dock — click to add", hintFormat_.Get(),
                      D2D1::RectF(layout::kPadding, searchRect_.top, searchRect_.left - 12.0f,
                                  searchRect_.bottom),
                      kHint);
+            hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
             DrawSearch();
             if (filtered_.empty()) {
                 const float top = searchRect_.bottom + layout::kGridRuleGap;
@@ -2489,8 +2545,13 @@ void SettingsWindow::Render() {
                 d2d_->FillRoundedRectangle(D2D1::RoundedRect(marker, 1.0f, 1.0f), brush_.Get());
             }
         }
+        d2d_->PopAxisAlignedClip();
         DrawDetailBar();
     }
+
+    // Last, and over everything: the strip at the top does not scroll, so it
+    // has to be painted after whatever scrolled underneath it.
+    DrawHeader();
 
     DrawTooltip();
 
