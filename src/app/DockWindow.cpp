@@ -661,6 +661,11 @@ void DockWindow::ApplySettings() {
                              settings_.iconBulge, settings_.followCursor);
     layout_.SetDividerGap(settings_.dividerGap);
     layout_.SetLaunchEffect(settings_.launchEffect);
+    // Reconciled rather than written every time: this is a registry key, and
+    // rewriting it on every settings reload would be a write per slider drag.
+    if (settings_.startWithWindows != Settings::AutostartEnabled()) {
+        Settings::SetAutostart(settings_.startWithWindows);
+    }
     layout_.SetIconGap(settings_.iconGap);
     // The layout's own numbers after a reload. They are otherwise only
     // checkable with a screenshot, and a dock is exactly the thing that is hard

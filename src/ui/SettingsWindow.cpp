@@ -631,6 +631,10 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Behaviour, L"Slide time", L"How long the dock takes to arrive",
            &settings_.slideSeconds, 0.0f, 0.8f, 2, 0, L" s");
 
+    section(Tab::Behaviour, L"Starting up", 1);
+    toggle(Tab::Behaviour, L"Start with Windows", L"Runs the dock at sign-in",
+           &settings_.startWithWindows, 1);
+
     // --- Appearance -------------------------------------------------------
     // The hover label used to be two rows tucked under the hiding settings,
     // which is where it ended up rather than where it belongs: nothing about it

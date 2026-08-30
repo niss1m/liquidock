@@ -169,6 +169,12 @@ struct Settings {
     // whose window happens to stop above it.
     bool hideWhenCovered = true;
 
+    // Whether Windows starts the dock at sign-in. Deliberately not in the
+    // settings file and not in a shared token: it is a registry key, the
+    // registry is the only truth about it, and a config someone pasted from a
+    // stranger has no business adding one to their machine.
+    bool startWithWindows = false;
+
     float dwellSeconds = 0.0f;
     float slideSeconds = 0.0f;
 
@@ -192,6 +198,13 @@ struct Settings {
     static std::wstring FilePath();
     // `#rrggbb`, the way the file writes it and the picker shows it.
     static std::wstring HexColour(const float rgb[3]);
+
+    // The Run key, read and written directly. True if Windows is currently set
+    // to start this executable at sign-in.
+    static bool AutostartEnabled();
+    // Adds or removes it, pointing at whatever executable is running now.
+    // False if the registry refused.
+    static bool SetAutostart(bool enabled);
 
     // True when the file changed on disk since the last call. Used to reload
     // while the dock is running so the glass can be tuned by saving the file.

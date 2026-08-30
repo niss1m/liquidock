@@ -93,6 +93,65 @@ float ParseFloat(const std::wstring& value, float fallback, float low, float hig
 
 } // namespace
 
+namespace {
+
+constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunValue[] = L"LiquiDock";
+
+} // namespace
+
+bool Settings::AutostartEnabled() {
+    // The value's *content* is not checked against the running executable. A
+    // build that has moved should still read as "on" - the honest answer to
+    // "will Windows start something at sign-in" is yes - and the next time the
+    // toggle is touched it is rewritten to wherever this copy lives.
+    DWORD type = 0;
+    DWORD size = 0;
+    return RegGetValueW(HKEY_CURRENT_USER, kRunKey, kRunValue, RRF_RT_REG_SZ, &type, nullptr,
+                        &size) == ERROR_SUCCESS;
+}
+
+bool Settings::SetAutostart(bool enabled) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS) {
+        LogWarn("Could not open the Run key; start with Windows is unchanged");
+        return false;
+    }
+
+    LSTATUS result = ERROR_SUCCESS;
+    if (enabled) {
+        wchar_t path[MAX_PATH]{};
+        if (GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path))) == 0) {
+            RegCloseKey(key);
+            return false;
+        }
+        // Quoted, because a path with a space in it - which "Program Files"
+        // guarantees - is otherwise read as a command and its first argument.
+        const std::wstring quoted = L"\"" + std::wstring(path) + L"\"";
+        result = RegSetValueExW(key, kRunValue, 0, REG_SZ,
+                                reinterpret_cast<const BYTE*>(quoted.c_str()),
+                                static_cast<DWORD>((quoted.size() + 1) * sizeof(wchar_t)));
+        if (result == ERROR_SUCCESS) {
+            LogInfo("Windows will start LiquiDock at sign-in");
+        }
+    } else {
+        result = RegDeleteValueW(key, kRunValue);
+        if (result == ERROR_FILE_NOT_FOUND) {
+            result = ERROR_SUCCESS; // already gone is the state that was asked for
+        }
+        if (result == ERROR_SUCCESS) {
+            LogInfo("Windows will no longer start LiquiDock at sign-in");
+        }
+    }
+    RegCloseKey(key);
+    if (result != ERROR_SUCCESS) {
+        LogWarn("Could not write the Run key");
+        return false;
+    }
+    return true;
+}
+
 bool Settings::LightInk() const {
     if (theme != Theme::System) {
         return theme == Theme::Light;
@@ -186,6 +245,10 @@ void Settings::Load() {
     hideWhenCovered = true;
     dwellSeconds = design::kDwellSeconds;
     slideSeconds = design::kSlideSeconds;
+
+    // Read from the registry, not from the file: there is one place Windows
+    // keeps this and it is not settings.txt.
+    startWithWindows = AutostartEnabled();
 
     const std::wstring path = FilePath();
     if (path.empty()) {
