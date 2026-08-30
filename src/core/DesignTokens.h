@@ -74,10 +74,16 @@ namespace glass {
 //     -90 is what our own convention spells that.
 //   * its edge compresses the background over about four logical pixels, which
 //     is depth 0.20 against the bend the shader now applies.
-// The Figma panel's own number. It reads as -45 there and it is -45 here,
-// because the offset below makes the two conventions agree rather than asking
-// anyone to translate between them.
-inline constexpr float kLightAngleDegrees = -45.0f;
+// Ours, not Figma's. The panel quotes -45 for this frame; measuring its render
+// shows the light square-on to the *horizontal* edges - bright along the top
+// and bottom, dark down the sides - and that is -90 in the convention used
+// here, where 0 is from the right and -90 is from directly above.
+//
+// The two are 45 degrees apart and there is no honest way to make one number
+// mean both. I tried, with an offset, and it produced a slider reading -45 and
+// a light behaving like -90, which is worse than the discrepancy it hid. So
+// this is our own number, documented against theirs.
+inline constexpr float kLightAngleDegrees = -90.0f;
 
 // No offset. There was one, to make -45 behave like -90, and it was a fudge
 // covering a wrong model: the rim's top-and-bottom character comes from the
