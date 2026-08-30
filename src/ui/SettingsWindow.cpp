@@ -48,7 +48,15 @@ constexpr float kKnobInset = kPillRadius + 5.0f;
 constexpr float kSectionHeight = 46.0f;
 constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
-constexpr float kValueWidth = 66.0f;
+// The value gets a column of its own on the right of the card, and the track
+// stops before it. Sharing the width meant that at the top of a range the knob
+// arrived on top of the number - "2.00x" with a caret through the x, and two
+// pixels between the two of them and the card's edge where the label has
+// sixteen. The knob can no longer reach it, and the fill still ends flush with
+// the track it fills.
+constexpr float kValueWidth = 52.0f;   // wide enough for "236 px"
+constexpr float kValueGap = 10.0f;     // between the track's end and the number
+constexpr float kValueGutter = kPillPadX + kValueWidth + kValueGap;
 constexpr float kFooterHeight = 34.0f;
 // One line per item. The path used to sit under the name on a second line,
 // which is a lot of vertical space spent on something you only want when you
@@ -414,11 +422,13 @@ void SettingsWindow::LayoutRows() {
                 row.bounds.left, row.bounds.top,
                 row.bounds.right, row.bounds.top + layout::kPillHeight);
             if (row.kind == Row::Kind::Slider) {
-                // The knob's travel, not a separate widget: the card is the
-                // track, so the value maps across the whole card less the
-                // margin that keeps the knob off the rounded ends.
+                // The knob's travel: the card less the value's column, less the
+                // margin that keeps the knob off the rounded end. The fill runs
+                // a knob-inset past the knob, so at the top of the range it
+                // finishes exactly where the track does.
                 row.control = D2D1::RectF(pill.left + layout::kKnobInset, pill.top,
-                                          pill.right - layout::kKnobInset, pill.bottom);
+                                          pill.right - layout::kValueGutter - layout::kKnobInset,
+                                          pill.bottom);
             } else {
                 // Toggles and choices keep a widget on the right of the card.
                 const float centreY = (pill.top + pill.bottom) * 0.5f;
@@ -1534,7 +1544,7 @@ void SettingsWindow::Render() {
         // explanation stack against the left, stopping short of the value.
         const float textLeft = pill.left + layout::kPillPadX;
         const float textRight = (row.kind == Row::Kind::Slider)
-                                    ? (pill.right - layout::kPillPadX - layout::kValueWidth)
+                                    ? (pill.right - layout::kValueGutter)
                                     : (row.control.left - 14.0f);
 
         if (row.hint) {
@@ -1556,6 +1566,7 @@ void SettingsWindow::Render() {
                      D2D1::RectF(pill.right - layout::kPillPadX - layout::kValueWidth, pill.top,
                                  pill.right - layout::kPillPadX, pill.bottom),
                      kLabel);
+
         }
     }
 
