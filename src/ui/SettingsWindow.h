@@ -324,6 +324,10 @@ private:
      // the list as you sweep past; a short dwell is what stops that.
     LARGE_INTEGER hoverSince_{};
     float tooltipAlpha_ = 0.0f;
+    // True while a tooltip has recently been up, which is what makes the next
+    // one instant rather than dwelt-for.
+    bool tooltipPrimed_ = false;
+    float tooltipIdle_ = 0.0f;
     LARGE_INTEGER lastFrame_{};
     LARGE_INTEGER frequency_{};
     UINT dpi_ = 96;

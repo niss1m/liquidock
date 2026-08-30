@@ -91,8 +91,20 @@ constexpr float kGrowSeconds = 0.20f;
 constexpr float kHoverSeconds = 0.11f;
 // Long enough that sweeping the list does not strobe, short enough that
 // stopping to ask feels answered rather than waited for.
+// How long the pointer has to rest before the *first* tooltip appears. Once
+// one is up the rest are instant: the question "what is this" has already been
+// asked and answered, and making someone re-earn the answer on every row is
+// what makes a panel feel slow.
 constexpr float kTooltipDelay = 0.28f;
-constexpr float kTooltipFade = 0.12f;
+// And they do not fade. A fade out followed by a dwell followed by a fade in is
+// half a second of nothing between two labels a pixel apart. The only fade left
+// is the one that takes the last tooltip away when the pointer lands on
+// something with nothing to say.
+constexpr float kTooltipFade = 0.09f;
+// How long the tooltip stays primed after the pointer leaves a row that speaks.
+// Long enough to cross a gap between two cards, short enough that coming back
+// to the panel later starts from rest.
+constexpr float kTooltipGrace = 0.45f;
 constexpr float kTooltipPadX = 13.0f;
 // Roomier than the text needs, on purpose: a tooltip that hugs its own
 // ascender reads as cramped however well centred it is.
@@ -1761,14 +1773,33 @@ bool SettingsWindow::AdvanceAnimation() {
         (rows_[static_cast<size_t>(hoverRow_)].hint != nullptr ||
          rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::Item ||
          rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::Suggestion);
-    const bool wantsTooltip = speaks && dwelled >= layout::kTooltipDelay;
+    // Primed means one has already been earned, so the next row does not have to
+    // earn it again. It survives crossing the gap between two cards and expires
+    // shortly after the pointer settles on something with nothing to say.
+    if (speaks) {
+        tooltipIdle_ = 0.0f;
+    } else {
+        tooltipIdle_ += delta;
+        if (tooltipIdle_ >= layout::kTooltipGrace) {
+            tooltipPrimed_ = false;
+        }
+    }
+    const bool wantsTooltip = speaks && (tooltipPrimed_ || dwelled >= layout::kTooltipDelay);
     const float before = tooltipAlpha_;
-    approach(tooltipAlpha_, wantsTooltip ? 1.0f : 0.0f, layout::kTooltipFade);
+    if (wantsTooltip) {
+        // Straight to full. The content is swapped by DrawTooltip reading the
+        // row under the pointer, so moving between rows is a change of text
+        // rather than one tooltip leaving and another arriving.
+        tooltipAlpha_ = 1.0f;
+        tooltipPrimed_ = true;
+    } else {
+        approach(tooltipAlpha_, 0.0f, layout::kTooltipFade);
+    }
     if (tooltipAlpha_ != before) {
         moving = true;
     }
-    // Still counting down to it: keep the clock running or the dwell would only
-    // ever complete on some other row's animation happening to redraw us.
+    // Still counting down to the first one: keep the clock running or the dwell
+    // would only ever complete on some other row's animation redrawing us.
     if (!wantsTooltip && hoverRow_ >= 0 && dwelled < layout::kTooltipDelay) {
         moving = true;
     }
@@ -3200,6 +3231,10 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             mouseTracking_ = false;
             hoverRow_ = -1;
             hoverSince_.QuadPart = 0;
+            // Leaving the window ends the run outright. Coming back is a fresh
+            // question, and should cost the dwell again.
+            tooltipPrimed_ = false;
+            tooltipIdle_ = 0.0f;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
