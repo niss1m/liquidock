@@ -14,6 +14,10 @@
   <a href="LICENSE">License</a>
 </p>
 
+<p align="center">
+  <img src="resources/preview.png" width="729" alt="The dock over a photograph, its glass refracting the wallpaper behind it">
+</p>
+
 ## What makes it different
 
 Every other Windows dock paints its background from a pre-baked bitmap — a nine-slice PNG stretched
