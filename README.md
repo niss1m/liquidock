@@ -94,10 +94,15 @@ Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light
 `dwell-seconds`, `slide-seconds`.
 
 `hide-when-covered` is **on** by default and is what makes auto-hide behave the way people expect:
-the dock tucks away under a window and comes straight back when the desktop is clear, so minimising
-everything shows it rather than hiding it from nothing. Turn it off to have the dock hide on its
-dwell whatever is behind it. Coverage is worked out from window events, not a timer — nothing is
-polled to answer it.
+the dock stays out for as long as you are looking at the desktop and tucks away as soon as you are
+not. "In the way" means either that an application holds the foreground or that a window overlaps
+the dock's strip — the first alone would ignore a window sitting over the dock without focus, and
+the second alone leaves the dock on top of an app whose window stops above it. Turn it off to have
+the dock hide on its dwell whatever is behind it.
+
+The answer comes from window events rather than a timer. The one exception is a slow re-check while
+the dock is parked out over a clear desktop, which exists only so that a missed event cannot strand
+it on top of your work.
 
 `reserve-space` makes the dock an appbar, so maximised windows stop above it the way they do above
 the taskbar. It is off by default and ignored while auto-hide is on, where a dock that is not on

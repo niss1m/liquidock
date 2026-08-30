@@ -76,6 +76,10 @@ constexpr UINT_PTR kCoverTimer = 9;
 // is - it can wait behind anything, and it can starve nothing.
 constexpr UINT_PTR kHoverWatchTimer = 10;
 constexpr UINT kHoverWatchMs = 200;
+// How often to re-ask "is anything in the way" while the dock is parked out
+// over a clear desktop. Only a backstop for a missed window event; the normal
+// path is the cover watch's hooks.
+constexpr UINT kStrandedCheckMs = 4000;
 constexpr UINT kCoverDebounceMs = 120;
 
 enum ItemMenuCommand : UINT {
@@ -313,12 +317,22 @@ void DockWindow::CheckHideDeadline() {
         covered_ = DockIsCovered();
         if (!covered_) {
             // Nothing is in the way, so there is nothing to get out of the way
-            // of. Stay out and let the cover watch start the dwell when a window
-            // actually arrives - re-arming the timer here instead would be a
-            // wakeup every few seconds for the rest of the session, to keep
-            // asking a question whose answer only changes on an event we are
-            // already subscribed to.
-            KillTimer(hwnd_, kHideTimer);
+            // of - stay out. The check is re-armed slowly rather than dropped
+            // entirely: the answer changes on events we are subscribed to, but
+            // if one is ever missed the dock is stranded on top of the user's
+            // work with nothing able to bring it down, and that has now
+            // happened twice. One window scan every few seconds, only while the
+            // dock is deliberately parked out over a clear desktop, is a price
+            // worth paying to make that unreachable.
+            SetTimer(hwnd_, kHideTimer, kStrandedCheckMs, nullptr);
+            hidePending_ = true;
+            // The deadline has to move forward with the timer. Left at "now",
+            // every render would re-enter this and run a window scan per frame -
+            // and in live-capture mode there is a render whenever the screen
+            // changes, which is most of the time.
+            QueryPerformanceCounter(&hideDeadline_);
+            hideDeadline_.QuadPart +=
+                static_cast<LONGLONG>(frequency_.QuadPart) * kStrandedCheckMs / 1000;
             return;
         }
     }
@@ -349,8 +363,16 @@ bool DockWindow::DockIsCovered() const {
     const RECT bar{window.left, window.top + static_cast<LONG>(top * scale), window.right,
                    window.top + static_cast<LONG>(bottom * scale)};
 
+    // Two questions, either of which means "get out of the way". Geometry alone
+    // was not enough: an app whose window stops above the dock's strip covers
+    // nothing, so switching to it left the dock parked on top of everything.
+    // And the foreground alone is not enough either: a window can sit over the
+    // dock without being the one you are typing in.
     char culprit[64]{};
-    const bool covered = CoverWatch::IsCovered(bar, culprit, std::size(culprit));
+    bool covered = !CoverWatch::DesktopIsForeground(culprit, std::size(culprit));
+    if (!covered) {
+        covered = CoverWatch::IsCovered(bar, culprit, std::size(culprit));
+    }
     // Logged only when the answer changes. A line per scan turned the log into
     // a scroll of identical entries and made an event-driven check read like a
     // poll, which is the opposite of what it is.

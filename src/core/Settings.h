@@ -90,10 +90,12 @@ struct Settings {
     bool autoHide = true;
 
     // Whether auto-hide only applies while something is actually in the way.
-    // On - the default - the dock tucks away under a window and comes back the
-    // moment the desktop is clear, so minimising everything shows it. Off makes
-    // it hide on its dwell regardless, which is the stricter behaviour for
-    // people who want the screen edge kept empty.
+    // On - the default - the dock stays out for as long as you are looking at
+    // the desktop, and tucks away as soon as you are not. "In the way" means
+    // either that an application has the foreground or that a window overlaps
+    // the dock's strip; the first alone would ignore a window sitting over the
+    // dock unfocused, and the second alone leaves the dock on top of an app
+    // whose window happens to stop above it.
     bool hideWhenCovered = true;
 
     float dwellSeconds = 0.0f;

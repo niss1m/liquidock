@@ -40,6 +40,15 @@ public:
     static bool IsCovered(const RECT& screenRect, char* culprit = nullptr,
                           size_t culpritChars = 0);
 
+    // True when the thing in front is the desktop rather than an application -
+    // no foreground window, the shell's own desktop, or one of our own windows.
+    //
+    // This is the question people actually mean by "am I on the desktop", and
+    // geometry alone answers it badly: an app window that stops short of the
+    // bottom of the screen overlaps nothing, so a purely geometric check leaves
+    // the dock sitting on top of the work you just switched to.
+    static bool DesktopIsForeground(char* culprit = nullptr, size_t culpritChars = 0);
+
 private:
     static void CALLBACK EventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject,
                                    LONG idChild, DWORD thread, DWORD time);

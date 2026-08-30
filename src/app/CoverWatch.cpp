@@ -165,6 +165,27 @@ void CALLBACK CoverWatch::EventProc(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObje
     }
 }
 
+bool CoverWatch::DesktopIsForeground(char* culprit, size_t culpritChars) {
+    const HWND foreground = GetForegroundWindow();
+    if (!foreground) {
+        return true; // nothing focused at all
+    }
+    DWORD process = 0;
+    GetWindowThreadProcessId(foreground, &process);
+    if (process == GetCurrentProcessId()) {
+        // Our own preferences window counts as the desktop: opening it is not a
+        // reason for the dock it configures to run away.
+        return true;
+    }
+    if (IsShellWindow(foreground)) {
+        return true;
+    }
+    if (culprit && culpritChars > 0) {
+        GetClassNameA(foreground, culprit, static_cast<int>(culpritChars));
+    }
+    return false;
+}
+
 bool CoverWatch::IsCovered(const RECT& screenRect, char* culprit, size_t culpritChars) {
     ScanState state{};
     state.target = screenRect;
