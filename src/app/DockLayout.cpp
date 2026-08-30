@@ -109,34 +109,16 @@ void DockLayout::SetItems(const std::vector<DockItem>& items) {
     separators_.clear();
     lenses_.clear();
 
-    bool separatorPlaced = false;
     bool first = true;
     for (size_t index = 0; index < items.size(); ++index) {
-        const bool utility = items[index].group == ItemGroup::Utility;
-
-        // The hairline goes in once, at the first utility item. If the list has
-        // no utility items it never appears, which is the right answer for a
-        // dock of ten applications and nothing else.
-        // The hairline between the two groups is structural - it comes from the
-        // design, not from the list - which is why it has no row in the
-        // preferences window. So it must not double up with one the user placed
-        // themselves: a divider immediately before the boundary is already
-        // saying what this would say, and two rules a few pixels apart read as
-        // a bug you cannot find the second of.
-        const bool ruleAlready = !elements_.empty() && elements_.back().itemIndex < 0;
-        if (utility && !separatorPlaced && !first && !ruleAlready) {
-            Element hairline;
-            hairline.itemIndex = -1;
-            hairline.baseWidth = kSeparatorWidth;
-            hairline.gapBefore = Element::Gap::Divider;
-            elements_.push_back(hairline);
-        }
-        if (utility) {
-            separatorPlaced = true;
-        }
-
-        // A separator the user placed. Same hairline as the group boundary's,
-        // but it comes from the list rather than from the design's structure.
+        // There used to be a second kind of rule here: one the dock inserted by
+        // itself at the first `group = utility` item, on the theory that the
+        // main/utility split was structural and belonged to the design rather
+        // than to the list. It hid itself when a real divider happened to sit
+        // beside it, which is what made it so hard to see: you deleted the
+        // divider you could see, and the one you could not took its place, in
+        // the same spot, looking identical. A rule on the dock now means an
+        // entry in the list, and nothing else does.
         if (items[index].kind == ItemKind::Separator) {
             Element rule;
             rule.itemIndex = -1;

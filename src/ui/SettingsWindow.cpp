@@ -100,6 +100,7 @@ constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
 constexpr float kChoicePadX = 13.0f;
 constexpr float kChoiceHeight = 26.0f;
+constexpr float kEmptyHeight = 30.0f;
 // The value gets a column of its own on the right of the card, and the track
 // stops before it. Sharing the width meant that at the top of a range the knob
 // arrived on top of the number - "2.00x" with a caret through the x, and two
@@ -485,7 +486,10 @@ float SettingsWindow::MeasureTab(Tab tab) const {
         }
         y[0] += layout::kGridGap + layout::kRuleCaptionGap + layout::kSearchHeight +
                 layout::kGridRuleGap;
-        y[0] += lines(filtered_.size()) * line;
+        // A filter that matches nothing still needs a line to say so in. Without
+        // it the window closed up to exactly the height of no icons at all, and
+        // the message landed on top of the footer.
+        y[0] += filtered_.empty() ? layout::kEmptyHeight : lines(filtered_.size()) * line;
     }
     float tallest = *std::max_element(y, y + columns);
     if (tab == Tab::Items) {
@@ -2344,10 +2348,10 @@ void SettingsWindow::Render() {
                      kHint);
             DrawSearch();
             if (filtered_.empty()) {
-                DrawText(L"Nothing installed matches that.", hintFormat_.Get(),
-                         D2D1::RectF(layout::kPadding, searchRect_.bottom + layout::kGridRuleGap,
-                                     layout::kWidth - layout::kPadding,
-                                     searchRect_.bottom + layout::kGridRuleGap + 20.0f),
+                const float top = searchRect_.bottom + layout::kGridRuleGap;
+                DrawText(L"Nothing installed matches “" + search_ + L"”.", hintFormat_.Get(),
+                         D2D1::RectF(layout::kPadding, top, layout::kWidth - layout::kPadding,
+                                     top + layout::kEmptyHeight),
                          kHint);
             }
         }

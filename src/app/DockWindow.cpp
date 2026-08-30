@@ -653,9 +653,9 @@ void DockWindow::ApplySettings() {
     // checkable with a screenshot, and a dock is exactly the thing that is hard
     // to screenshot - it excludes itself from capture in screen mode, and
     // another dock on the same edge ruins the shot in either.
-    LogDebug("Bar now {:.0f}x{:.0f} logical at {:.0f}%, divider gap {:.0f}",
+    LogDebug("Bar now {:.0f}x{:.0f} logical at {:.0f}%, divider gap {:.0f}, {} rules",
              layout_.RestingBarWidth(), layout_.bar_half_height() * 2.0f,
-             layout_.scale() * 100.0f, settings_.dividerGap);
+             layout_.scale() * 100.0f, settings_.dividerGap, layout_.separators().size());
     // The frost is a cached blur at a particular radius, and the radius is a
     // setting, so it is stale by definition after a reload.
     frostDirty_ = true;

@@ -25,7 +25,8 @@ const wchar_t kFileHeader[] =
     L"# One block per entry:\n"
     L"#\n"
     L"#     [item]\n"
-    L"#     group   = main | utility     utility items sit right of the hairline\n"
+    L"#     group   = main | utility     read but no longer used; a rule on the\n"
+    L"#                                  dock is an entry whose kind is separator\n"
     L"#     path    = what to launch     a program, shortcut, folder, document, a\n"
     L"#                                  shell:AppsFolder\\... moniker for a Store app,\n"
     L"#                                  or a ::{guid} parsing name\n"
@@ -258,10 +259,9 @@ bool ItemStore::ReadFile(const std::wstring& path) {
                 design::kMaxItems);
     }
 
-    // Utility items always sit to the right of the hairline, whatever order the
-    // file lists them in. Stable, so the file's order survives within a group.
-    std::stable_partition(items_.begin(), items_.end(),
-                          [](const DockItem& item) { return item.group == ItemGroup::Main; });
+    // The file's order is the dock's order. This used to re-sort utility items
+    // to the end on every load, which quietly undid any drag that moved one
+    // earlier - the dock obeyed until the next reload and then sprang back.
     return true;
 }
 
@@ -292,13 +292,9 @@ bool ItemStore::Save() const {
             // next time anything rewrote the file, which adding a second one
             // does immediately.
             fwprintf(file, L"kind    = separator\n");
-            fwprintf(file, L"group   = %s\n",
-                     item.group == ItemGroup::Utility ? L"utility" : L"main");
             fwprintf(file, L"\n");
             continue;
         }
-        fwprintf(file, L"group   = %s\n",
-                 item.group == ItemGroup::Utility ? L"utility" : L"main");
         fwprintf(file, L"path    = %s\n", item.path.c_str());
         fwprintf(file, L"label   = %s\n", item.label.c_str());
         // Only written when set, so the common entry stays four short lines
@@ -588,13 +584,11 @@ void ItemStore::SeedDefaults() {
     DockItem downloads;
     downloads.path = L"%USERPROFILE%\\Downloads";
     downloads.label = L"Downloads";
-    downloads.group = ItemGroup::Utility;
     items_.push_back(std::move(downloads));
 
     DockItem bin;
     bin.path = L"::{645FF040-5081-101B-9F08-00AA002F954E}";
     bin.label = L"Recycle Bin";
-    bin.group = ItemGroup::Utility;
     items_.push_back(std::move(bin));
 }
 
