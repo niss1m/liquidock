@@ -117,12 +117,21 @@ void DockLayout::SetItems(const std::vector<DockItem>& items) {
         // The hairline goes in once, at the first utility item. If the list has
         // no utility items it never appears, which is the right answer for a
         // dock of ten applications and nothing else.
-        if (utility && !separatorPlaced && !first) {
+        // The hairline between the two groups is structural - it comes from the
+        // design, not from the list - which is why it has no row in the
+        // preferences window. So it must not double up with one the user placed
+        // themselves: a divider immediately before the boundary is already
+        // saying what this would say, and two rules a few pixels apart read as
+        // a bug you cannot find the second of.
+        const bool ruleAlready = !elements_.empty() && elements_.back().itemIndex < 0;
+        if (utility && !separatorPlaced && !first && !ruleAlready) {
             Element hairline;
             hairline.itemIndex = -1;
             hairline.baseWidth = kSeparatorWidth;
             hairline.gapBefore = Element::Gap::Divider;
             elements_.push_back(hairline);
+        }
+        if (utility) {
             separatorPlaced = true;
         }
 
