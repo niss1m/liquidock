@@ -530,6 +530,13 @@ void SettingsWindow::BuildRows() {
     rule.column = 0;
     rows_.push_back(std::move(rule));
 
+    Row self;
+    self.kind = Row::Kind::AddSelf;
+    self.tab = Tab::Items;
+    self.label = L"Add LiquiDock";
+    self.column = 0;
+    rows_.push_back(std::move(self));
+
     // --- Glass ------------------------------------------------------------
     section(Tab::Glass, L"Material", 0);
     choice(Tab::Glass, L"Backdrop", L"Screen mode hides it from screenshots", &backdropChoice_,
@@ -684,7 +691,8 @@ float SettingsWindow::MeasureTab(Tab tab) const {
         // The add buttons share one fixed row above the list rather than
         // sitting at the end of it, where forty pinned apps would put them a
         // scroll away from the person who came here to add a forty-first.
-        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
+        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator ||
+            row.kind == Row::Kind::AddSelf) {
             continue;
         }
         if (tab == Tab::Items &&
@@ -749,7 +757,8 @@ void SettingsWindow::LayoutRows() {
             row.bounds = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
             continue;
         }
-        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
+        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator ||
+            row.kind == Row::Kind::AddSelf) {
             row.bounds = D2D1::RectF(actionX, layout::kContentTop, actionX + layout::kActionWidth,
                                      layout::kContentTop + layout::kActionHeight);
             row.control = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1009,6 +1018,7 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
             return inControl ? IDC_HAND : IDC_ARROW;
         case Row::Kind::AddItem:
         case Row::Kind::AddSeparator:
+        case Row::Kind::AddSelf:
         case Row::Kind::Suggestion:
         case Row::Kind::Colour:
         case Row::Kind::Action:
@@ -1464,6 +1474,13 @@ bool SettingsWindow::HandleItemClick(int index, float x) {
         divider.kind = ItemKind::Separator;
         divider.label = L"Divider";
         if (!items_.Add(std::move(divider))) {
+            return false;
+        }
+        CommitItems();
+        return true;
+    }
+    if (row.kind == Row::Kind::AddSelf) {
+        if (!items_.AddSettings()) {
             return false;
         }
         CommitItems();
@@ -2519,6 +2536,8 @@ void SettingsWindow::DrawTooltip() {
         }
         text = (items[index].kind == ItemKind::Separator)
                    ? std::wstring(L"Divider — drag it where you want the break")
+               : (items[index].kind == ItemKind::Settings)
+                   ? std::wstring(L"LiquiDock — opens these preferences")
                    : items[index].label + L"   ·   " + items[index].path;
     } else if (hovered.kind == Row::Kind::Suggestion) {
         text = SuggestionLabel(hovered.itemIndex) + L"   ·   click to add";
@@ -2711,7 +2730,8 @@ void SettingsWindow::DrawHeader() {
     for (size_t i = 0; i < rows_.size(); ++i) {
         const Row& row = rows_[i];
         if (row.tab != activeTab_ ||
-            (row.kind != Row::Kind::AddItem && row.kind != Row::Kind::AddSeparator)) {
+            (row.kind != Row::Kind::AddItem && row.kind != Row::Kind::AddSeparator &&
+             row.kind != Row::Kind::AddSelf)) {
             continue;
         }
         DrawItem(row, static_cast<int>(i) == hoverRow_, pointerX_);
@@ -2892,7 +2912,8 @@ void SettingsWindow::DrawTileBadge(const Row& row, bool hovered, bool suggestion
 void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
     const auto& items = items_.items();
 
-    if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
+    if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator ||
+        row.kind == Row::Kind::AddSelf) {
         // Outlined rather than filled. These two are the only things on the page
         // that *do* something rather than set something, and a filled block
         // states that more loudly than a page of settings wants - while an
@@ -3172,6 +3193,8 @@ void SettingsWindow::DrawDetailBar() {
             const DockItem& item = items_.items()[static_cast<size_t>(row.itemIndex)];
             if (item.kind == ItemKind::Separator) {
                 detail = L"A divider. It launches nothing; drag it where you want the break.";
+            } else if (item.kind == ItemKind::Settings) {
+                detail = L"LiquiDock itself. Clicking it on the dock opens this window.";
             } else {
                 detail = item.path;
                 if (!item.arguments.empty()) {
@@ -3288,7 +3311,8 @@ void SettingsWindow::Render() {
         if (row.kind == Row::Kind::Section && row.tab == Tab::Items) {
             continue;
         }
-        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
+        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator ||
+            row.kind == Row::Kind::AddSelf) {
             continue; // drawn with the header, which is drawn last
         }
 
@@ -3684,7 +3708,8 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             const int row = RowAt(x, y);
             if (row >= 0) {
                 const Row::Kind kind = rows_[static_cast<size_t>(row)].kind;
-                if (kind == Row::Kind::AddItem || kind == Row::Kind::AddSeparator) {
+                if (kind == Row::Kind::AddItem || kind == Row::Kind::AddSeparator ||
+                    kind == Row::Kind::AddSelf) {
                     HandleItemClick(row, x);
                     return 0;
                 }

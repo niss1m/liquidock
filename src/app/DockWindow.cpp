@@ -887,6 +887,14 @@ void DockWindow::Launch(int itemIndex) {
         return;
     }
     const DockItem& item = store_.items()[static_cast<size_t>(itemIndex)];
+    if (item.kind == ItemKind::Settings) {
+        // Its own preferences. Posted rather than called so the click finishes
+        // first, exactly like the context menu's route to the same window.
+        layout_.Bounce(itemIndex);
+        RequestRedraw();
+        PostMessage(hwnd_, kShowSettingsMessage, 0, 0);
+        return;
+    }
     const std::wstring path = ItemStore::ExpandPath(item.path);
     const std::wstring arguments = ItemStore::ExpandPath(item.arguments);
     const std::wstring directory = ItemStore::ExpandPath(item.workingDirectory);

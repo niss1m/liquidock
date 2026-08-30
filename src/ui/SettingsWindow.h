@@ -93,7 +93,7 @@ private:
             Action,        // a ghost button that does one thing
             Item,          // one icon in the dock's own grid
             Suggestion,    // one installed app not on the dock yet
-            AddItem, AddSeparator
+            AddItem, AddSeparator, AddSelf
         };
 
         Kind kind = Kind::Slider;

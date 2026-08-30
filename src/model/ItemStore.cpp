@@ -144,10 +144,14 @@ bool ItemStore::ReadFile(const std::wstring& path) {
         // discards a half-written block, or the block is gone before anything
         // gets to decide what it was - which is what happened when this was
         // written the other way round, and the dividers stayed missing.
-        if (current.path.empty()) {
+        //
+        // Only when nothing else has claimed it, though. The dock's own entry
+        // has no path either, and healing it into a divider turned it into one
+        // on the next save - which is to say it vanished.
+        if (current.path.empty() && current.kind == ItemKind::App) {
             current.kind = ItemKind::Separator;
         }
-        if (current.kind == ItemKind::Separator) {
+        if (current.kind == ItemKind::Separator || current.kind == ItemKind::Settings) {
             if (static_cast<int>(items_.size()) < design::kMaxItems) {
                 items_.push_back(std::move(current));
             }
@@ -212,7 +216,9 @@ bool ItemStore::ReadFile(const std::wstring& path) {
         const std::wstring value = Trim(text.substr(equals + 1));
 
         if (key == L"kind") {
-            current.kind = (value == L"separator") ? ItemKind::Separator : ItemKind::App;
+            current.kind = (value == L"separator")  ? ItemKind::Separator
+                           : (value == L"settings") ? ItemKind::Settings
+                                                    : ItemKind::App;
         } else if (key == L"group") {
             // Read and dropped, so a file written by an older build still loads
             // without warning about a key this one does not know.
@@ -283,6 +289,15 @@ bool ItemStore::Save() const {
             // next time anything rewrote the file, which adding a second one
             // does immediately.
             fwprintf(file, L"kind    = separator\n");
+            fwprintf(file, L"\n");
+            continue;
+        }
+        if (item.kind == ItemKind::Settings) {
+            fwprintf(file, L"kind    = settings\n");
+            fwprintf(file, L"label   = %s\n", item.label.c_str());
+            if (!item.iconPath.empty()) {
+                fwprintf(file, L"icon    = %s\n", item.iconPath.c_str());
+            }
             fwprintf(file, L"\n");
             continue;
         }
@@ -385,6 +400,19 @@ bool ItemStore::Add(DockItem item) {
     items_.push_back(std::move(item));
     Save();
     return true;
+}
+
+bool ItemStore::AddSettings() {
+    for (const DockItem& item : items_) {
+        if (item.kind == ItemKind::Settings) {
+            LogWarn("The dock already has its own entry");
+            return false;
+        }
+    }
+    DockItem item;
+    item.kind = ItemKind::Settings;
+    item.label = L"LiquiDock";
+    return Add(std::move(item));
 }
 
 int ItemStore::Move(size_t index, int direction) {

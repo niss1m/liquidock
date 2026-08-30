@@ -53,6 +53,11 @@ public:
     // dock is already full.
     bool Add(DockItem item);
 
+    // Adds the dock's own entry, which opens its preferences. Refuses a second
+    // one: two of them would be two ways to the same window sitting side by
+    // side, which reads as a bug in the list rather than a choice.
+    bool AddSettings();
+
     // Swaps an item with its neighbour so a move
     // can never shuffle an app across the hairline into the utility run.
     // Returns the item's new index, or -1 if it could not move.

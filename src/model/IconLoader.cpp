@@ -382,7 +382,16 @@ void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT me
         icon.slot = static_cast<int>(index);
         icon.size = size;
 
-        const std::wstring expanded = ItemStore::ExpandPath(items[index].path);
+        // The dock's own entry has no path to ask about, so it falls back to
+        // the running executable - which carries the application icon, and is
+        // the right answer even when nobody has pointed it at a PNG.
+        std::wstring expanded = ItemStore::ExpandPath(items[index].path);
+        if (items[index].kind == ItemKind::Settings && expanded.empty()) {
+            wchar_t self[MAX_PATH]{};
+            if (GetModuleFileNameW(nullptr, self, static_cast<DWORD>(std::size(self))) > 0) {
+                expanded = self;
+            }
+        }
         icon.target = ResolveExecutable(expanded);
 
         // An explicit image wins over whatever the shell would say. If it fails

@@ -10,7 +10,11 @@ namespace liquidock {
 // there was once a second, structural one that the dock drew by itself between
 // a "main" and a "utility" group, and it was removed because a rule nobody
 // could find in the list is a rule nobody can get rid of.
-enum class ItemKind { App, Separator };
+// Settings is the dock's own entry: it launches nothing, because what it
+// opens is already running. Kept as a kind rather than a magic path so that
+// nothing has to parse a string to find out, and so an item pointing at a real
+// file called "liquidock:preferences" cannot be mistaken for it.
+enum class ItemKind { App, Separator, Settings };
 
 // How the target's window should come up. Nexus's Dock Entry Properties offers
 // exactly these three and they are the ones that earn their place: a terminal
