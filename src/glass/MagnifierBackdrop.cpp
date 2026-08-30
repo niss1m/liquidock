@@ -60,18 +60,19 @@ bool MagnifierBackdrop::EnsureHost() {
     wc.lpszClassName = kHostClass;
     RegisterClassExW(&wc); // an existing class is fine
 
-    // Layered and fully transparent, one pixel, parked off the working area.
-    // The magnifier control has to live in a window and that window has to be
-    // shown for it to render, but nothing is ever meant to see it.
+    // On screen, but layered at one part in 255 and click-through, so it is
+    // there without being visible. Parking it off the working area was the
+    // obvious thing and it is why nothing arrived: the magnifier renders when
+    // its window paints, and a window at -32000 never does.
     host_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
                                 WS_EX_NOACTIVATE,
-                            kHostClass, L"", WS_POPUP, -32000, -32000, 1, 1, nullptr, nullptr,
+                            kHostClass, L"", WS_POPUP, 0, 0, 16, 16, nullptr, nullptr,
                             GetModuleHandleW(nullptr), nullptr);
     if (!host_) {
         LogWarn("Magnifier host window failed: {}", GetLastError());
         return false;
     }
-    SetLayeredWindowAttributes(host_, 0, 0, LWA_ALPHA);
+    SetLayeredWindowAttributes(host_, 0, 1, LWA_ALPHA);
     ShowWindow(host_, SW_SHOWNA);
 
     magnifier_ = CreateWindowW(WC_MAGNIFIER, L"", WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, host_,
@@ -82,6 +83,10 @@ bool MagnifierBackdrop::EnsureHost() {
         host_ = nullptr;
         return false;
     }
+
+    // The host has to be in the list as well, or the magnifier reads its own
+    // output back and we are straight back to the feedback loop.
+    excluded_.push_back(host_);
 
     // The whole point. Without this the magnifier reads the desktop including
     // the dock, which is the feedback loop duplication has.
@@ -238,7 +243,9 @@ bool MagnifierBackdrop::Update(HMONITOR monitor) {
     }
 
     // The magnifier renders one to one into a control the size of the source,
-    // so the callback is handed the region at its own resolution.
+    // so the callback is handed the region at its own resolution. The host has
+    // to be at least that big or the control is clipped to nothing.
+    SetWindowPos(host_, HWND_BOTTOM, 0, 0, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
     SetWindowPos(magnifier_, nullptr, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 
     const RECT source{monitorRect_.left + region_.left, monitorRect_.top + region_.top,
@@ -252,6 +259,11 @@ bool MagnifierBackdrop::Update(HMONITOR monitor) {
         failed_ = true;
         return false;
     }
+    // Setting the source marks the control dirty; the render - and with it the
+    // callback - happens when it paints. UpdateWindow makes that happen now
+    // rather than whenever the message loop next gets round to it.
+    InvalidateRect(magnifier_, nullptr, FALSE);
+    UpdateWindow(magnifier_);
     if (!gotPixels_ || pixelWidth_ <= 0 || pixelHeight_ <= 0) {
         return false;
     }
