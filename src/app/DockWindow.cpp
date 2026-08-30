@@ -273,8 +273,8 @@ void DockWindow::Reveal() {
     revealState_ = RevealState::Revealing;
     animating_ = true;
     trigger_.SetEnabled(false);
-    if (capture_) {
-        capture_->SetActive(true);
+    if (live()) {
+        live()->SetActive(true);
     }
     QueryPerformanceCounter(&lastFrameTime_);
 
@@ -468,8 +468,8 @@ float DockWindow::AdvanceReveal(float deltaSeconds) {
             ShowWindow(hwnd_, SW_HIDE);
             trigger_.SetEnabled(true);
             // Nothing behind a hidden dock is worth capturing.
-            if (capture_) {
-                capture_->SetActive(false);
+            if (live()) {
+                live()->SetActive(false);
             }
         }
     }
@@ -824,26 +824,68 @@ bool DockWindow::RecoverDevice() {
     return true;
 }
 
+bool DockWindow::live_ready() const {
+    if (magnifier_) {
+        return magnifier_->srv() != nullptr;
+    }
+    return capture_ && capture_->ready();
+}
+
 Backdrop& DockWindow::ActiveBackdrop() {
+    if (magnifier_ && magnifier_->srv()) {
+        return *magnifier_;
+    }
     if (capture_ && capture_->ready()) {
         return *capture_;
     }
     return wallpaper_;
 }
 
+Backdrop* DockWindow::live() {
+    if (magnifier_) {
+        return magnifier_.get();
+    }
+    return capture_.get();
+}
+
+const Backdrop* DockWindow::live() const {
+    if (magnifier_) {
+        return magnifier_.get();
+    }
+    return capture_.get();
+}
+
 void DockWindow::ApplyBackdropSource() {
-    const bool wantCapture = (settings_.backdrop == BackdropSource::Screen);
-    if (wantCapture == (capture_ != nullptr)) {
+    const bool wantLive = (settings_.backdrop == BackdropSource::Screen);
+    if (wantLive == (live() != nullptr)) {
         return;
     }
 
-    if (!wantCapture) {
+    if (!wantLive) {
+        magnifier_.reset();
         capture_.reset();
         // Put the dock back in the user's screenshots the moment capture stops.
         SetWindowDisplayAffinity(hwnd_, WDA_NONE);
         LogInfo("Backdrop source: wallpaper");
         frostDirty_ = true;
         return;
+    }
+
+    // The magnifier first, because it is the one that does not cost the user
+    // their screenshots. It reads the screen with the dock filtered out by
+    // name, so no display affinity is needed and nothing else loses sight of
+    // the dock. Duplication is the fallback for when it is unavailable.
+    SetWindowDisplayAffinity(hwnd_, WDA_NONE);
+    {
+        auto magnifier = std::make_unique<MagnifierBackdrop>();
+        std::vector<HWND> excluded{hwnd_};
+        if (magnifier->Initialize(*device_, std::move(excluded)) && !magnifier->failed()) {
+            magnifier_ = std::move(magnifier);
+            magnifier_->SetActive(revealState_ != RevealState::Hidden);
+            LogInfo("Backdrop source: live screen, dock still visible to screenshots");
+            frostDirty_ = true;
+            return;
+        }
     }
 
     // The capture thread writes into the device context, so without the
@@ -869,7 +911,8 @@ void DockWindow::ApplyBackdropSource() {
     }
     capture_ = std::move(capture);
     capture_->SetActive(revealState_ != RevealState::Hidden);
-    LogInfo("Backdrop source: live screen capture");
+    LogWarn("Magnifier unavailable; falling back to duplication, which hides the dock from "
+            "screenshots");
     frostDirty_ = true;
 }
 
@@ -1236,11 +1279,11 @@ void DockWindow::Render() {
     RECT windowRect{};
     GetWindowRect(hwnd_, &windowRect);
     MONITORINFO monitorInfo{sizeof(monitorInfo)};
-    if (GetMonitorInfoW(monitor, &monitorInfo) && capture_) {
+    if (GetMonitorInfoW(monitor, &monitorInfo) && live()) {
         const RECT& bounds = monitorInfo.rcMonitor;
         const RECT region{windowRect.left - bounds.left, windowRect.top - bounds.top,
                           windowRect.right - bounds.left, windowRect.bottom - bounds.top};
-        capture_->SetRegion(region);
+        live()->SetRegion(region);
     }
 
     LARGE_INTEGER backdropStart{};
@@ -1249,12 +1292,12 @@ void DockWindow::Render() {
     }
     // The wallpaper is only the stand-in until live capture has a frame. Once
     // it does, asking about the wallpaper at all is pure cost.
-    if (!capture_ || !capture_->ready()) {
+    if (!live_ready()) {
         if (wallpaper_.Update(monitor)) {
             frostDirty_ = true;
         }
     }
-    if (capture_ && capture_->Update(monitor)) {
+    if (live() && live()->Update(monitor)) {
         frostDirty_ = true;
     }
     if (stats_) {
@@ -1267,8 +1310,9 @@ void DockWindow::Render() {
     // A capture that failed outright - no duplication on this adapter - is
     // dropped here rather than retried forever, and the dock carries on with
     // the wallpaper it already has.
-    if (capture_ && capture_->failed()) {
+    if (live() && live()->failed()) {
         LogWarn("Live capture unavailable; falling back to the wallpaper backdrop");
+        magnifier_.reset();
         capture_.reset();
         SetWindowDisplayAffinity(hwnd_, WDA_NONE);
         frostDirty_ = true;

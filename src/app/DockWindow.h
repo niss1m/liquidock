@@ -19,6 +19,7 @@
 #include "gfx/ShaderCache.h"
 #include "gfx/TextLayer.h"
 #include "glass/CaptureBackdrop.h"
+#include "glass/MagnifierBackdrop.h"
 #include "glass/FrostChain.h"
 #include "glass/GlassConstants.h"
 #include "glass/WallpaperBackdrop.h"
@@ -165,6 +166,15 @@ private:
     CompositionTarget target_;
     WallpaperBackdrop wallpaper_;
     std::unique_ptr<CaptureBackdrop> capture_;
+    // The preferred live source: it can leave the dock out of what it reads, so
+    // the dock does not have to hide from everything else to get a backdrop.
+    std::unique_ptr<MagnifierBackdrop> magnifier_;
+    // Whichever of the two is running, or null on the wallpaper.
+    Backdrop* live();
+    const Backdrop* live() const;
+    // True once the live source has a frame worth showing. Only duplication has
+    // a warm-up; the magnifier answers on the first call or not at all.
+    bool live_ready() const;
     FrostChain frost_;
 
     HWND hwnd_ = nullptr;

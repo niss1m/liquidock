@@ -153,11 +153,18 @@ screen has no business holding room.
 
 `backdrop` decides what the glass refracts. `wallpaper` (the default) decodes your desktop
 background once and costs nothing after that — it is exactly right whenever nothing is behind the
-dock, and wrong-looking over a window. `screen` refracts what is actually there, by duplicating the
-strip of desktop the dock covers and ignoring every change that misses it. The catch is not
-performance: the dock has to be excluded from screen capture to stop it refracting its own last
-frame forever, and that same exclusion makes the dock invisible in your own screenshots and screen
-shares. That is why it is not the default.
+dock, and wrong-looking over a window. `screen` refracts what is actually there.
+
+Live mode reads the screen through the Magnification API, which is the one screen reader on Windows
+that takes a list of windows to leave out: it is handed the dock's own window and returns the
+desktop without it. That matters because the obvious way to read the screen — Desktop Duplication —
+hands back the finished desktop with the dock already in it, so the dock would refract its own last
+frame and compound it every frame. The only lever against that is
+`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, which is all or nothing: it hides the window
+from *every* reader, so a live backdrop used to cost you the dock in your own screenshots and screen
+shares. Filtering by name costs nothing of the sort. Duplication is still there as a fallback for
+machines where the magnifier is unavailable, and on those the old trade-off applies — the log says
+which one is running.
 
 `follow-cursor` is **off** by default. On, the row slides sideways as it swells so the icon under
 the pointer stays exactly under it, which is what macOS does — and is also why the whole bar appears
