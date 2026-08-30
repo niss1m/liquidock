@@ -103,6 +103,7 @@ void Settings::Load() {
     followCursor = false;
     separatorImage.clear();
     dividerGap = design::kGroupGap;
+    iconGap = design::kIconGap;
     maxScale = design::magnify::kMaxScale;
     influencePx = design::magnify::kInfluencePx;
     iconSize = design::kDefaultIconSize;
@@ -182,6 +183,8 @@ bool Settings::ReadFile(const std::wstring& path) {
             separatorImage = value;
         } else if (key == L"divider-gap") {
             dividerGap = ParseFloat(value, dividerGap, 0.0f, 120.0f);
+        } else if (key == L"icon-gap") {
+            iconGap = ParseFloat(value, iconGap, 0.0f, 60.0f);
         } else if (key == L"max-scale") {
             maxScale = ParseFloat(value, maxScale, 1.0f, design::kMaxConfigurableScale);
         } else if (key == L"icon-size") {
@@ -241,6 +244,7 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"follow-cursor") return followCursor ? L"on" : L"off";
     if (key == L"separator-image") return separatorImage;
     if (key == L"divider-gap") return number(L"%.0f", dividerGap);
+    if (key == L"icon-gap") return number(L"%.0f", iconGap);
     if (key == L"max-scale") return number(L"%.2f", maxScale);
     if (key == L"influence") return number(L"%.0f", influencePx);
     if (key == L"icon-size") return number(L"%.0f", iconSize);
@@ -315,7 +319,7 @@ bool Settings::Save() const {
     static const wchar_t* const kAllKeys[] = {
         L"refraction", L"depth",        L"dispersion",    L"frost",         L"splay",
         L"light-angle", L"light-intensity", L"tint-alpha", L"inner-shadow", L"rim-opacity", L"backdrop", L"magnification",
-        L"follow-cursor", L"separator-image", L"divider-gap",
+        L"follow-cursor", L"separator-image", L"divider-gap", L"icon-gap",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
         L"label-font-size", L"label-bold",
@@ -447,6 +451,10 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# the dock, like every other measurement in the layout.\n"
              L"divider-gap = %.0f\n"
              L"\n"
+             L"# The space between neighbouring icons. Scales with the dock,\n"
+             L"# like every other measurement in the layout.\n"
+             L"icon-gap = %.0f\n"
+             L"\n"
              L"# The hover label's face, in pixels, and whether it is bold. Nexus asks\n"
              L"# GDI for Segoe UI 12 bold, but light text on a near-black pill blooms,\n"
              L"# so matching those numbers exactly comes out heavier than Nexus looks.\n"
@@ -485,7 +493,7 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              tintAlpha, innerShadow, rimOpacity,
              backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
              magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
-             followCursor ? L"on" : L"off", separatorImage.c_str(), dividerGap, labelFontSize,
+             followCursor ? L"on" : L"off", separatorImage.c_str(), dividerGap, iconGap, labelFontSize,
              labelBold ? L"on" : L"off",
              iconBulge ? L"on" : L"off", monitorText, reserveSpace ? L"on" : L"off",
              autoHide ? L"on" : L"off", hideWhenCovered ? L"on" : L"off", dwellSeconds,

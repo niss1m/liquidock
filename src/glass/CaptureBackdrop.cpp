@@ -158,6 +158,14 @@ void CaptureBackdrop::SetRegion(const RECT& region) {
         return;
     }
     ComputeUvTransform();
+
+    // Two things get the new region filled promptly. The first copy to arrive
+    // is taken whatever it contains, rather than only when the change happens
+    // to land inside the dock; and the duplication is rebuilt, because a fresh
+    // one hands over the whole desktop on its first frame instead of waiting
+    // for something to move.
+    regionMoved_ = true;
+    duplicationStale_ = true;
 }
 
 bool CaptureBackdrop::EnsureRegionTexture(int width, int height) {
@@ -464,9 +472,15 @@ void CaptureBackdrop::Run() {
                                static_cast<double>(now.QuadPart - lastFrameTick_.QuadPart) /
                                static_cast<double>(tickFrequency_.QuadPart);
 
-        if (info.LastPresentTime.QuadPart == 0) {
+        // A pointer-only frame carries no desktop change, but it does carry a
+        // perfectly good desktop *image* - which is exactly what a region that
+        // has just moved needs, and it needs it more than it needs the frame to
+        // be interesting.
+        const bool moved = regionMoved_.load(std::memory_order_relaxed);
+
+        if (info.LastPresentTime.QuadPart == 0 && !moved) {
             pointerOnly_.fetch_add(1, std::memory_order_relaxed);
-        } else if (sinceMs < kMinFrameIntervalMs) {
+        } else if (sinceMs < kMinFrameIntervalMs && !moved) {
             // Too soon. Dropped rather than queued: the next frame carries the
             // accumulated change anyway, so nothing is lost by skipping this one.
             throttled_.fetch_add(1, std::memory_order_relaxed);
@@ -481,7 +495,8 @@ void CaptureBackdrop::Run() {
             }
 
             ComPtr<ID3D11Texture2D> desktop;
-            if (target && SUCCEEDED(resource.As(&desktop)) && TouchesRegion(info, region)) {
+            if (target && SUCCEEDED(resource.As(&desktop)) &&
+                (moved || TouchesRegion(info, region))) {
                 const D3D11_BOX box{
                     static_cast<UINT>(region.left),  static_cast<UINT>(region.top),    0,
                     static_cast<UINT>(region.right), static_cast<UINT>(region.bottom), 1,
@@ -500,6 +515,7 @@ void CaptureBackdrop::Run() {
 
                     hasFrame_ = true;
                     frameReady_ = true;
+                    regionMoved_ = false;
                     copied_.fetch_add(1, std::memory_order_relaxed);
                     if (notify_) {
                         PostMessageW(notify_, message_, 0, 0);

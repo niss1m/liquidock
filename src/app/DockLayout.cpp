@@ -45,7 +45,7 @@ float BounceOffset(float time) {
 // crease in it.
 float DockLayout::GapPx(Element::Gap gap) const {
     switch (gap) {
-        case Element::Gap::Icon: return kIconGap;
+        case Element::Gap::Icon: return iconGap_;
         case Element::Gap::Divider: return dividerGap_;
         default: return 0.0f;
     }

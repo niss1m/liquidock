@@ -28,6 +28,9 @@ constexpr UINT kAnimIntervalMs = 16;
 constexpr UINT kSaveDelayMs = 400;
 // Posted by the icon loader thread as the list's icons come in.
 constexpr UINT kIconsMessage = WM_APP + 1;
+// Posted when the installed-app list has been read, and as its icons arrive.
+constexpr UINT kCatalogMessage = WM_APP + 2;
+constexpr UINT kSuggestionIconsMessage = WM_APP + 3;
 
 namespace layout {
 constexpr float kWidth = 900.0f;
@@ -124,6 +127,16 @@ constexpr int kMaxColumns = 2;
 // nothing unusual and would otherwise produce a panel taller than the screen -
 // the list scrolls, which is the whole reason it has a scroll offset.
 constexpr float kListMaxHeight = 620.0f;
+
+// The grids. A row of names one per line spent the whole window on twenty
+// items and told you nothing a picture would not have; this is what the dock
+// itself looks like, at a size you can pick a target out of, with the name and
+// the path on the tooltip where they cost nothing until wanted.
+constexpr float kTile = 58.0f;      // one cell, icon and its air
+constexpr float kTileIcon = 40.0f;
+constexpr float kTileGap = 6.0f;
+constexpr float kGridGap = 18.0f;   // between the dock's grid and the divider
+constexpr float kGridRuleGap = 14.0f;
 // The fixed row of add buttons above the list, and how wide each one is.
 constexpr float kActionRow = 56.0f;
 constexpr float kActionWidth = 124.0f;
@@ -232,7 +245,10 @@ void SettingsWindow::Destroy() {
     // handle is at best wasted and at worst a message delivered to whatever is
     // handed that handle value next.
     iconLoader_.Stop();
+    suggestionLoader_.Stop();
+    catalog_.Stop();
     itemIcons_.clear();
+    suggestionIcons_.clear();
     if (hwnd_) {
         KillTimer(hwnd_, kSaveTimer);
         DestroyWindow(hwnd_);
@@ -316,6 +332,14 @@ void SettingsWindow::BuildRows() {
         row.column = 0;
         rows_.push_back(std::move(row));
     }
+    for (size_t i = 0; i < suggestions_.size(); ++i) {
+        Row row;
+        row.kind = Row::Kind::Suggestion;
+        row.tab = Tab::Items;
+        row.itemIndex = static_cast<int>(i);
+        row.column = 0;
+        rows_.push_back(std::move(row));
+    }
     Row add;
     add.kind = Row::Kind::AddItem;
     add.tab = Tab::Items;
@@ -368,6 +392,8 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Dock, L"Reach", L"How far the swell carries", &settings_.influencePx, 40.0f, 320.0f,
            0, 0, L" px");
 
+    slider(Tab::Dock, L"Icon spacing", L"The space between neighbouring icons",
+           &settings_.iconGap, 0.0f, 60.0f, 0, 0, L" px");
     slider(Tab::Dock, L"Divider spacing", L"The air on each side of a divider",
            &settings_.dividerGap, 0.0f, 120.0f, 0, 0, L" px");
 
@@ -430,16 +456,30 @@ float SettingsWindow::MeasureTab(Tab tab) const {
         if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
             continue;
         }
+        if (tab == Tab::Items &&
+            (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion)) {
+            continue; // counted as grids, below
+        }
         const int column = std::clamp(row.column, 0, columns - 1);
         if (row.kind == Row::Kind::Section) {
             y[column] += layout::kSectionHeight;
-        } else if (row.kind == Row::Kind::Item) {
-            y[column] += layout::kItemHeight;
-            if (row.itemIndex == expandedItem_) {
-                y[column] += layout::kEditorHeight;
-            }
         } else {
             y[column] += layout::kRowHeight;
+        }
+    }
+    if (tab == Tab::Items) {
+        const int perLine = GridColumns();
+        const float line = layout::kTile + layout::kTileGap;
+        const auto lines = [perLine](size_t count) {
+            return static_cast<float>((count + perLine - 1) / perLine);
+        };
+        y[0] += lines(items_.items().size()) * line;
+        if (expandedItem_ >= 0) {
+            y[0] += layout::kEditorHeight + 8.0f;
+        }
+        y[0] += layout::kGridGap;
+        if (!suggestions_.empty()) {
+            y[0] += layout::kGridRuleGap + lines(suggestions_.size()) * line;
         }
     }
     float tallest = *std::max_element(y, y + columns);
@@ -479,6 +519,9 @@ void SettingsWindow::LayoutRows() {
             row.control = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
             actionX += layout::kActionWidth + 10.0f;
             continue;
+        }
+        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion) {
+            continue; // both grids are placed together, below
         }
 
         const int column = std::clamp(row.column, 0, columns - 1);
@@ -531,6 +574,13 @@ void SettingsWindow::LayoutRows() {
             }
         }
         y[column] += height;
+    }
+
+    if (listTab) {
+        // Both grids in one pass: the second has to start where the first ends,
+        // and neither knows how many lines the other took.
+        const float width = layout::kWidth - 2.0f * layout::kPadding;
+        y[0] = LayoutGrids(listTop, width) + itemScroll_;
     }
 
     // Sized to the page being shown, and the window keeps its top-left corner
@@ -592,6 +642,10 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
     if (WindowButtonAt(x, y) >= 0 || TabAt(x, y) >= 0) {
         return IDC_HAND;
     }
+    if (activeTab_ == Tab::Items && expandedItem_ >= 0 && x >= editorPanel_.left &&
+        x <= editorPanel_.right && y >= editorPanel_.top && y <= editorPanel_.bottom) {
+        return EditorCursorFor(x, y);
+    }
     const int index = RowAt(x, y);
     if (index < 0) {
         return IDC_ARROW;
@@ -611,42 +665,86 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
             return inControl ? IDC_HAND : IDC_ARROW;
         case Row::Kind::AddItem:
         case Row::Kind::AddSeparator:
+        case Row::Kind::Suggestion:
             return IDC_HAND;
-        case Row::Kind::Item: {
-            if (inControl && y >= row.control.top && y <= row.control.bottom) {
-                return IDC_HAND; // move up, move down, remove
-            }
-            if (row.itemIndex == expandedItem_ && y > row.bounds.top + layout::kItemHeight) {
-                D2D1_RECT_F fields[static_cast<int>(Field::Count)];
-                D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
-                EditorRects(row, fields, buttons);
-                for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
-                    const D2D1_RECT_F& button = buttons[i];
-                    if (button.right > button.left && x >= button.left && x <= button.right &&
-                        y >= button.top && y <= button.bottom) {
-                        return IDC_HAND;
-                    }
-                    const D2D1_RECT_F& field = fields[i];
-                    if (x >= field.left && x <= field.right && y >= field.top &&
-                        y <= field.bottom) {
-                        if (i == static_cast<int>(Field::Show) ||
-                            i == static_cast<int>(Field::Admin)) {
-                            return IDC_HAND;
-                        }
-                        if (i == static_cast<int>(Field::Path) ||
-                            i == static_cast<int>(Field::Icon)) {
-                            return IDC_ARROW; // read-only; the button beside it changes them
-                        }
-                        return IDC_IBEAM;
-                    }
-                }
-                return IDC_ARROW;
-            }
-            return IDC_HAND; // the row opens, and drags to reorder
-        }
+        case Row::Kind::Item:
+            return IDC_HAND; // opens the editor, or drags to reorder
         default:
             return IDC_ARROW;
     }
+}
+
+const wchar_t* SettingsWindow::EditorCursorFor(float x, float y) const {
+    D2D1_RECT_F fields[static_cast<int>(Field::Count)];
+    D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
+    EditorRects(editorPanel_, fields, buttons);
+    for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
+        const D2D1_RECT_F& button = buttons[i];
+        if (button.right > button.left && x >= button.left && x <= button.right &&
+            y >= button.top && y <= button.bottom) {
+            return IDC_HAND;
+        }
+        const D2D1_RECT_F& field = fields[i];
+        if (x >= field.left && x <= field.right && y >= field.top && y <= field.bottom) {
+            if (i == static_cast<int>(Field::Show) || i == static_cast<int>(Field::Admin)) {
+                return IDC_HAND;
+            }
+            if (i == static_cast<int>(Field::Path) || i == static_cast<int>(Field::Icon)) {
+                return IDC_ARROW; // read-only; the button beside it changes them
+            }
+            return IDC_IBEAM;
+        }
+    }
+    return IDC_ARROW;
+}
+
+int SettingsWindow::GridColumns() const {
+    const float width = layout::kWidth - 2.0f * layout::kPadding;
+    return std::max(1, static_cast<int>((width + layout::kTileGap) /
+                                        (layout::kTile + layout::kTileGap)));
+}
+
+float SettingsWindow::LayoutGrids(float top, float width) {
+    const int columns = GridColumns();
+    const float used = columns * layout::kTile + (columns - 1) * layout::kTileGap;
+    const float left = layout::kPadding + (width - used) * 0.5f;
+
+    auto place = [&](Row::Kind kind, float startY) {
+        int index = 0;
+        for (Row& row : rows_) {
+            if (row.tab != Tab::Items || row.kind != kind) {
+                continue;
+            }
+            const int column = index % columns;
+            const int line = index / columns;
+            const float x = left + column * (layout::kTile + layout::kTileGap);
+            const float y = startY + line * (layout::kTile + layout::kTileGap) - itemScroll_;
+            row.bounds = D2D1::RectF(x, y, x + layout::kTile, y + layout::kTile);
+            row.control = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+            ++index;
+        }
+        const int lines = (index + columns - 1) / columns;
+        return startY + lines * (layout::kTile + layout::kTileGap);
+    };
+
+    float y = place(Row::Kind::Item, top);
+
+    editorPanel_ = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+    if (expandedItem_ >= 0) {
+        // Under the grid rather than inside it: a cell is fifty-eight pixels
+        // and the editor is five rows of fields.
+        const float panelTop = y + 8.0f;
+        editorPanel_ = D2D1::RectF(layout::kPadding, panelTop - itemScroll_,
+                                   layout::kWidth - layout::kPadding,
+                                   panelTop + layout::kEditorHeight - itemScroll_);
+        y = panelTop + layout::kEditorHeight;
+    }
+
+    gridRuleY_ = y + layout::kGridGap - itemScroll_;
+    if (!suggestions_.empty()) {
+        y = place(Row::Kind::Suggestion, y + layout::kGridGap + layout::kGridRuleGap);
+    }
+    return y;
 }
 
 int SettingsWindow::TabAt(float x, float y) const {
@@ -776,6 +874,7 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     // After the device resources, because turning the pixels into D2D bitmaps
     // needs the context that CreateDeviceResources builds.
     StartIconLoad();
+    StartCatalogLoad();
 
     visible_ = true;
     // SW_SHOW on a minimised window leaves it minimised; RESTORE is what brings
@@ -827,7 +926,7 @@ int SettingsWindow::RowAt(float x, float y) const {
         if (row.tab != activeTab_ || row.kind == Row::Kind::Section) {
             continue;
         }
-        if (row.kind == Row::Kind::Item) {
+        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion) {
             // Scrolled out of sight is not clickable, however much the row's
             // rectangle still says it is there.
             if (y < itemsClip_.top || y > itemsClip_.bottom) {
@@ -973,20 +1072,24 @@ void SettingsWindow::CommitItems() {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-int SettingsWindow::DropIndexAt(float y) const {
-    // Where an insertion at `y` would land: the first row whose midpoint is
-    // below the pointer. Measured against the rows as drawn, so it follows the
-    // scroll without having to know about it.
+int SettingsWindow::DropIndexAt(float x, float y) const {
+    // Where an insertion at the pointer would land. A grid reads in two axes:
+    // the line comes from y, the position within it from x, and a pointer past
+    // the end of a line lands after its last tile rather than snapping back to
+    // the start of the next one. Measured against the tiles as drawn, so it
+    // follows the scroll without having to know about it.
     int index = 0;
     for (const Row& row : rows_) {
         if (row.tab != Tab::Items || row.kind != Row::Kind::Item) {
             continue;
         }
-        const float mid = row.bounds.top + layout::kItemHeight * 0.5f;
-        if (y < mid) {
+        index = row.itemIndex + 1;
+        if (y > row.bounds.bottom) {
+            continue; // a line above the pointer
+        }
+        if (y < row.bounds.top || x < (row.bounds.left + row.bounds.right) * 0.5f) {
             return row.itemIndex;
         }
-        index = row.itemIndex + 1;
     }
     return index;
 }
@@ -1033,13 +1136,14 @@ void SettingsWindow::CommitEdit() {
     caret_ = 0;
 }
 
-bool SettingsWindow::HandleEditorClick(const Row& row, float x, float y) {
+bool SettingsWindow::HandleEditorClick(const D2D1_RECT_F& panel, int itemIndex, float x,
+                                      float y) {
     D2D1_RECT_F fields[static_cast<int>(Field::Count)];
     D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
-    EditorRects(row, fields, buttons);
+    EditorRects(panel, fields, buttons);
 
-    const size_t index = static_cast<size_t>(row.itemIndex);
-    if (index >= items_.items().size()) {
+    const size_t index = static_cast<size_t>(itemIndex);
+    if (itemIndex < 0 || index >= items_.items().size()) {
         return false;
     }
 
@@ -1101,11 +1205,42 @@ bool SettingsWindow::HandleEditorClick(const Row& row, float x, float y) {
             if (i == static_cast<int>(Field::Path) || i == static_cast<int>(Field::Icon)) {
                 return false; // read-only: use the button beside it
             }
-            BeginEdit(row.itemIndex, static_cast<Field>(i));
+            BeginEdit(itemIndex, static_cast<Field>(i));
             return true;
         }
     }
     return false;
+}
+
+void SettingsWindow::StartCatalogLoad() {
+    if (!hwnd_) {
+        return;
+    }
+    catalog_.Start(hwnd_, kCatalogMessage);
+}
+
+void SettingsWindow::DrainSuggestionIcons() {
+    std::vector<IconBitmap> loaded;
+    suggestionLoader_.Collect(loaded);
+    if (!d2d_) {
+        return;
+    }
+    for (const IconBitmap& icon : loaded) {
+        if (icon.slot < 0 || static_cast<size_t>(icon.slot) >= suggestionIcons_.size() ||
+            icon.pixels.empty()) {
+            continue;
+        }
+        const D2D1_BITMAP_PROPERTIES properties = D2D1::BitmapProperties(
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+        ComPtr<ID2D1Bitmap> bitmap;
+        const D2D1_SIZE_U size =
+            D2D1::SizeU(static_cast<UINT32>(icon.size), static_cast<UINT32>(icon.size));
+        if (SUCCEEDED(d2d_->CreateBitmap(size, icon.pixels.data(),
+                                         static_cast<UINT32>(icon.size) * 4, properties,
+                                         &bitmap))) {
+            suggestionIcons_[static_cast<size_t>(icon.slot)] = std::move(bitmap);
+        }
+    }
 }
 
 void SettingsWindow::StartIconLoad() {
@@ -1217,9 +1352,12 @@ bool SettingsWindow::AdvanceAnimation() {
         dwelled = static_cast<float>(now.QuadPart - hoverSince_.QuadPart) /
                   static_cast<float>(frequency_.QuadPart);
     }
-    const bool wantsTooltip =
+    const bool speaks =
         hoverRow_ >= 0 && static_cast<size_t>(hoverRow_) < rows_.size() &&
-        rows_[static_cast<size_t>(hoverRow_)].hint != nullptr && dwelled >= layout::kTooltipDelay;
+        (rows_[static_cast<size_t>(hoverRow_)].hint != nullptr ||
+         rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::Item ||
+         rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::Suggestion);
+    const bool wantsTooltip = speaks && dwelled >= layout::kTooltipDelay;
     const float before = tooltipAlpha_;
     approach(tooltipAlpha_, wantsTooltip ? 1.0f : 0.0f, layout::kTooltipFade);
     if (tooltipAlpha_ != before) {
@@ -1409,12 +1547,25 @@ void SettingsWindow::DrawTooltip() {
         static_cast<size_t>(hoverRow_) >= rows_.size()) {
         return;
     }
-    const wchar_t* hint = rows_[static_cast<size_t>(hoverRow_)].hint;
-    if (!hint) {
+    const Row& hovered = rows_[static_cast<size_t>(hoverRow_)];
+    std::wstring text;
+    if (hovered.kind == Row::Kind::Item) {
+        const auto& items = items_.items();
+        const size_t index = static_cast<size_t>(hovered.itemIndex);
+        if (index >= items.size()) {
+            return;
+        }
+        text = (items[index].kind == ItemKind::Separator)
+                   ? std::wstring(L"Divider — drag it where you want the break")
+                   : items[index].label + L"   ·   " + items[index].path;
+    } else if (hovered.kind == Row::Kind::Suggestion) {
+        text = SuggestionLabel(hovered.itemIndex) + L"   ·   click to add";
+    } else if (hovered.hint) {
+        text = hovered.hint;
+    }
+    if (text.empty()) {
         return;
     }
-
-    const std::wstring text = hint;
     const float width = MeasureText(tipFormat_.Get(), text) + 2.0f * layout::kTooltipPadX;
     const float panelWidth = layout::kWidth;
     const float panelHeight = static_cast<float>(height_) / (static_cast<float>(dpi_) / 96.0f);
@@ -1533,6 +1684,97 @@ void SettingsWindow::DrawTabs() {
     }
 }
 
+const std::wstring& SettingsWindow::SuggestionLabel(int index) const {
+    static const std::wstring empty;
+    if (index < 0 || static_cast<size_t>(index) >= suggestions_.size()) {
+        return empty;
+    }
+    return suggestions_[static_cast<size_t>(index)].label;
+}
+
+void SettingsWindow::DrawTile(const Row& row, bool hovered) {
+    const bool suggestion = (row.kind == Row::Kind::Suggestion);
+    const size_t index = static_cast<size_t>(row.itemIndex);
+    const auto& items = items_.items();
+    if (!suggestion && index >= items.size()) {
+        return;
+    }
+
+    const bool dragged = draggingItem_ && !suggestion && row.itemIndex == pressItem_;
+    const bool open = !suggestion && row.itemIndex == expandedItem_;
+    if (hovered || dragged || open) {
+        brush_->SetColor(Grey(1.0f, dragged ? 0.05f : (hovered ? 0.12f : 0.08f)));
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(row.bounds, 10.0f, 10.0f), brush_.Get());
+    }
+    if (open) {
+        // The one the panel below is talking about. Outlined rather than filled,
+        // so a hover passing over it still reads as the hover.
+        brush_->SetColor(kOn);
+        d2d_->DrawRoundedRectangle(D2D1::RoundedRect(row.bounds, 10.0f, 10.0f), brush_.Get(),
+                                   1.4f);
+    }
+
+    const float cx = (row.bounds.left + row.bounds.right) * 0.5f;
+    const float cy = (row.bounds.top + row.bounds.bottom) * 0.5f;
+    const D2D1_RECT_F box =
+        D2D1::RectF(cx - layout::kTileIcon * 0.5f, cy - layout::kTileIcon * 0.5f,
+                    cx + layout::kTileIcon * 0.5f, cy + layout::kTileIcon * 0.5f);
+
+    if (!suggestion && items[index].kind == ItemKind::Separator) {
+        // A divider has no icon, so it is drawn as what it is: the rule itself,
+        // standing in the middle of the cell it occupies in the row.
+        brush_->SetColor(Grey(1.0f, 0.45f));
+        d2d_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(cx - 1.0f, box.top + 4.0f, cx + 1.0f, box.bottom - 4.0f),
+                              1.0f, 1.0f),
+            brush_.Get());
+        DrawTileBadge(row, hovered, false);
+        return;
+    }
+
+    const auto& icons = suggestion ? suggestionIcons_ : itemIcons_;
+    ID2D1Bitmap* icon = (index < icons.size()) ? icons[index].Get() : nullptr;
+    if (icon) {
+        // Suggestions are dimmed until pointed at: they are not on the dock, and
+        // a grid where everything looks equally present does not say which half
+        // is which.
+        const float opacity = suggestion && !hovered ? 0.55f : 1.0f;
+        d2d_->DrawBitmap(icon, box, opacity, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    } else {
+        brush_->SetColor(Grey(1.0f, 0.07f));
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, 8.0f, 8.0f), brush_.Get());
+    }
+
+    DrawTileBadge(row, hovered, suggestion);
+}
+
+void SettingsWindow::DrawTileBadge(const Row& row, bool hovered, bool suggestion) {
+    if (hovered) {
+        // A plus on a suggestion, a cross on something already docked: the same
+        // corner, and the same click, reading as the opposite operations they
+        // are. Only on hover, because a grid of forty icons each wearing a
+        // permanent badge is a grid you cannot read.
+        const float r = 6.0f;
+        const float px = row.bounds.right - 11.0f;
+        const float py = row.bounds.top + 11.0f;
+        brush_->SetColor(suggestion ? kOn : D2D1::ColorF(0.85f, 0.24f, 0.24f, 0.95f));
+        d2d_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(px, py), 8.5f, 8.5f), brush_.Get());
+        brush_->SetColor(Grey(1.0f, 1.0f));
+        if (suggestion) {
+            d2d_->DrawLine(D2D1::Point2F(px - r + 2.0f, py), D2D1::Point2F(px + r - 2.0f, py),
+                           brush_.Get(), 1.6f);
+            d2d_->DrawLine(D2D1::Point2F(px, py - r + 2.0f), D2D1::Point2F(px, py + r - 2.0f),
+                           brush_.Get(), 1.6f);
+        } else {
+            const float d = r - 2.5f;
+            d2d_->DrawLine(D2D1::Point2F(px - d, py - d), D2D1::Point2F(px + d, py + d),
+                           brush_.Get(), 1.6f);
+            d2d_->DrawLine(D2D1::Point2F(px + d, py - d), D2D1::Point2F(px - d, py + d),
+                           brush_.Get(), 1.6f);
+        }
+    }
+}
+
 void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
     const auto& items = items_.items();
 
@@ -1614,10 +1856,6 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
 
-    if (expanded) {
-        DrawEditor(row);
-    }
-
     // Only shown on hover: three sets of buttons against every row is noise, and
     // the row you are pointing at is the only one you can act on anyway.
     if (!hovered || draggingItem_) {
@@ -1643,11 +1881,11 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
     }
 }
 
-void SettingsWindow::EditorRects(const Row& row, D2D1_RECT_F* fields,
+void SettingsWindow::EditorRects(const D2D1_RECT_F& panel, D2D1_RECT_F* fields,
                                  D2D1_RECT_F* buttons) const {
-    const float left = row.bounds.left + layout::kItemIcon + 12.0f;
-    const float right = row.bounds.right - 8.0f;
-    float y = row.bounds.top + layout::kItemHeight + 8.0f;
+    const float left = panel.left + 14.0f;
+    const float right = panel.right - 14.0f;
+    float y = panel.top + 8.0f;
     for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
         const bool hasButton = (i == static_cast<int>(Field::Path) ||
                                 i == static_cast<int>(Field::Icon) ||
@@ -1662,12 +1900,14 @@ void SettingsWindow::EditorRects(const Row& row, D2D1_RECT_F* fields,
     }
 }
 
-void SettingsWindow::DrawEditor(const Row& row) {
+void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
     const auto& items = items_.items();
-    const size_t index = static_cast<size_t>(row.itemIndex);
-    if (index >= items.size()) {
+    const size_t index = static_cast<size_t>(itemIndex);
+    if (itemIndex < 0 || index >= items.size()) {
         return;
     }
+    brush_->SetColor(Grey(1.0f, 0.05f));
+    d2d_->FillRoundedRectangle(D2D1::RoundedRect(panel, 10.0f, 10.0f), brush_.Get());
     const DockItem& item = items[index];
 
     static const wchar_t* const kNames[] = {L"Name",  L"Opens", L"Arguments", L"Start in",
@@ -1683,9 +1923,9 @@ void SettingsWindow::DrawEditor(const Row& row) {
 
     D2D1_RECT_F fields[static_cast<int>(Field::Count)];
     D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
-    EditorRects(row, fields, buttons);
+    EditorRects(panel, fields, buttons);
 
-    const float labelLeft = row.bounds.left + layout::kItemIcon + 12.0f;
+    const float labelLeft = panel.left + 14.0f;
     for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
         const D2D1_RECT_F& field = fields[i];
         DrawText(kNames[i], hintFormat_.Get(),
@@ -1693,7 +1933,7 @@ void SettingsWindow::DrawEditor(const Row& row) {
                              field.bottom),
                  kHint);
 
-        const bool editing = (editItem_ == row.itemIndex && static_cast<int>(editField_) == i);
+        const bool editing = (editItem_ == itemIndex && static_cast<int>(editField_) == i);
         const bool typable = (i == static_cast<int>(Field::Name) ||
                               i == static_cast<int>(Field::Arguments) ||
                               i == static_cast<int>(Field::WorkingDir));
@@ -1779,10 +2019,15 @@ void SettingsWindow::DrawDetailBar() {
                     detail += L"   · in " + item.workingDirectory;
                 }
             }
+        } else if (row.kind == Row::Kind::Suggestion) {
+            detail = SuggestionLabel(row.itemIndex);
+            if (!detail.empty()) {
+                detail += L"   ·   " + suggestions_[static_cast<size_t>(row.itemIndex)].path;
+            }
         }
     }
     if (detail.empty()) {
-        detail = L"Drag a row to reorder it · click it to edit";
+        detail = L"Drag an icon to reorder it  ·  click it to edit  ·  click one below the line to add it";
     }
     DrawText(detail, hintFormat_.Get(),
              D2D1::RectF(layout::kPadding, top + 7.0f, layout::kWidth - layout::kPadding,
@@ -1854,7 +2099,8 @@ void SettingsWindow::Render() {
 
         // The items list scrolls, so it is drawn inside a clip that stops it
         // spilling out of the bottom of the panel.
-        const bool wantsClip = (row.kind == Row::Kind::Item);
+        const bool wantsClip =
+            (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion);
         if (wantsClip != clipped) {
             if (wantsClip) {
                 d2d_->PushAxisAlignedClip(itemsClip_, D2D1_ANTIALIAS_MODE_ALIASED);
@@ -1864,8 +2110,14 @@ void SettingsWindow::Render() {
             clipped = wantsClip;
         }
 
-        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem ||
-            row.kind == Row::Kind::AddSeparator) {
+        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion) {
+            DrawTile(row, hovered);
+            continue;
+        }
+        if (row.kind == Row::Kind::Section && row.tab == Tab::Items) {
+            continue;
+        }
+        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
             DrawItem(row, hovered, pointerX_);
             continue;
         }
@@ -1916,24 +2168,45 @@ void SettingsWindow::Render() {
     }
 
     if (activeTab_ == Tab::Items) {
+        // The rule between what is on the dock and what could be.
+        if (!suggestions_.empty() && gridRuleY_ > itemsClip_.top &&
+            gridRuleY_ < itemsClip_.bottom) {
+            brush_->SetColor(Grey(1.0f, 0.10f));
+            d2d_->FillRectangle(D2D1::RectF(layout::kPadding, gridRuleY_,
+                                            layout::kWidth - layout::kPadding, gridRuleY_ + 1.0f),
+                                brush_.Get());
+            DrawText(L"Installed, not on the dock — click to add", hintFormat_.Get(),
+                     D2D1::RectF(layout::kPadding, gridRuleY_ + 5.0f,
+                                 layout::kWidth - layout::kPadding, gridRuleY_ + 24.0f),
+                     kHint);
+        }
+        if (editorPanel_.bottom > editorPanel_.top) {
+            DrawEditor(editorPanel_, expandedItem_);
+        }
         if (draggingItem_ && dropIndex_ >= 0) {
             // Where it would land. Drawn after the rows so it is not clipped
             // away by the one it happens to be sitting on.
-            float y = itemsClip_.bottom;
+            D2D1_RECT_F marker{};
+            bool found = false;
             for (const Row& row : rows_) {
-                if (row.tab == Tab::Items && row.kind == Row::Kind::Item &&
-                    row.itemIndex == dropIndex_) {
-                    y = row.bounds.top;
+                if (row.tab != Tab::Items || row.kind != Row::Kind::Item) {
+                    continue;
+                }
+                if (row.itemIndex == dropIndex_) {
+                    marker = D2D1::RectF(row.bounds.left - 4.0f, row.bounds.top,
+                                         row.bounds.left - 2.0f, row.bounds.bottom);
+                    found = true;
                     break;
                 }
+                // Dropping past the end puts the bar after the last tile.
+                marker = D2D1::RectF(row.bounds.right + 2.0f, row.bounds.top,
+                                     row.bounds.right + 4.0f, row.bounds.bottom);
+                found = true;
             }
-            y = std::clamp(y, itemsClip_.top, itemsClip_.bottom);
-            brush_->SetColor(kOn);
-            d2d_->FillRoundedRectangle(
-                D2D1::RoundedRect(D2D1::RectF(layout::kPadding, y - 1.0f,
-                                              layout::kWidth - layout::kPadding, y + 1.0f),
-                                  1.0f, 1.0f),
-                brush_.Get());
+            if (found && marker.bottom > itemsClip_.top && marker.top < itemsClip_.bottom) {
+                brush_->SetColor(kOn);
+                d2d_->FillRoundedRectangle(D2D1::RoundedRect(marker, 1.0f, 1.0f), brush_.Get());
+            }
         }
         DrawDetailBar();
     }
@@ -2042,11 +2315,12 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             if (pressItem_ >= 0) {
                 // Four pixels of slop, so a click with a shaky hand is still a
                 // click. Past that it is a drag and stays one.
-                if (!draggingItem_ && std::fabs(pointerY_ - pressY_) > 4.0f) {
+                if (!draggingItem_ && (std::fabs(pointerY_ - pressY_) > 4.0f ||
+                                       std::fabs(pointerX_ - pressX_) > 4.0f)) {
                     draggingItem_ = true;
                 }
                 if (draggingItem_) {
-                    dropIndex_ = DropIndexAt(pointerY_);
+                    dropIndex_ = DropIndexAt(pointerX_, pointerY_);
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 return 0;
@@ -2111,27 +2385,47 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     HandleItemClick(row, x);
                     return 0;
                 }
+                if (expandedItem_ >= 0 && x >= editorPanel_.left && x <= editorPanel_.right &&
+                    y >= editorPanel_.top && y <= editorPanel_.bottom) {
+                    if (HandleEditorClick(editorPanel_, expandedItem_, x, y)) {
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                    }
+                    return 0;
+                }
+                if (kind == Row::Kind::Suggestion) {
+                    const Row tile = rows_[static_cast<size_t>(row)];
+                    if (tile.itemIndex >= 0 &&
+                        static_cast<size_t>(tile.itemIndex) < suggestions_.size()) {
+                        const CatalogEntry& entry =
+                            suggestions_[static_cast<size_t>(tile.itemIndex)];
+                        DockItem item;
+                        item.path = entry.path;
+                        item.label = entry.label;
+                        if (items_.Add(std::move(item))) {
+                            suggestions_.erase(suggestions_.begin() + tile.itemIndex);
+                            suggestionIcons_.erase(suggestionIcons_.begin() + tile.itemIndex);
+                            CommitItems();
+                        }
+                    }
+                    return 0;
+                }
                 if (kind == Row::Kind::Item) {
                     const Row& item = rows_[static_cast<size_t>(row)];
-                    // The buttons first: they sit on the row and are not a drag
-                    // handle.
-                    if (x >= item.control.left && x <= item.control.right &&
-                        y >= item.control.top && y <= item.control.bottom) {
-                        HandleItemClick(row, x);
-                        return 0;
-                    }
-                    if (item.itemIndex == expandedItem_ &&
-                        y > item.bounds.top + layout::kItemHeight) {
-                        if (HandleEditorClick(item, x, y)) {
-                            InvalidateRect(hwnd, nullptr, FALSE);
+                    // The corner cross removes it. Everything else on the tile
+                    // is either a click that opens the editor or the start of a
+                    // drag; which one is decided on the way up.
+                    if (x >= item.bounds.right - 22.0f && y <= item.bounds.top + 22.0f) {
+                        CommitEdit();
+                        if (items_.Remove(static_cast<size_t>(item.itemIndex))) {
+                            expandedItem_ = -1;
+                            CommitItems();
                         }
                         return 0;
                     }
-                    // Otherwise this is either a click that opens the editor or
-                    // the start of a drag; which one is decided on the way up.
                     CommitEdit();
                     pressItem_ = item.itemIndex;
                     pressY_ = y;
+                    pressX_ = x;
                     draggingItem_ = false;
                     dropIndex_ = -1;
                     SetCapture(hwnd);
@@ -2321,6 +2615,48 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
         case kIconsMessage:
             DrainIcons();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+
+        case kCatalogMessage: {
+            // Everything installed, less whatever is already docked. Matched on
+            // the launch string rather than the name, because two entries can
+            // share a name and only one of them is the thing on the dock.
+            const std::vector<CatalogEntry> all = catalog_.Take();
+            suggestions_.clear();
+            for (const CatalogEntry& entry : all) {
+                bool docked = false;
+                for (const DockItem& item : items_.items()) {
+                    if (_wcsicmp(item.path.c_str(), entry.path.c_str()) == 0) {
+                        docked = true;
+                        break;
+                    }
+                }
+                if (!docked) {
+                    suggestions_.push_back(entry);
+                }
+            }
+            suggestionIcons_.assign(suggestions_.size(), nullptr);
+
+            std::vector<DockItem> wanted;
+            wanted.reserve(suggestions_.size());
+            for (const CatalogEntry& entry : suggestions_) {
+                DockItem item;
+                item.path = entry.path;
+                item.label = entry.label;
+                wanted.push_back(std::move(item));
+            }
+            suggestionLoader_.Start(std::move(wanted), static_cast<int>(layout::kTileIcon),
+                                    hwnd_, kSuggestionIconsMessage);
+            BuildRows();
+            LayoutRows();
+            ApplyWindowSize();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        case kSuggestionIconsMessage:
+            DrainSuggestionIcons();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 

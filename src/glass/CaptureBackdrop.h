@@ -119,6 +119,11 @@ private:
     // box computed from a stale rectangle reads the wrong part of the screen.
     std::mutex mutex_;
     RECT region_rect_{};
+    // The region moved, so the next frame has to be copied whether or not the
+    // screen changed inside it. Duplication only hands over a frame when
+    // something moves, so a dock resized over a still desktop would otherwise
+    // sit on the wallpaper until the user happened to disturb something.
+    std::atomic<bool> regionMoved_{false};
     HMONITOR monitor_ = nullptr;
     RECT monitorRect_{};
     int regionWidth_ = 0;

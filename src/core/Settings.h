@@ -92,6 +92,10 @@ struct Settings {
     // starts being a break between runs.
     float dividerGap = 0.0f;
 
+    // The space between neighbouring icons, in design units, so it scales with
+    // the dock like everything else in the layout.
+    float iconGap = 0.0f;
+
     // --- Placement --------------------------------------------------------
     // Which monitor the dock lives on. 0 means the primary one; otherwise it is
     // a 1-based index into the display order, and an index that no longer

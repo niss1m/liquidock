@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/Settings.h"
+#include "model/AppCatalog.h"
 #include "model/IconLoader.h"
 #include "model/ItemStore.h"
 #include "gfx/CompositionTarget.h"
@@ -85,7 +86,12 @@ private:
     static constexpr int kTabCount = 4;
 
     struct Row {
-        enum class Kind { Section, Slider, Toggle, Choice, Item, AddItem, AddSeparator };
+        enum class Kind {
+            Section, Slider, Toggle, Choice,
+            Item,          // one icon in the dock's own grid
+            Suggestion,    // one installed app not on the dock yet
+            AddItem, AddSeparator
+        };
 
         Kind kind = Kind::Slider;
         Tab tab = Tab::Glass;
@@ -148,6 +154,18 @@ private:
     // point of a dock is that you recognise things by their icon.
     void StartIconLoad();
     void DrainIcons();
+    // The installed-app list, and the icons for whichever of them are shown.
+    void StartCatalogLoad();
+    void DrainSuggestionIcons();
+    // Lays the two grids out. Returns the y the content ends at.
+    float LayoutGrids(float top, float width);
+    // How many tiles fit across. Layout and measurement have to agree on this.
+    int GridColumns() const;
+    const wchar_t* EditorCursorFor(float x, float y) const;
+    void DrawTile(const Row& row, bool hovered);
+    void DrawTileBadge(const Row& row, bool hovered, bool suggestion);
+    // What a tile is showing, so drawing and hit testing agree.
+    const std::wstring& SuggestionLabel(int index) const;
 
     // -1 when the point is over no row.
     int RowAt(float x, float y) const;
@@ -179,15 +197,16 @@ private:
     // The open editor under an item row. Returns the field rectangles in the
     // order the enum below gives them, so drawing and hit testing cannot drift.
     enum class Field { Name, Path, Arguments, WorkingDir, Icon, Show, Admin, Count };
-    void EditorRects(const Row& row, D2D1_RECT_F* fields, D2D1_RECT_F* buttons) const;
-    void DrawEditor(const Row& row);
+    void EditorRects(const D2D1_RECT_F& panel, D2D1_RECT_F* fields,
+                     D2D1_RECT_F* buttons) const;
+    void DrawEditor(const D2D1_RECT_F& panel, int itemIndex);
     // Handles a click inside an open editor. True if anything changed.
-    bool HandleEditorClick(const Row& row, float x, float y);
+    bool HandleEditorClick(const D2D1_RECT_F& panel, int itemIndex, float x, float y);
     // Commits whatever is being typed back into the item.
     void CommitEdit();
     void BeginEdit(int itemIndex, Field field);
     // The item index a drop at `y` would land on.
-    int DropIndexAt(float y) const;
+    int DropIndexAt(float x, float y) const;
     void DrawDetailBar();
     // Chevrons and crosses drawn from line segments rather than glyphs, so they
     // do not depend on a symbol font being present and are crisp at any size.
@@ -219,9 +238,22 @@ private:
     IconLoader iconLoader_;
     // One per item, by index, and null until its icon arrives or if it has none.
     std::vector<ComPtr<ID2D1Bitmap>> itemIcons_;
+    // Everything installed, and the icons for the ones not already docked. The
+    // catalog is read once per window opening; the icons are fetched only for
+    // the entries that survive the filter, because there are usually a few
+    // hundred apps and nobody scrolls past the first dozen.
+    AppCatalog catalog_;
+    std::vector<CatalogEntry> suggestions_;
+    IconLoader suggestionLoader_;
+    std::vector<ComPtr<ID2D1Bitmap>> suggestionIcons_;
     Tab activeTab_ = Tab::Items;
     D2D1_RECT_F tabBounds_[kTabCount]{};
     D2D1_RECT_F buttonBounds_[2]{};
+    // Where the rule between the two grids sits, in the panel's own space.
+    float gridRuleY_ = 0.0f;
+    // Where the open item's editor sits, between the two grids. Empty when
+    // nothing is selected.
+    D2D1_RECT_F editorPanel_{};
     ChangedCallback onChanged_;
     ItemsCallback onItemsChanged_;
     std::vector<Row> rows_;
@@ -251,6 +283,7 @@ private:
     // start the same way, so the press is remembered until it turns into one.
     int pressItem_ = -1;
     float pressY_ = 0.0f;
+    float pressX_ = 0.0f;
     bool draggingItem_ = false;
     int dropIndex_ = -1;
     // The field being typed into, its buffer and the caret's position in it.

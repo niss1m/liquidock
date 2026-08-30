@@ -70,6 +70,7 @@ add_executable(liquidock WIN32
     src/glass/SnapshotBackdrop.cpp
     src/glass/WallpaperBackdrop.cpp
     src/glass/FrostChain.cpp
+    src/model/AppCatalog.cpp
     src/model/IconLoader.cpp
     src/model/ItemStore.cpp
     src/model/RunningState.cpp

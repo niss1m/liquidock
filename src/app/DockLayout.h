@@ -68,6 +68,7 @@ public:
     // of gap rather than baked into each element, because changing it must not
     // require rebuilding the element list from items the layout does not keep.
     void SetDividerGap(float gap) { dividerGap_ = gap; }
+    void SetIconGap(float gap) { iconGap_ = gap; }
 
     // Everything the layout draws is this times the design's measurements: the
     // size asked for, reduced further if the row would not fit the screen. One
@@ -178,6 +179,7 @@ private:
     bool bulge_ = false;
     bool followCursor_ = false;
     float dividerGap_ = design::kGroupGap;
+    float iconGap_ = design::kIconGap;
     float userScale_ = 1.0f;
     // 1 until the row would not fit the screen.
     float fitScale_ = 1.0f;

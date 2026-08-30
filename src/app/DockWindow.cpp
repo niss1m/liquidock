@@ -648,6 +648,7 @@ void DockWindow::ApplySettings() {
     layout_.SetMagnification(settings_.magnification, settings_.maxScale, settings_.influencePx,
                              settings_.iconBulge, settings_.followCursor);
     layout_.SetDividerGap(settings_.dividerGap);
+    layout_.SetIconGap(settings_.iconGap);
     // The layout's own numbers after a reload. They are otherwise only
     // checkable with a screenshot, and a dock is exactly the thing that is hard
     // to screenshot - it excludes itself from capture in screen mode, and
