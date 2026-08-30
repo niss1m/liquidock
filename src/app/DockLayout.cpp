@@ -55,11 +55,13 @@ float DockLayout::WaveScale(float distance) const {
     return 1.0f + (maxScale_ - 1.0f) * bell;
 }
 
-void DockLayout::SetMagnification(bool enabled, float maxScale, float influencePx, bool bulge) {
+void DockLayout::SetMagnification(bool enabled, float maxScale, float influencePx, bool bulge,
+                                  bool followCursor) {
     magnification_ = enabled;
     maxScale_ = maxScale;
     influencePx_ = influencePx;
     bulge_ = bulge;
+    followCursor_ = followCursor;
 }
 
 void DockLayout::SetIconScale(float userScale) {
@@ -327,10 +329,18 @@ void DockLayout::Place() {
     // keeps the hovered icon under the cursor. u is deliberately not clamped:
     // outside the row the scales are all 1, so growth is zero and the
     // expression collapses to the resting position with no seam.
+    //
+    // It is also why the whole bar appears to slide left and right as the cursor
+    // travels along it, which is the thing most people notice and dislike. Off,
+    // the growth is split evenly either side and the bar's centre does not move;
+    // the cost is that the hovered icon drifts by up to half the row's growth
+    // instead of staying pinned under the pointer.
     float left = restLeft;
-    if (restingContent > 0.0f) {
+    if (followCursor_ && restingContent > 0.0f) {
         const float u = (cursorX_ - restLeft) / restingContent;
         left = restLeft - u * (content - restingContent);
+    } else {
+        left = restLeft - (content - restingContent) * 0.5f;
     }
 
     barCenterX_ = left + content * 0.5f;

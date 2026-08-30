@@ -98,6 +98,8 @@ void Settings::Load() {
     backdrop = BackdropSource::Screen;
 
     magnification = true;
+    followCursor = false;
+    separatorImage.clear();
     maxScale = design::magnify::kMaxScale;
     influencePx = design::magnify::kInfluencePx;
     iconSize = design::kDefaultIconSize;
@@ -167,6 +169,10 @@ bool Settings::ReadFile(const std::wstring& path) {
             }
         } else if (key == L"magnification") {
             magnification = ParseBool(value, magnification);
+        } else if (key == L"follow-cursor") {
+            followCursor = ParseBool(value, followCursor);
+        } else if (key == L"separator-image") {
+            separatorImage = value;
         } else if (key == L"max-scale") {
             maxScale = ParseFloat(value, maxScale, 1.0f, design::kMaxConfigurableScale);
         } else if (key == L"icon-size") {
@@ -221,6 +227,8 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"tint-alpha") return number(L"%.2f", tintAlpha);
     if (key == L"backdrop") return backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper";
     if (key == L"magnification") return magnification ? L"on" : L"off";
+    if (key == L"follow-cursor") return followCursor ? L"on" : L"off";
+    if (key == L"separator-image") return separatorImage;
     if (key == L"max-scale") return number(L"%.2f", maxScale);
     if (key == L"influence") return number(L"%.0f", influencePx);
     if (key == L"icon-size") return number(L"%.0f", iconSize);
@@ -295,6 +303,7 @@ bool Settings::Save() const {
     static const wchar_t* const kAllKeys[] = {
         L"refraction", L"depth",        L"dispersion",    L"frost",         L"splay",
         L"light-angle", L"light-intensity", L"tint-alpha", L"backdrop",     L"magnification",
+        L"follow-cursor", L"separator-image",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
         L"label-font-size", L"label-bold",
@@ -393,6 +402,17 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"max-scale = %.2f\n"
              L"influence = %.0f\n"
              L"\n"
+             L"# Whether the row slides sideways as it swells, so the icon under\n"
+             L"# the cursor stays exactly under it. That is what macOS does, and\n"
+             L"# it is also why the whole bar appears to drift left and right as\n"
+             L"# you move along it. Off keeps the bar's centre still.\n"
+             L"follow-cursor = %s\n"
+             L"\n"
+             L"# The divider between the two groups. Empty draws the built-in\n"
+             L"# rule; give it a path to an image - a Nexus theme's sep.png, or\n"
+             L"# anything else - and that is drawn instead, stretched to height.\n"
+             L"separator-image = %s\n"
+             L"\n"
              L"# The hover label's face, in pixels, and whether it is bold. Nexus asks\n"
              L"# GDI for Segoe UI 12 bold, but light text on a near-black pill blooms,\n"
              L"# so matching those numbers exactly comes out heavier than Nexus looks.\n"
@@ -429,7 +449,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
              tintAlpha, backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
-             magnification ? L"on" : L"off", iconSize, maxScale, influencePx, labelFontSize,
+             magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
+             followCursor ? L"on" : L"off", separatorImage.c_str(), labelFontSize,
              labelBold ? L"on" : L"off",
              iconBulge ? L"on" : L"off", monitorText, reserveSpace ? L"on" : L"off",
              autoHide ? L"on" : L"off", hideWhenCovered ? L"on" : L"off", dwellSeconds,

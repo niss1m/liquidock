@@ -81,11 +81,23 @@ static const float kMaxBendPx = 20.0;
 // Wavelength spread at full dispersion, as a fraction of the bend.
 static const float kMaxDispersion = 0.16;
 
-// The bright line along the rim, in logical pixels. Crisp on purpose: a wide
-// soft one is a glow, and a glow is the single most Aero thing a surface can
-// do. The design's render puts it at two pixels of a 2.25x export, so a little
-// under one logical pixel, with the falloff either side taking it to this.
-static const float kRimPx = 1.2;
+// The rim, in logical pixels. The design's render puts it at *one* pixel of a
+// 2.25x export - 0.44 logical, genuinely sub-pixel - with its neighbours only
+// partly lit. A wide soft one is a glow, and a glow is the single most Aero
+// thing a surface can do.
+static const float kRimPx = 0.8;
+
+// How far the rim lifts what is behind it toward white, at the light intensity
+// the design states (0.80), and how much of that leans with the light.
+//
+// Sampling the design's rim gives RGB 153/173/130 over a backdrop of 48/70/24.
+// Solve that per channel and it is a lerp toward white of 0.51, 0.56, 0.46 -
+// one number, near enough, and emphatically not an addition. Around the
+// perimeter the rim lands at 152 at the top, 144 and 124 at the sides and 119
+// at the bottom, so it is a bright edge the whole way round that leans toward
+// the light rather than a highlight on one side.
+static const float kRimLift = 0.56;
+static const float kRimLean = 0.09;
 
 Varyings VSMain(uint id : SV_VertexID)
 {
@@ -196,18 +208,28 @@ float4 PSMain(Varyings input) : SV_Target
     // that appears on one side and a shadow on the other. An earlier version
     // had it at 0.20 on the unlit side, which is a quarter of what the design
     // shows, and is why the bottom of the bar had no edge to it at all.
-    const float rimCentre = kRimPx * 0.6 * scale;
-    const float rimHalf = kRimPx * 0.6 * scale;
+    const float rimCentre = kRimPx * 0.55 * scale;
+    const float rimHalf = kRimPx * 0.75 * scale;
     const float rim = saturate(1.0 - abs(-dist - rimCentre) / max(rimHalf, 1e-4));
 
+    // A *reflection*, not a stroke. Adding a constant is what makes an edge
+    // read as painted on: over a dark backdrop it is a grey line, over a bright
+    // one it clips to flat white, and either way its brightness is decided by
+    // what is underneath rather than by what it is reflecting. Lifting toward
+    // white lands the rim at the same value whatever is behind it - which is
+    // what a specular highlight does, and the whole reason glass looks like
+    // glass rather than like a rectangle with a border.
     const float intensity = saturate(LIGHT_INTENSITY);
-    colour += rim * (0.39 + 0.10 * facing) * intensity;
+    const float lift = saturate(intensity * (kRimLift + kRimLean * facing));
+    colour = lerp(colour, float3(1.0, 1.0, 1.0), rim * lift);
 
     // A far softer sheen inside the rim where the surface turns towards the
     // light, falling off over a dozen pixels. It follows the distance field, so
     // it wraps the corners and any bulge instead of being a band across the top.
+    // Also a lift rather than an addition, for the same reason.
     const float inner = pow(saturate(1.0 + dist / (16.0 * scale)), 2.0);
-    colour += saturate(-outward.y) * inner * 0.03 * intensity;
+    colour = lerp(colour, float3(1.0, 1.0, 1.0),
+                  saturate(-outward.y) * inner * 0.05 * intensity);
 
     // The backdrop has already been sampled and composited into `colour`, so
     // the dock is opaque wherever it covers - it is showing its own

@@ -62,6 +62,7 @@ add_executable(liquidock WIN32
     src/gfx/GraphicsDevice.cpp
     src/gfx/CompositionTarget.cpp
     src/gfx/IconAtlas.cpp
+    src/gfx/ImageTexture.cpp
     src/gfx/ShaderCache.cpp
     src/gfx/TextLayer.cpp
     src/gfx/TextureDump.cpp

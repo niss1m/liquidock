@@ -73,7 +73,7 @@ each line, so comments you add survive being edited from the UI.
 
 Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
 `light-intensity`, `tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`,
-`icon-bulge`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `hide-when-covered`,
+`icon-bulge`, `follow-cursor`. Appearance: `separator-image`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `hide-when-covered`,
 `dwell-seconds`, `slide-seconds`.
 
 `hide-when-covered` is **on** by default and is what makes auto-hide behave the way people expect:
@@ -93,6 +93,15 @@ strip of desktop the dock covers and ignoring every change that misses it. The c
 performance: the dock has to be excluded from screen capture to stop it refracting its own last
 frame forever, and that same exclusion makes the dock invisible in your own screenshots and screen
 shares. That is why it is not the default.
+
+`follow-cursor` is **off** by default. On, the row slides sideways as it swells so the icon under
+the pointer stays exactly under it, which is what macOS does — and is also why the whole bar appears
+to drift left and right as you move along it. Off, the bar holds its centre and grows evenly to both
+sides; the hovered icon drifts by a few pixels and the dock sits still.
+
+`separator-image` replaces the divider between the two groups with an image, stretched to the
+divider's height and keeping its own aspect, so a 1×59 hairline stays a hairline. A Nexus theme's
+`sep.png` drops straight in. Empty draws the built-in rule.
 
 `icon-bulge` is **off** by default. With it on, the glass swells around a raised icon — the bar's
 outline fuses to the icons and reads as liquid clinging to them, which is a much stronger effect

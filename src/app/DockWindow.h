@@ -15,6 +15,7 @@
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
 #include "gfx/IconAtlas.h"
+#include "gfx/ImageTexture.h"
 #include "gfx/ShaderCache.h"
 #include "gfx/TextLayer.h"
 #include "glass/CaptureBackdrop.h"
@@ -93,6 +94,11 @@ private:
     void UpdatePlacement();
     void Render();
     void RenderIcons(float scale, float slideLogical);
+    // One instanced draw of the icon quad. Shared because the divider image
+    // needs the same shader over a different texture.
+    void DrawIconInstances(ID3D11VertexShader* vs, ID3D11PixelShader* ps,
+                           const IconConstants& constants, int count,
+                           ID3D11ShaderResourceView* texture);
     // The name of the icon under the cursor, drawn above it. Returns true while
     // the fade is still running, so the dock keeps presenting frames until it
     // has settled.
@@ -214,6 +220,9 @@ private:
     DockLayout layout_;
     IconLoader iconLoader_;
     IconAtlas atlas_;
+    // The divider image, when the settings name one. Empty means the built-in
+    // rule is drawn instead.
+    ImageTexture separator_;
     RunningState running_;
     std::unique_ptr<SettingsWindow> settingsWindow_;
     GlassMenu menu_;

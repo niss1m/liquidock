@@ -45,6 +45,14 @@ struct Settings {
     float maxScale = 0.0f;
     float influencePx = 0.0f;
 
+    // Whether the row slides sideways as it swells so the icon under the cursor
+    // stays under it. That is what the macOS dock does, and it is also why the
+    // whole bar appears to drift left and right as the cursor moves along it.
+    // Off by default: the bar holds its centre and grows evenly to both sides,
+    // which costs the hovered icon a few pixels of drift and buys a dock that
+    // sits still.
+    bool followCursor = false;
+
     // The icon size the dock draws at, in logical pixels. Everything else in
     // the layout is proportional to it, so this is the one number that makes
     // the whole dock bigger or smaller.
@@ -62,6 +70,11 @@ struct Settings {
     // rather than as a pane of glass, and that is a much stronger effect than
     // this dock is going for.
     bool iconBulge = false;
+
+    // The divider between the two groups. Empty draws the built-in rule; a path
+    // to an image draws that instead, stretched to the divider's height, so a
+    // Nexus theme's `sep.png` or anything else can be dropped in.
+    std::wstring separatorImage;
 
     // --- Placement --------------------------------------------------------
     // Which monitor the dock lives on. 0 means the primary one; otherwise it is

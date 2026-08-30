@@ -578,8 +578,17 @@ void DockWindow::ApplySettings() {
     // back on under someone who started the dock with --no-autohide.
     autoHide_ = autoHideOverride_.value_or(settings_.autoHide);
     layout_.SetIconScale(settings_.iconSize / design::kIconSize);
+    // Reloaded only when the path actually changed: a settings save while
+    // tuning the glass should not re-decode an image every time.
+    if (settings_.separatorImage != separator_.path()) {
+        if (settings_.separatorImage.empty()) {
+            separator_.Reset();
+        } else {
+            separator_.Load(*device_, settings_.separatorImage);
+        }
+    }
     layout_.SetMagnification(settings_.magnification, settings_.maxScale, settings_.influencePx,
-                             settings_.iconBulge);
+                             settings_.iconBulge, settings_.followCursor);
     // The frost is a cached blur at a particular radius, and the radius is a
     // setting, so it is stale by definition after a reload.
     frostDirty_ = true;
@@ -662,6 +671,9 @@ void DockWindow::ReleaseDeviceResources() {
     text_.Reset();
     frost_.Reset();
     atlas_.Reset();
+    // ApplySettings reloads it on the way back, because Reset clears the
+    // remembered path and the comparison there then sees a change.
+    separator_.Reset();
     wallpaper_.Reset();
     target_.Reset();
     iconBlend_.Reset();
@@ -1156,10 +1168,24 @@ void DockWindow::Render() {
     GlassConstants constants{};
     constants.viewportCenter[0] = viewWidth;
     constants.viewportCenter[1] = viewHeight;
-    constants.viewportCenter[2] = layout_.bar_center_x() * scale;
-    constants.viewportCenter[3] = (layout_.bar_center_y() + slide) * scale;
-    constants.shape[0] = layout_.bar_half_width() * scale;
-    constants.shape[1] = layout_.bar_half_height() * scale;
+    // Snapped to the physical pixel grid. The rim is a one-pixel reflection
+    // sitting just inside the boundary, and if the boundary falls mid-pixel
+    // that row is half covered - so the rim is composited at half strength and
+    // the design's 0.50 lift measures 0.26. Rounding the edges rather than the
+    // centre keeps the shape the size it was asked for either side of it.
+    const float rawLeft = (layout_.bar_center_x() - layout_.bar_half_width()) * scale;
+    const float rawRight = (layout_.bar_center_x() + layout_.bar_half_width()) * scale;
+    const float rawTop = (layout_.bar_center_y() - layout_.bar_half_height() + slide) * scale;
+    const float rawBottom = (layout_.bar_center_y() + layout_.bar_half_height() + slide) * scale;
+    const float left = std::round(rawLeft);
+    const float right = std::round(rawRight);
+    const float top = std::round(rawTop);
+    const float bottom = std::round(rawBottom);
+
+    constants.viewportCenter[2] = (left + right) * 0.5f;
+    constants.viewportCenter[3] = (top + bottom) * 0.5f;
+    constants.shape[0] = (right - left) * 0.5f;
+    constants.shape[1] = (bottom - top) * 0.5f;
     constants.shape[2] = layout_.corner_radius() * scale;
     constants.shape[3] = elapsed;
 
@@ -1422,29 +1448,87 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
         ++instances;
     }
 
-    for (const PlacedIcon& hairline : layout_.separators()) {
-        if (instances >= kMaxIconInstances) {
-            break;
-        }
-        // A one-logical-pixel rule has to be snapped to the physical grid or it
-        // lands across two columns and renders as two half-lit ones, which at
-        // 20% white is a line that looks like it failed to draw.
-        const float width = std::max(1.0f, std::round(design::kSeparatorWidth * scale));
-        const float left = std::round(hairline.centerX * scale - width * 0.5f);
-        constants.rect[instances][0] = left + width * 0.5f;
-        constants.rect[instances][1] = (hairline.centerY + slideLogical) * scale;
-        constants.rect[instances][2] = width * 0.5f;
-        constants.rect[instances][3] = hairline.size * 0.5f * scale;
+    // The built-in rule, drawn only when no image has been given to stand in
+    // for it. The image needs its own texture, so it gets its own draw below.
+    const bool customSeparator = separator_.ready();
+    if (!customSeparator) {
+        for (const PlacedIcon& hairline : layout_.separators()) {
+            if (instances >= kMaxIconInstances) {
+                break;
+            }
+            // A one-logical-pixel rule has to be snapped to the physical grid or
+            // it lands across two columns and renders as two half-lit ones,
+            // which at 20% white is a line that looks like it failed to draw.
+            const float width = std::max(1.0f, std::round(design::kSeparatorWidth * scale));
+            const float left = std::round(hairline.centerX * scale - width * 0.5f);
+            constants.rect[instances][0] = left + width * 0.5f;
+            constants.rect[instances][1] = (hairline.centerY + slideLogical) * scale;
+            constants.rect[instances][2] = width * 0.5f;
+            constants.rect[instances][3] = hairline.size * 0.5f * scale;
 
-        constants.source[instances][2] = design::kSeparatorTint[3];
-        constants.source[instances][3] = 1.0f; // solid fill, not an atlas sample
-        ++instances;
+            constants.source[instances][2] = design::kSeparatorTint[3];
+            constants.source[instances][3] = 1.0f; // solid fill, not an atlas sample
+            ++instances;
+        }
     }
 
-    if (instances == 0) {
+    if (instances > 0) {
+        DrawIconInstances(vs.Get(), ps.Get(), constants, instances, atlas_.srv());
+    }
+
+    if (!customSeparator) {
         return;
     }
 
+    // The custom divider. A second draw rather than a slot in the atlas: the
+    // atlas cell is square and an image a pixel or two wide would have to be
+    // stretched into it and squeezed back out, and resampling a hairline twice
+    // is how a crisp rule becomes a grey smudge.
+    IconConstants dividers{};
+    dividers.viewport[0] = viewWidth;
+    dividers.viewport[1] = viewHeight;
+    dividers.viewport[2] = 1.0f / std::max(viewWidth, 1.0f);
+    dividers.viewport[3] = 1.0f / std::max(viewHeight, 1.0f);
+    // One "cell" is the whole image.
+    dividers.cell[0] = 1.0f;
+    dividers.cell[1] = 1.0f;
+
+    // The image's own aspect decides how wide it is drawn, so a 1x59 hairline
+    // stays a hairline and a wide ornament stays wide, both at the height the
+    // layout gives the divider.
+    const float height = design::kSeparatorHeight * layout_.scale() * scale;
+    const float aspect = (separator_.height() > 0)
+                             ? static_cast<float>(separator_.width()) /
+                                   static_cast<float>(separator_.height())
+                             : 1.0f;
+    const float width = std::max(1.0f, std::round(height * aspect));
+
+    int dividerCount = 0;
+    for (const PlacedIcon& hairline : layout_.separators()) {
+        if (dividerCount >= kMaxIconInstances) {
+            break;
+        }
+        const float left = std::round(hairline.centerX * scale - width * 0.5f);
+        dividers.rect[dividerCount][0] = left + width * 0.5f;
+        dividers.rect[dividerCount][1] = (hairline.centerY + slideLogical) * scale;
+        dividers.rect[dividerCount][2] = width * 0.5f;
+        dividers.rect[dividerCount][3] = height * 0.5f;
+
+        dividers.source[dividerCount][2] = 1.0f; // the image carries its own alpha
+        dividers.source[dividerCount][3] = 0.0f; // sampled, not a solid fill
+        ++dividerCount;
+    }
+    if (dividerCount > 0) {
+        DrawIconInstances(vs.Get(), ps.Get(), dividers, dividerCount, separator_.srv());
+    }
+}
+
+void DockWindow::DrawIconInstances(ID3D11VertexShader* vs, ID3D11PixelShader* ps,
+                                   const IconConstants& constants, int count,
+                                   ID3D11ShaderResourceView* texture) {
+    if (count <= 0 || !texture) {
+        return;
+    }
     ID3D11DeviceContext1* ctx = device_->context();
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(ctx->Map(iconConstantBuffer_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -1453,16 +1537,16 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
     memcpy(mapped.pData, &constants, sizeof(constants));
     ctx->Unmap(iconConstantBuffer_.Get(), 0);
 
-    ctx->VSSetShader(vs.Get(), nullptr, 0);
-    ctx->PSSetShader(ps.Get(), nullptr, 0);
+    ctx->VSSetShader(vs, nullptr, 0);
+    ctx->PSSetShader(ps, nullptr, 0);
     ID3D11Buffer* cb = iconConstantBuffer_.Get();
     ctx->VSSetConstantBuffers(0, 1, &cb);
     ctx->PSSetConstantBuffers(0, 1, &cb);
 
-    ID3D11ShaderResourceView* resources[1] = {atlas_.srv()};
+    ID3D11ShaderResourceView* resources[1] = {texture};
     ctx->PSSetShaderResources(0, 1, resources);
     ctx->OMSetBlendState(iconBlend_.Get(), nullptr, 0xFFFFFFFF);
-    ctx->DrawInstanced(6, static_cast<UINT>(instances), 0, 0);
+    ctx->DrawInstanced(6, static_cast<UINT>(count), 0, 0);
 }
 
 bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSeconds) {

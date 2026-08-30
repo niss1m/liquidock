@@ -70,7 +70,11 @@ public:
     // The magnification the user asked for. `bulge` is what makes the glass
     // swell around a raised icon; with it off the bar keeps the plain rounded
     // silhouette the design specifies, and icons simply rise out of it.
-    void SetMagnification(bool enabled, float maxScale, float influencePx, bool bulge);
+    // `followCursor` slides the row sideways as it swells so the icon under the
+    // cursor stays under it. Off, the row grows evenly about its centre and the
+    // bar holds still.
+    void SetMagnification(bool enabled, float maxScale, float influencePx, bool bulge,
+                          bool followCursor);
 
     // `x` is in logical window space. `inside` false means the cursor is not
     // over the dock, which relaxes every icon back to rest.
@@ -159,6 +163,7 @@ private:
     float maxScale_ = 1.0f;
     float influencePx_ = 1.0f;
     bool bulge_ = false;
+    bool followCursor_ = false;
     float userScale_ = 1.0f;
     // 1 until the row would not fit the screen.
     float fitScale_ = 1.0f;
