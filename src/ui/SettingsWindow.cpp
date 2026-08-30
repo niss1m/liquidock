@@ -98,6 +98,8 @@ constexpr float kTooltipOffsetY = 20.0f;
 constexpr float kSectionHeight = 46.0f;
 constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
+constexpr float kChoicePadX = 13.0f;
+constexpr float kChoiceHeight = 26.0f;
 // The value gets a column of its own on the right of the card, and the track
 // stops before it. Sharing the width meant that at the top of a range the knob
 // arrived on top of the number - "2.00x" with a caret through the x, and two
@@ -574,6 +576,15 @@ void SettingsWindow::LayoutRows() {
                 row.control =
                     D2D1::RectF(pill.right - layout::kPillPadX - layout::kControlWidth,
                                 centreY - 12.0f, pill.right - layout::kPillPadX, centreY + 12.0f);
+                if (row.kind == Row::Kind::Choice) {
+                    // Whatever its options happen to measure, so the cursor and
+                    // the click agree with what was drawn.
+                    const std::vector<D2D1_RECT_F> cells = ChoiceCells(row);
+                    if (!cells.empty()) {
+                        row.control = D2D1::RectF(cells.front().left, cells.front().top,
+                                                  cells.back().right, cells.back().bottom);
+                    }
+                }
             }
         }
         y[column] += height;
@@ -583,7 +594,7 @@ void SettingsWindow::LayoutRows() {
         // Both grids in one pass: the second has to start where the first ends,
         // and neither knows how many lines the other took.
         const float width = layout::kWidth - 2.0f * layout::kPadding;
-        y[0] = LayoutGrids(listTop, width) + itemScroll_;
+        y[0] = LayoutGrids(listTop, width);
     }
 
     // Sized to the page being shown, and the window keeps its top-left corner
@@ -603,7 +614,11 @@ void SettingsWindow::LayoutRows() {
         itemScroll_ = 0.0f;
         return;
     }
-    const float listContent = y[0] + itemScroll_ - listTop;
+    // y[] accumulates unscrolled - the scroll is subtracted into each row's
+    // bounds, not into the running total - so adding it back here counted it
+    // twice, and the ceiling grew by a notch for every notch scrolled. Which is
+    // a scrollbar that never reaches the end.
+    const float listContent = y[0] - listTop;
     itemScrollMax_ = std::max(0.0f, listContent - (itemsClip_.bottom - itemsClip_.top));
     itemScroll_ = std::clamp(itemScroll_, 0.0f, itemScrollMax_);
 }
@@ -1012,12 +1027,18 @@ bool SettingsWindow::ApplyPointer(int index, float x, bool dragging) {
             if (dragging) {
                 return false;
             }
-            const int count = static_cast<int>(row.options.size());
-            const float span = (row.control.right - row.control.left) / std::max(count, 1);
-            const int picked =
-                std::clamp(static_cast<int>((x - row.control.left) / std::max(span, 1.0f)), 0,
-                           count - 1);
-            if (picked == *row.choice) {
+            const std::vector<D2D1_RECT_F> cells = ChoiceCells(row);
+            int picked = -1;
+            for (size_t i = 0; i < cells.size(); ++i) {
+                if (x >= cells[i].left && x <= cells[i].right) {
+                    picked = static_cast<int>(i);
+                    break;
+                }
+            }
+            // Outside every option is not a choice. The old even split had no
+            // outside - the whole right of the card belonged to one option or
+            // another, so a click near the value column changed the setting.
+            if (picked < 0 || picked == *row.choice) {
                 return false;
             }
             *row.choice = picked;
@@ -1364,6 +1385,12 @@ bool SettingsWindow::AdvanceAnimation() {
         if (row.kind == Row::Kind::Toggle && row.flag) {
             approach(row.anim, *row.flag ? 1.0f : 0.0f, layout::kToggleSeconds);
         }
+        if (row.kind == Row::Kind::Choice && row.choice) {
+            // The same journey the switch makes, over as many stops as there
+            // are options: the pill slides to the one you picked rather than
+            // appearing there.
+            approach(row.anim, static_cast<float>(*row.choice), layout::kToggleSeconds * 2.0f);
+        }
         approach(row.hover, (static_cast<int>(i) == hoverRow_) ? 1.0f : 0.0f,
                  layout::kHoverSeconds);
     }
@@ -1492,6 +1519,33 @@ void SettingsWindow::DrawToggle(const Row& row, float hover) {
     }
 }
 
+std::vector<D2D1_RECT_F> SettingsWindow::ChoiceCells(const Row& row) const {
+    const int count = static_cast<int>(row.options.size());
+    std::vector<D2D1_RECT_F> cells;
+    if (count <= 0) {
+        return cells;
+    }
+    cells.reserve(static_cast<size_t>(count));
+
+    const D2D1_RECT_F pill = PillRect(row);
+    const float centreY = (pill.top + pill.bottom) * 0.5f;
+    const float height = layout::kChoiceHeight;
+
+    float total = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        total += MeasureText(valueFormat_.Get(), row.options[static_cast<size_t>(i)]) +
+                 2.0f * layout::kChoicePadX;
+    }
+    float x = pill.right - layout::kPillPadX - total;
+    for (int i = 0; i < count; ++i) {
+        const float width = MeasureText(valueFormat_.Get(), row.options[static_cast<size_t>(i)]) +
+                            2.0f * layout::kChoicePadX;
+        cells.push_back(D2D1::RectF(x, centreY - height * 0.5f, x + width, centreY + height * 0.5f));
+        x += width;
+    }
+    return cells;
+}
+
 void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
     brush_->SetColor(Mix(kTrack, kTrackHover, row.hover));
     d2d_->FillRoundedRectangle(
@@ -1501,34 +1555,51 @@ void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
     if (count <= 0) {
         return;
     }
-    const float height = 24.0f;
-    const float centreY = (row.control.top + row.control.bottom) * 0.5f;
-    const D2D1_RECT_F frame = D2D1::RectF(row.control.left, centreY - height * 0.5f,
-                                          row.control.right, centreY + height * 0.5f);
+    // No inner frame, and no equal thirds. A box drawn on a card that is
+    // already a surface is one border too many, and splitting the width evenly
+    // gave "Screen" the same room as "Wallpaper" - which is how a two-letter
+    // option ends up wearing a pill wide enough for a sentence. Each option
+    // gets the width of its own text, and the row is packed against the card's
+    // right edge like every other value on this panel.
+    const std::vector<D2D1_RECT_F> cells = ChoiceCells(row);
+    if (cells.empty()) {
+        return;
+    }
+    const float height = layout::kChoiceHeight;
 
-    brush_->SetColor(Grey(1.0f, 0.10f));
-    d2d_->FillRoundedRectangle(D2D1::RoundedRect(frame, 6.0f, 6.0f), brush_.Get());
+    // The travelling pill, interpolated between the cell it left and the one it
+    // is heading for, so it changes width on the way as well as position.
+    const float where = std::clamp(row.anim < 0.0f ? static_cast<float>(*row.choice) : row.anim,
+                                   0.0f, static_cast<float>(count - 1));
+    const int from = static_cast<int>(where);
+    const int to = std::min(from + 1, count - 1);
+    const float t = Smooth(where - static_cast<float>(from));
+    const D2D1_RECT_F& a = cells[static_cast<size_t>(from)];
+    const D2D1_RECT_F& b = cells[static_cast<size_t>(to)];
+    const D2D1_RECT_F marker = D2D1::RectF(a.left + (b.left - a.left) * t, a.top,
+                                           a.right + (b.right - a.right) * t, a.bottom);
+    brush_->SetColor(Grey(1.0f, 0.16f));
+    d2d_->FillRoundedRectangle(D2D1::RoundedRect(marker, height * 0.5f, height * 0.5f),
+                               brush_.Get());
 
-    const float segment = (frame.right - frame.left) / count;
     for (int i = 0; i < count; ++i) {
-        const D2D1_RECT_F cell = D2D1::RectF(frame.left + i * segment + 2.0f, frame.top + 2.0f,
-                                             frame.left + (i + 1) * segment - 2.0f,
-                                             frame.bottom - 2.0f);
-        const bool selected = (i == *row.choice);
+        const D2D1_RECT_F& cell = cells[static_cast<size_t>(i)];
         const bool under = pointerX >= cell.left && pointerX <= cell.right;
-        if (selected) {
-            brush_->SetColor(kOn);
-            d2d_->FillRoundedRectangle(D2D1::RoundedRect(cell, 5.0f, 5.0f), brush_.Get());
-        } else if (under) {
-            brush_->SetColor(Grey(1.0f, 0.08f));
-            d2d_->FillRoundedRectangle(D2D1::RoundedRect(cell, 5.0f, 5.0f), brush_.Get());
+        if (under && i != *row.choice) {
+            brush_->SetColor(Grey(1.0f, 0.07f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(cell, height * 0.5f, height * 0.5f),
+                                       brush_.Get());
         }
-        auto centred = D2D1::RectF(cell.left, cell.top + 3.0f, cell.right, cell.bottom);
+        // Brightness carries the selection, not a colour: the panel has exactly
+        // one accent and it is spent on the caret and the add badge.
+        const float lit = 1.0f - std::min(1.0f, std::fabs(where - static_cast<float>(i)));
+        const D2D1_COLOR_F colour = Mix(kValue, Grey(1.0f, 1.0f), lit);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        DrawText(row.options[static_cast<size_t>(i)], valueFormat_.Get(), centred,
-                 selected ? Grey(1.0f, 1.0f) : kValue);
+        DrawText(row.options[static_cast<size_t>(i)], valueFormat_.Get(),
+                 D2D1::RectF(cell.left, cell.top + 4.0f, cell.right, cell.bottom), colour);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
+
 }
 
 void SettingsWindow::DrawChevron(const D2D1_RECT_F& box, bool up, const D2D1_COLOR_F& colour) {
@@ -2631,8 +2702,11 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             }
             if (itemScrollMax_ > 0.0f && x >= itemsClip_.left && x <= itemsClip_.right) {
                 const float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
-                itemScroll_ = std::clamp(itemScroll_ - delta * layout::kItemHeight, 0.0f,
-                                         itemScrollMax_);
+                // A notch moves a line of the grid, which is what the eye is
+                // tracking - the old list's row height leaves every icon a third
+                // of a cell out of step with where it started.
+                const float step = layout::kTile + layout::kTileGap;
+                itemScroll_ = std::clamp(itemScroll_ - delta * step, 0.0f, itemScrollMax_);
                 LayoutRows();
                 InvalidateRect(hwnd, nullptr, FALSE);
             }

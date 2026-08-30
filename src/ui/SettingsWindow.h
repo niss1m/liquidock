@@ -198,6 +198,10 @@ private:
     void DrawSlider(const Row& row, float hover);
     void DrawToggle(const Row& row, float hover);
     void DrawChoice(const Row& row, float pointerX);
+    // Where a choice's options sit, sized to their own text and packed against
+    // the card's right edge. Drawing, hit testing and the cursor all read this,
+    // so a click lands where the eye says it should.
+    std::vector<D2D1_RECT_F> ChoiceCells(const Row& row) const;
     void DrawItem(const Row& row, bool hovered, float pointerX);
     // The open editor under an item row. Returns the field rectangles in the
     // order the enum below gives them, so drawing and hit testing cannot drift.
