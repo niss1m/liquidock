@@ -435,8 +435,26 @@ void SettingsWindow::ApplyWindowSize() {
     SetWindowPos(hwnd_, nullptr, current.left, current.top, width_, height_,
                  SWP_NOACTIVATE | SWP_NOZORDER);
     if (target_.width()) {
-        target_.Resize(static_cast<UINT>(width_), static_cast<UINT>(height_));
+        // The bitmap goes first. It wraps the swap chain's back buffer, and the
+        // flip model refuses to resize while any reference to that buffer is
+        // outstanding - so releasing it afterwards means ResizeBuffers fails,
+        // nothing is ever presented, and the compositor keeps showing the last
+        // good frame cropped to the new window size. Which looked exactly like
+        // "every tab but the first shows the item list, cut off".
         backBuffer_.Reset();
+        d2d_->SetTarget(nullptr);
+        if (!target_.Resize(static_cast<UINT>(width_), static_cast<UINT>(height_))) {
+            LogWarn("Preferences swap chain resize failed");
+        }
+    }
+    // Redrawn here, not left to WM_PAINT. The swap chain has just been resized
+    // and its buffer holds whatever was in it before, so until something draws,
+    // the window shows the *previous* page's pixels cropped to the new size -
+    // which is what switching to any tab but the first looked like: the item
+    // list, cut off. WM_PAINT would have got there eventually, and eventually
+    // is seconds while the dock's capture thread is feeding the queue.
+    if (visible_) {
+        Render();
     }
 }
 
@@ -539,8 +557,11 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
             return;
         }
     } else {
-        target_.Resize(static_cast<UINT>(width_), static_cast<UINT>(height_));
         backBuffer_.Reset();
+        if (d2d_) {
+            d2d_->SetTarget(nullptr);
+        }
+        target_.Resize(static_cast<UINT>(width_), static_cast<UINT>(height_));
     }
     if (!CreateDeviceResources()) {
         return;
