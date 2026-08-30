@@ -255,7 +255,10 @@ float4 PSMain(Varyings input) : SV_Target
         LookThrough(windowPx + offset).g,
         LookThrough(windowPx + offset * (1.0 - spread)).b);
 
-    colour = lerp(colour, float3(1.0, 1.0, 1.0), saturate(gTint.a));
+    // The tint's own colour, not a hard-coded white. It had been white since
+    // the wash was written, which was correct until the colour became a
+    // setting and then quietly ignored it.
+    colour = lerp(colour, gTint.rgb, saturate(gTint.a));
 
     // A sheet lit from above: a whisper brighter at the top than the bottom.
     // Measured off the design's own render this is small - its interior is the

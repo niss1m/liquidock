@@ -73,6 +73,12 @@ struct Settings {
     // is what its GDI rendering makes of those numbers, and DirectWrite drawing
     // light glyphs onto a dark pill does not land in the same place. These are
     // settings so the match can be dialled in rather than guessed at.
+    // What colour the glass is tinted. White by default, which is what makes
+    // the bar read as glass rather than as glass with something in it - the
+    // tint is a wash over whatever is behind, so a colour here stains the
+    // desktop showing through rather than painting over it.
+    float tintColour[3] = {1.0f, 1.0f, 1.0f};
+
     float labelFontSize = 0.0f;
     bool labelBold = false;
     // The family name, as DirectWrite understands it. A free string rather than
@@ -154,6 +160,8 @@ struct Settings {
 
     // The file's path, for the tray menu's "Preferences" command.
     static std::wstring FilePath();
+    // `#rrggbb`, the way the file writes it and the picker shows it.
+    static std::wstring HexColour(const float rgb[3]);
 
     // True when the file changed on disk since the last call. Used to reload
     // while the dock is running so the glass can be tuned by saving the file.

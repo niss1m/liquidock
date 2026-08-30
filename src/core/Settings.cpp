@@ -46,6 +46,39 @@ bool ParseBool(const std::wstring& value, bool fallback) {
 // Clamped on the way in rather than at every use. A typo in the file should
 // give a dock that looks wrong, not one that allocates a window the width of
 // three monitors or divides by zero in the wave.
+// `#rrggbb`, with or without the hash. Anything else is left alone, so a typo
+// in the file keeps the colour that was there rather than turning the dock
+// black.
+void ParseColour(const std::wstring& value, float out[3]) {
+    std::wstring hex = value;
+    if (!hex.empty() && hex.front() == L'#') {
+        hex.erase(0, 1);
+    }
+    if (hex.size() != 6) {
+        LogWarn("Unrecognised colour in settings.txt; keeping the one that was there");
+        return;
+    }
+    for (int i = 0; i < 3; ++i) {
+        wchar_t* end = nullptr;
+        const std::wstring pair = hex.substr(static_cast<size_t>(i) * 2, 2);
+        const long channel = std::wcstol(pair.c_str(), &end, 16);
+        if (end == pair.c_str()) {
+            LogWarn("Unrecognised colour in settings.txt; keeping the one that was there");
+            return;
+        }
+        out[i] = static_cast<float>(channel) / 255.0f;
+    }
+}
+
+std::wstring FormatColour(const float rgb[3]) {
+    wchar_t text[16]{};
+    swprintf(text, std::size(text), L"#%02X%02X%02X",
+             static_cast<unsigned>(std::lround(std::clamp(rgb[0], 0.0f, 1.0f) * 255.0f)),
+             static_cast<unsigned>(std::lround(std::clamp(rgb[1], 0.0f, 1.0f) * 255.0f)),
+             static_cast<unsigned>(std::lround(std::clamp(rgb[2], 0.0f, 1.0f) * 255.0f)));
+    return text;
+}
+
 float ParseFloat(const std::wstring& value, float fallback, float low, float high) {
     wchar_t* end = nullptr;
     const float parsed = std::wcstof(value.c_str(), &end);
@@ -57,6 +90,10 @@ float ParseFloat(const std::wstring& value, float fallback, float low, float hig
 }
 
 } // namespace
+
+std::wstring Settings::HexColour(const float rgb[3]) {
+    return FormatColour(rgb);
+}
 
 std::wstring Settings::FilePath() {
     return ConfigFilePath(kFileName);
@@ -95,6 +132,9 @@ void Settings::Load() {
     lightAngleDegrees = design::glass::kLightAngleDegrees;
     lightIntensity = design::glass::kLightIntensity;
     tintAlpha = design::kBarTint[3];
+    tintColour[0] = design::kBarTint[0];
+    tintColour[1] = design::kBarTint[1];
+    tintColour[2] = design::kBarTint[2];
     innerShadow = design::glass::kInnerShadow;
     rimOpacity = design::glass::kRimOpacity;
     backdrop = BackdropSource::Screen;
@@ -202,6 +242,8 @@ bool Settings::ReadFile(const std::wstring& path) {
             labelFontSize = ParseFloat(value, labelFontSize, 9.0f, design::label::kMaxFontSize);
         } else if (key == L"label-bold") {
             labelBold = ParseBool(value, labelBold);
+        } else if (key == L"tint-colour") {
+            ParseColour(value, tintColour);
         } else if (key == L"label-font") {
             labelFont = Trim(value);
             if (labelFont.empty()) {
@@ -274,6 +316,7 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"icon-size") return number(L"%.0f", iconSize);
     if (key == L"label-font-size") return number(L"%.1f", labelFontSize);
     if (key == L"label-bold") return labelBold ? L"on" : L"off";
+    if (key == L"tint-colour") return FormatColour(tintColour);
     if (key == L"label-font") return labelFont;
     if (key == L"label-pad-x") return number(L"%.0f", labelPadX);
     if (key == L"label-pad-y") return number(L"%.0f", labelPadY);
@@ -353,6 +396,7 @@ bool Settings::Save() const {
         L"follow-cursor", L"separator-image", L"divider-gap", L"icon-gap",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
+        L"tint-colour",
         L"label-font-size", L"label-bold", L"label-font", L"label-pad-x", L"label-pad-y",
         L"label-radius", L"label-gap", L"label-opacity", L"label-tail",
     };
@@ -429,6 +473,12 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"# as glass because of what the shader does to the backdrop, not\n"
              L"# because of this. Raising it is how the design gets muddy.\n"
              L"tint-alpha = %.2f\n"
+             L"\n"
+             L"# What colour the glass is tinted, as #rrggbb. White is the design's\n"
+             L"# own: the tint is a wash over whatever is behind the bar, so a\n"
+             L"# colour here stains the desktop showing through rather than\n"
+             L"# painting over it." L"\n"
+             L"tint-colour = %s\n"
              L"\n"
              L"# The dark shoulder just inside the rim, as a fraction of the\n"
              L"# depth the design's own render has. Its job is to give the\n"
@@ -536,7 +586,7 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"dwell-seconds = %.1f\n"
              L"slide-seconds = %.2f\n",
              refraction, depth, dispersion, frost, splay, lightAngleDegrees, lightIntensity,
-             tintAlpha, innerShadow, rimOpacity,
+             tintAlpha, FormatColour(tintColour).c_str(), innerShadow, rimOpacity,
              backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
              magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
              followCursor ? L"on" : L"off", separatorImage.c_str(), dividerGap, iconGap, labelFontSize,

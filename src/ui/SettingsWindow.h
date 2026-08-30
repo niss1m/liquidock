@@ -88,6 +88,7 @@ private:
     struct Row {
         enum class Kind {
             Section, Slider, Toggle, Choice,
+            Colour,        // a swatch that opens a picker
             Item,          // one icon in the dock's own grid
             Suggestion,    // one installed app not on the dock yet
             AddItem, AddSeparator
@@ -101,6 +102,7 @@ private:
         float* number = nullptr;
         bool* flag = nullptr;
         int* choice = nullptr;
+        float* rgb = nullptr; // three floats, for Kind::Colour
 
         float minimum = 0.0f;
         float maximum = 1.0f;
@@ -139,6 +141,12 @@ private:
     int ColumnsFor(Tab tab) const;
     // Resizes the window to the page being shown, keeping its top-left corner.
     void ApplyWindowSize();
+    // Moves the window one frame closer to the height the current page wants.
+    // True while it is still travelling.
+    bool StepWindowHeight(float delta);
+    // Seconds since the last frame, read once and shared.
+    float FrameDelta();
+    void ResizeToHeight(int height);
     void Render();
     // The explanation for whatever the pointer is on, drawn last so nothing
     // clips it, and following the cursor rather than living under the label.
@@ -206,6 +214,18 @@ private:
     void DrawSlider(const Row& row, float hover);
     void DrawToggle(const Row& row, float hover);
     void DrawChoice(const Row& row, float pointerX);
+    // The colour picker: a swatch on the card, and a panel under it while it is
+    // open. Saturation and value on the square, hue on the rail beneath, and a
+    // row of the colours anyone actually reaches for.
+    void DrawColour(const Row& row);
+    void DrawPicker(const D2D1_RECT_F& panel, float* rgb);
+    D2D1_RECT_F PickerPanel(const Row& row) const;
+    D2D1_RECT_F SwatchRect(const Row& row) const;
+    // Which colour the open picker is editing, or null when none is open.
+    float* OpenColourTarget() const;
+    // Which part of an open picker the pointer is on, and what that does to the
+    // colour. True if anything changed.
+    bool HandlePicker(const D2D1_RECT_F& panel, float* rgb, float x, float y, bool dragging);
     // Where a choice's options sit, sized to their own text and packed against
     // the card's right edge. Drawing, hit testing and the cursor all read this,
     // so a click lands where the eye says it should.
@@ -271,6 +291,14 @@ private:
     D2D1_RECT_F tabBounds_[kTabCount]{};
     // Which of the offered faces is selected. The setting itself is a name.
     int fontChoice_ = 0;
+    // Which colour row has its picker open, and which part of it is being
+    // dragged. -1 for none.
+    int openColour_ = -1;
+    int pickerDrag_ = -1; // 0 the square, 1 the hue rail
+    // Hue is kept beside the colour rather than derived from it: a colour with
+    // no saturation has no hue to read back, so dragging the square to the
+    // white corner would otherwise lose which hue you were on.
+    float pickerHue_ = 0.0f;
     // The tab strip's pill, travelling the same way a choice's does.
     float tabAnim_ = -1.0f;
     float tabFrom_ = 0.0f;
@@ -331,6 +359,14 @@ private:
     bool mouseTracking_ = false;
     int width_ = 0;
     int height_ = 0;
+    // Where the window is growing to. `height_` is what it is right now, which
+    // during a page change is somewhere between the two. Negative target means
+    // "no journey yet", so the first page snaps to its size rather than
+    // unfolding from nothing when the window opens.
+    int targetHeight_ = -1;
+    float heightFrom_ = 0.0f;
+    float heightElapsed_ = -1.0f;
+    float frameDelta_ = 0.0f;
 };
 
 } // namespace liquidock

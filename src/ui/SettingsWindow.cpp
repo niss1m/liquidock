@@ -85,6 +85,9 @@ constexpr float kSwitchWidth = kSwitchCircle + kSwitchGap + kSwitchBarLength;
 // reporting. The value itself changes on the click; this is only the drawing
 // catching up.
 constexpr float kToggleSeconds = 0.17f;
+// How long the window takes to grow into a longer page. Quick enough that it
+// reads as the page arriving rather than as the window being resized.
+constexpr float kGrowSeconds = 0.20f;
 constexpr float kHoverSeconds = 0.11f;
 // Long enough that sweeping the list does not strobe, short enough that
 // stopping to ask feels answered rather than waited for.
@@ -103,6 +106,18 @@ constexpr float kControlWidth = 120.0f;
 constexpr float kChoicePadX = 13.0f;
 constexpr float kChoiceHeight = 29.0f;
 constexpr float kEmptyHeight = 30.0f;
+
+// The picker. A square for saturation and value, a rail for hue under it, and
+// one row of presets - which is the shape every colour picker worth using has,
+// because the square is the part you steer and the rail is the part you choose.
+constexpr float kSwatch = 26.0f;
+constexpr float kPickerPad = 14.0f;
+constexpr float kPickerSquare = 128.0f;
+constexpr float kPickerRail = 16.0f;
+constexpr float kPickerGap = 12.0f;
+constexpr float kPresetSize = 22.0f;
+constexpr float kPickerHeight =
+    kPickerSquare + kPickerGap + kPickerRail + kPickerGap + kPresetSize + 2.0f * kPickerPad;
 
 // The faces offered by name. Every one of these ships with Windows, so the list
 // cannot offer something that is not there - and `label-font` in the file takes
@@ -194,6 +209,57 @@ float Overshoot(float t) {
     const float u = t - 1.0f;
     return 1.0f + u * u * ((kBack + 1.0f) * u + kBack);
 }
+
+// Hue in turns, saturation and value in 0..1, out to linear-ish RGB. The
+// standard conversion; written out rather than pulled in because it is six
+// lines and the alternative is a dependency.
+void HsvToRgb(float h, float sv, float value, float out[3]) {
+    h = h - std::floor(h);
+    const float sector = h * 6.0f;
+    const int face = static_cast<int>(sector) % 6;
+    const float f = sector - std::floor(sector);
+    const float p = value * (1.0f - sv);
+    const float q = value * (1.0f - sv * f);
+    const float t = value * (1.0f - sv * (1.0f - f));
+    switch (face) {
+        case 0: out[0] = value; out[1] = t; out[2] = p; break;
+        case 1: out[0] = q; out[1] = value; out[2] = p; break;
+        case 2: out[0] = p; out[1] = value; out[2] = t; break;
+        case 3: out[0] = p; out[1] = q; out[2] = value; break;
+        case 4: out[0] = t; out[1] = p; out[2] = value; break;
+        default: out[0] = value; out[1] = p; out[2] = q; break;
+    }
+}
+
+void RgbToHsv(const float rgb[3], float* hue, float* sv, float* value) {
+    const float high = std::max({rgb[0], rgb[1], rgb[2]});
+    const float low = std::min({rgb[0], rgb[1], rgb[2]});
+    const float span = high - low;
+    *value = high;
+    *sv = (high > 0.0001f) ? (span / high) : 0.0f;
+    if (span < 0.0001f) {
+        *hue = 0.0f; // grey has no hue; the caller keeps the one it had
+        return;
+    }
+    float h = 0.0f;
+    if (high == rgb[0]) {
+        h = (rgb[1] - rgb[2]) / span;
+    } else if (high == rgb[1]) {
+        h = 2.0f + (rgb[2] - rgb[0]) / span;
+    } else {
+        h = 4.0f + (rgb[0] - rgb[1]) / span;
+    }
+    h /= 6.0f;
+    *hue = h - std::floor(h);
+}
+
+// The colours worth one click. White first, because it is the design's own and
+// the one people will want back.
+const float kPresets[][3] = {
+    {1.00f, 1.00f, 1.00f}, {0.62f, 0.71f, 1.00f}, {0.45f, 0.85f, 0.98f},
+    {0.45f, 0.92f, 0.70f}, {0.98f, 0.86f, 0.45f}, {1.00f, 0.65f, 0.45f},
+    {1.00f, 0.52f, 0.62f}, {0.80f, 0.60f, 1.00f},
+};
 
 // A travel between two stops. Quick, because it is answering a click that has
 // already happened.
@@ -363,6 +429,17 @@ void SettingsWindow::BuildRows() {
         row.column = column;
         rows_.push_back(std::move(row));
     };
+    auto colour = [this](Tab tab, const wchar_t* label, const wchar_t* hint, float* rgb,
+                         int column) {
+        Row row;
+        row.kind = Row::Kind::Colour;
+        row.tab = tab;
+        row.label = label;
+        row.hint = hint;
+        row.rgb = rgb;
+        row.column = column;
+        rows_.push_back(std::move(row));
+    };
     auto choice = [this](Tab tab, const wchar_t* label, const wchar_t* hint, int* value,
                          std::vector<std::wstring> options, int column) {
         Row row;
@@ -495,6 +572,10 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Appearance, L"Opacity", L"How solid the pill behind it is",
            &settings_.labelOpacity, 0.30f, 1.0f, 2, 0, L"");
 
+    section(Tab::Appearance, L"The glass", 1);
+    colour(Tab::Appearance, L"Tint", L"What colour the bar is washed with",
+           settings_.tintColour, 1);
+
     section(Tab::Appearance, L"The pill", 1);
     slider(Tab::Appearance, L"Padding across", L"Air to the left and right of the name",
            &settings_.labelPadX, 0.0f, 40.0f, 0, 1, L" px");
@@ -548,6 +629,9 @@ float SettingsWindow::MeasureTab(Tab tab) const {
             y[column] += layout::kSectionHeight;
         } else {
             y[column] += layout::kRowHeight;
+            if (row.kind == Row::Kind::Colour && row.rgb == OpenColourTarget()) {
+                y[column] += layout::kPickerHeight + 6.0f;
+            }
         }
     }
     if (tab == Tab::Items) {
@@ -668,6 +752,9 @@ void SettingsWindow::LayoutRows() {
             }
         }
         y[column] += height;
+        if (row.kind == Row::Kind::Colour && row.rgb == OpenColourTarget()) {
+            y[column] += layout::kPickerHeight + 6.0f;
+        }
     }
 
     if (listTab) {
@@ -707,6 +794,66 @@ void SettingsWindow::ApplyWindowSize() {
     if (!hwnd_) {
         return;
     }
+    // MeasureTab has just written the page's own height into height_. That is
+    // where the window is going, not where it is: a page that is four rows
+    // longer than the last one should arrive, not appear.
+    const int wanted = height_;
+    if (targetHeight_ < 0) {
+        targetHeight_ = wanted; // first page: no journey to make
+    } else if (wanted != targetHeight_) {
+        heightFrom_ = static_cast<float>(target_.height() ? target_.height() : wanted);
+        heightElapsed_ = 0.0f;
+        targetHeight_ = wanted;
+        height_ = static_cast<int>(std::lround(heightFrom_));
+        if (visible_) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            Render();
+        }
+        return;
+    }
+    ResizeToHeight(wanted);
+    // Redrawn here, not left to WM_PAINT. The swap chain has just been resized
+    // and its buffer holds whatever was in it before, so until something draws,
+    // the window shows the *previous* page's pixels cropped to the new size -
+    // which is what switching to any tab but the first looked like: the item
+    // list, cut off. WM_PAINT would have got there eventually, and eventually
+    // is seconds while the dock's capture thread is feeding the queue.
+    if (visible_) {
+        Render();
+    }
+}
+
+bool SettingsWindow::StepWindowHeight(float delta) {
+    if (heightElapsed_ < 0.0f || targetHeight_ < 0) {
+        return false;
+    }
+    heightElapsed_ += delta;
+    const float t = heightElapsed_ / layout::kGrowSeconds;
+    int next = targetHeight_;
+    bool moving = false;
+    if (t < 1.0f) {
+        // Eased out, not overshot. A pill that goes past its stop reads as
+        // momentum; a window edge that goes past its size reads as a glitch,
+        // because for a few frames it is showing panel with nothing on it - or
+        // worse, clipping the last row off.
+        next = static_cast<int>(std::lround(
+            heightFrom_ + (static_cast<float>(targetHeight_) - heightFrom_) * Smooth(t)));
+        moving = true;
+    } else {
+        heightElapsed_ = -1.0f;
+    }
+    if (next != height_ || static_cast<int>(target_.height()) != next) {
+        height_ = next;
+        ResizeToHeight(next);
+    }
+    return moving;
+}
+
+void SettingsWindow::ResizeToHeight(int height) {
+    if (!hwnd_) {
+        return;
+    }
+    height_ = height;
     RECT current{};
     GetWindowRect(hwnd_, &current);
     // Top-left anchored: the strip stays exactly where it was clicked.
@@ -725,20 +872,23 @@ void SettingsWindow::ApplyWindowSize() {
             LogWarn("Preferences swap chain resize failed");
         }
     }
-    // Redrawn here, not left to WM_PAINT. The swap chain has just been resized
-    // and its buffer holds whatever was in it before, so until something draws,
-    // the window shows the *previous* page's pixels cropped to the new size -
-    // which is what switching to any tab but the first looked like: the item
-    // list, cut off. WM_PAINT would have got there eventually, and eventually
-    // is seconds while the dock's capture thread is feeding the queue.
-    if (visible_) {
-        Render();
-    }
+    // Deliberately no Render here. The animated path calls this from inside
+    // one, and a Render that re-enters Render opens a second frame on a swap
+    // chain that already has one - which showed up as the window growing to the
+    // new page's height and then travelling all the way back to the old one.
 }
 
 const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
     if (WindowButtonAt(x, y) >= 0 || TabAt(x, y) >= 0) {
         return IDC_HAND;
+    }
+    if (openColour_ >= 0 && static_cast<size_t>(openColour_) < rows_.size()) {
+        const Row& open = rows_[static_cast<size_t>(openColour_)];
+        const D2D1_RECT_F panel = PickerPanel(open);
+        if (open.tab == activeTab_ && x >= panel.left && x <= panel.right && y >= panel.top &&
+            y <= panel.bottom) {
+            return IDC_HAND;
+        }
     }
     if (activeTab_ == Tab::Items && !suggestions_.empty() && x >= searchRect_.left &&
         x <= searchRect_.right && y >= searchRect_.top - 4.0f && y <= searchRect_.bottom + 4.0f) {
@@ -768,6 +918,7 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
         case Row::Kind::AddItem:
         case Row::Kind::AddSeparator:
         case Row::Kind::Suggestion:
+        case Row::Kind::Colour:
             return IDC_HAND;
         case Row::Kind::Item:
             return IDC_HAND; // opens the editor, or drags to reorder
@@ -1490,7 +1641,7 @@ void SettingsWindow::DrawText(const std::wstring& text, IDWriteTextFormat* forma
                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
 }
 
-bool SettingsWindow::AdvanceAnimation() {
+float SettingsWindow::FrameDelta() {
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     if (frequency_.QuadPart == 0) {
@@ -1504,7 +1655,16 @@ bool SettingsWindow::AdvanceAnimation() {
     lastFrame_ = now;
     // A window that has been sitting idle must not have its animations jump the
     // whole way on the first frame after it wakes.
-    delta = std::clamp(delta, 0.0f, 0.05f);
+    frameDelta_ = std::clamp(delta, 0.0f, 0.05f);
+    return frameDelta_;
+}
+
+bool SettingsWindow::AdvanceAnimation() {
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    // The clock was already read for this frame, by whatever had to move before
+    // it started.
+    const float delta = frameDelta_;
 
     bool moving = false;
     // Sets a travel going when the target changes, and carries it forward when
@@ -1770,6 +1930,219 @@ void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
 
+}
+
+float* SettingsWindow::OpenColourTarget() const {
+    if (openColour_ < 0 || static_cast<size_t>(openColour_) >= rows_.size()) {
+        return nullptr;
+    }
+    return rows_[static_cast<size_t>(openColour_)].rgb;
+}
+
+D2D1_RECT_F SettingsWindow::SwatchRect(const Row& row) const {
+    const D2D1_RECT_F pill = PillRect(row);
+    const float centreY = (pill.top + pill.bottom) * 0.5f;
+    return D2D1::RectF(pill.right - layout::kPillPadX - layout::kSwatch,
+                       centreY - layout::kSwatch * 0.5f, pill.right - layout::kPillPadX,
+                       centreY + layout::kSwatch * 0.5f);
+}
+
+D2D1_RECT_F SettingsWindow::PickerPanel(const Row& row) const {
+    const D2D1_RECT_F pill = PillRect(row);
+    return D2D1::RectF(pill.left, pill.bottom + 6.0f, pill.right,
+                       pill.bottom + 6.0f + layout::kPickerHeight);
+}
+
+void SettingsWindow::DrawColour(const Row& row) {
+    if (!row.rgb) {
+        return;
+    }
+    brush_->SetColor(Mix(kTrack, kTrackHover, row.hover));
+    d2d_->FillRoundedRectangle(
+        D2D1::RoundedRect(PillRect(row), layout::kPillRadius, layout::kPillRadius), brush_.Get());
+
+    const D2D1_RECT_F swatch = SwatchRect(row);
+    const float radius = (swatch.bottom - swatch.top) * 0.5f;
+    brush_->SetColor(D2D1::ColorF(row.rgb[0], row.rgb[1], row.rgb[2], 1.0f));
+    d2d_->FillRoundedRectangle(D2D1::RoundedRect(swatch, radius, radius), brush_.Get());
+    // A hairline round it, so white on a black panel still has an edge.
+    brush_->SetColor(Grey(1.0f, 0.22f));
+    d2d_->DrawRoundedRectangle(D2D1::RoundedRect(swatch, radius, radius), brush_.Get(), 1.0f);
+}
+
+void SettingsWindow::DrawPicker(const D2D1_RECT_F& panel, float* rgb) {
+    if (!rgb) {
+        return;
+    }
+    brush_->SetColor(Grey(1.0f, 0.05f));
+    d2d_->FillRoundedRectangle(D2D1::RoundedRect(panel, 10.0f, 10.0f), brush_.Get());
+
+    float hue = pickerHue_;
+    float sv = 0.0f;
+    float value = 0.0f;
+    RgbToHsv(rgb, &hue, &sv, &value);
+    if (sv > 0.001f) {
+        pickerHue_ = hue; // a colour with saturation knows its own hue
+    }
+    hue = pickerHue_;
+
+    const float left = panel.left + layout::kPickerPad;
+    const float top = panel.top + layout::kPickerPad;
+    const float width = panel.right - panel.left - 2.0f * layout::kPickerPad;
+    const D2D1_RECT_F square = D2D1::RectF(left, top, left + width, top + layout::kPickerSquare);
+
+    // Three fills, which is how a saturation-value plane is drawn without a
+    // shader: the hue flat, white washing in from the left, black up from the
+    // bottom.
+    float pure[3]{};
+    HsvToRgb(hue, 1.0f, 1.0f, pure);
+    brush_->SetColor(D2D1::ColorF(pure[0], pure[1], pure[2], 1.0f));
+    d2d_->FillRoundedRectangle(D2D1::RoundedRect(square, 8.0f, 8.0f), brush_.Get());
+
+    auto wash = [&](D2D1_POINT_2F from, D2D1_POINT_2F to, const D2D1_COLOR_F& colour) {
+        D2D1_GRADIENT_STOP stops[2] = {{0.0f, colour}, {1.0f, colour}};
+        stops[1].color.a = 0.0f;
+        ComPtr<ID2D1GradientStopCollection> collection;
+        if (FAILED(d2d_->CreateGradientStopCollection(stops, 2, &collection))) {
+            return;
+        }
+        ComPtr<ID2D1LinearGradientBrush> gradient;
+        if (FAILED(d2d_->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(from, to),
+                                                   collection.Get(), &gradient))) {
+            return;
+        }
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(square, 8.0f, 8.0f), gradient.Get());
+    };
+    wash(D2D1::Point2F(square.left, square.top), D2D1::Point2F(square.right, square.top),
+         D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f));
+    wash(D2D1::Point2F(square.left, square.bottom), D2D1::Point2F(square.left, square.top),
+         D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f));
+
+    // Where you are on it. A ring rather than a dot, so it reads over both ends
+    // of the square.
+    const float px = square.left + sv * (square.right - square.left);
+    const float py = square.bottom - value * (square.bottom - square.top);
+    brush_->SetColor(Grey(0.0f, 0.45f));
+    d2d_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(px, py), 7.0f, 7.0f), brush_.Get(), 3.0f);
+    brush_->SetColor(Grey(1.0f, 0.95f));
+    d2d_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(px, py), 7.0f, 7.0f), brush_.Get(), 1.8f);
+
+    // The hue rail. Six runs between the primaries, which is what a hue wheel
+    // actually is; anything smoother would be a lie about the colour space.
+    const D2D1_RECT_F rail =
+        D2D1::RectF(square.left, square.bottom + layout::kPickerGap, square.right,
+                    square.bottom + layout::kPickerGap + layout::kPickerRail);
+    D2D1_GRADIENT_STOP hues[7]{};
+    for (int i = 0; i < 7; ++i) {
+        float c[3]{};
+        HsvToRgb(static_cast<float>(i) / 6.0f, 1.0f, 1.0f, c);
+        hues[i].position = static_cast<float>(i) / 6.0f;
+        hues[i].color = D2D1::ColorF(c[0], c[1], c[2], 1.0f);
+    }
+    ComPtr<ID2D1GradientStopCollection> hueStops;
+    if (SUCCEEDED(d2d_->CreateGradientStopCollection(hues, 7, &hueStops))) {
+        ComPtr<ID2D1LinearGradientBrush> gradient;
+        if (SUCCEEDED(d2d_->CreateLinearGradientBrush(
+                D2D1::LinearGradientBrushProperties(D2D1::Point2F(rail.left, rail.top),
+                                                    D2D1::Point2F(rail.right, rail.top)),
+                hueStops.Get(), &gradient))) {
+            const float r = (rail.bottom - rail.top) * 0.5f;
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(rail, r, r), gradient.Get());
+        }
+    }
+    const float hx = rail.left + hue * (rail.right - rail.left);
+    const D2D1_ROUNDED_RECT knob = D2D1::RoundedRect(
+        D2D1::RectF(hx - 3.0f, rail.top - 3.0f, hx + 3.0f, rail.bottom + 3.0f), 3.0f, 3.0f);
+    brush_->SetColor(Grey(0.0f, 0.45f));
+    d2d_->DrawRoundedRectangle(knob, brush_.Get(), 3.0f);
+    brush_->SetColor(Grey(1.0f, 0.95f));
+    d2d_->DrawRoundedRectangle(knob, brush_.Get(), 1.8f);
+
+    // The presets, and the hex beside them - which is the thing to read out
+    // when someone asks what colour you used.
+    const float presetY = rail.bottom + layout::kPickerGap;
+    for (int i = 0; i < static_cast<int>(std::size(kPresets)); ++i) {
+        const float x = square.left + i * (layout::kPresetSize + 8.0f);
+        const D2D1_RECT_F box =
+            D2D1::RectF(x, presetY, x + layout::kPresetSize, presetY + layout::kPresetSize);
+        const float r = layout::kPresetSize * 0.5f;
+        brush_->SetColor(D2D1::ColorF(kPresets[i][0], kPresets[i][1], kPresets[i][2], 1.0f));
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, r, r), brush_.Get());
+        brush_->SetColor(Grey(1.0f, 0.18f));
+        d2d_->DrawRoundedRectangle(D2D1::RoundedRect(box, r, r), brush_.Get(), 1.0f);
+    }
+    DrawText(Settings::HexColour(rgb), valueFormat_.Get(),
+             D2D1::RectF(square.left, presetY, square.right, presetY + layout::kPresetSize), kValue);
+}
+
+bool SettingsWindow::HandlePicker(const D2D1_RECT_F& panel, float* rgb, float x, float y,
+                                  bool dragging) {
+    if (!rgb) {
+        return false;
+    }
+    const float left = panel.left + layout::kPickerPad;
+    const float top = panel.top + layout::kPickerPad;
+    const float width = panel.right - panel.left - 2.0f * layout::kPickerPad;
+    const D2D1_RECT_F square = D2D1::RectF(left, top, left + width, top + layout::kPickerSquare);
+    const D2D1_RECT_F rail =
+        D2D1::RectF(square.left, square.bottom + layout::kPickerGap, square.right,
+                    square.bottom + layout::kPickerGap + layout::kPickerRail);
+
+    float hue = pickerHue_;
+    float sv = 0.0f;
+    float value = 0.0f;
+    RgbToHsv(rgb, &hue, &sv, &value);
+    if (sv > 0.001f) {
+        pickerHue_ = hue;
+    }
+
+    // Once a drag has started it keeps whichever part it started on, however
+    // far outside it the pointer wanders. A picker that hands the drag to
+    // whatever happens to be under the cursor is one that jumps to a new hue
+    // because you pulled a little too far down.
+    int part = pickerDrag_;
+    if (!dragging) {
+        if (y >= square.top && y <= square.bottom) {
+            part = 0;
+        } else if (y >= rail.top - 4.0f && y <= rail.bottom + 4.0f) {
+            part = 1;
+        } else {
+            const float presetY = rail.bottom + layout::kPickerGap;
+            if (y >= presetY && y <= presetY + layout::kPresetSize) {
+                for (int i = 0; i < static_cast<int>(std::size(kPresets)); ++i) {
+                    const float bx = square.left + i * (layout::kPresetSize + 8.0f);
+                    if (x >= bx && x <= bx + layout::kPresetSize) {
+                        rgb[0] = kPresets[i][0];
+                        rgb[1] = kPresets[i][1];
+                        rgb[2] = kPresets[i][2];
+                        float h = pickerHue_;
+                        float s = 0.0f;
+                        float v = 0.0f;
+                        RgbToHsv(rgb, &h, &s, &v);
+                        if (s > 0.001f) {
+                            pickerHue_ = h;
+                        }
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        pickerDrag_ = part;
+    }
+    if (part < 0) {
+        return false;
+    }
+
+    if (part == 0) {
+        sv = std::clamp((x - square.left) / std::max(1.0f, square.right - square.left), 0.0f, 1.0f);
+        value =
+            std::clamp((square.bottom - y) / std::max(1.0f, square.bottom - square.top), 0.0f, 1.0f);
+    } else {
+        pickerHue_ = std::clamp((x - rail.left) / std::max(1.0f, rail.right - rail.left), 0.0f, 1.0f);
+    }
+    HsvToRgb(pickerHue_, sv, value, rgb);
+    return true;
 }
 
 void SettingsWindow::DrawChevron(const D2D1_RECT_F& box, bool up, const D2D1_COLOR_F& colour) {
@@ -2462,11 +2835,28 @@ void SettingsWindow::Render() {
         }
     }
 
+    // Before BeginFrame, because it may resize the swap chain - and the flip
+    // model will not resize one that has a frame open on it.
+    const bool growing = StepWindowHeight(FrameDelta());
+    if (!backBuffer_ && target_.width()) {
+        ComPtr<IDXGISurface> surface;
+        if (FAILED(target_.swap_chain()->GetBuffer(0, IID_PPV_ARGS(&surface)))) {
+            return;
+        }
+        const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f,
+            96.0f);
+        if (FAILED(d2d_->CreateBitmapFromDxgiSurface(surface.Get(), &properties, &backBuffer_))) {
+            return;
+        }
+    }
+
     if (!target_.BeginFrame()) {
         return;
     }
 
-    const bool moving = AdvanceAnimation();
+    const bool moving = AdvanceAnimation() || growing;
     if (moving) {
         SetTimer(hwnd_, kAnimTimer, kAnimIntervalMs, nullptr);
     } else {
@@ -2536,6 +2926,7 @@ void SettingsWindow::Render() {
             case Row::Kind::Slider: DrawSlider(row, row.hover); break;
             case Row::Kind::Toggle: DrawToggle(row, row.hover); break;
             case Row::Kind::Choice: DrawChoice(row, hovered ? pointerX_ : -1.0f); break;
+            case Row::Kind::Colour: DrawColour(row); break;
             default: break;
         }
 
@@ -2629,6 +3020,15 @@ void SettingsWindow::Render() {
         }
         d2d_->PopAxisAlignedClip();
         DrawDetailBar();
+    }
+
+    // After the rows, so the panel sits over the one below it rather than
+    // under it.
+    if (openColour_ >= 0 && static_cast<size_t>(openColour_) < rows_.size()) {
+        const Row& row = rows_[static_cast<size_t>(openColour_)];
+        if (row.tab == activeTab_) {
+            DrawPicker(PickerPanel(row), row.rgb);
+        }
     }
 
     // Last, and over everything: the strip at the top does not scroll, so it
@@ -2728,6 +3128,16 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             }
             pointerX_ = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
             pointerY_ = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
+
+            if (pickerDrag_ >= 0 && openColour_ >= 0 &&
+                static_cast<size_t>(openColour_) < rows_.size()) {
+                const Row& open = rows_[static_cast<size_t>(openColour_)];
+                if (HandlePicker(PickerPanel(open), open.rgb, pointerX_, pointerY_, true)) {
+                    CommitChange();
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
 
             if (dragRow_ >= 0) {
                 if (ApplyPointer(dragRow_, pointerX_, true)) {
@@ -2834,6 +3244,23 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 return 0;
             }
 
+            // The open picker is a panel, not a row, so it has to be tested
+            // before RowAt - which finds nothing over it.
+            if (openColour_ >= 0 && static_cast<size_t>(openColour_) < rows_.size()) {
+                const Row& open = rows_[static_cast<size_t>(openColour_)];
+                const D2D1_RECT_F panel = PickerPanel(open);
+                if (open.tab == activeTab_ && x >= panel.left && x <= panel.right &&
+                    y >= panel.top && y <= panel.bottom) {
+                    pickerDrag_ = -1;
+                    if (HandlePicker(panel, open.rgb, x, y, false)) {
+                        CommitChange();
+                    }
+                    SetCapture(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+
             const int row = RowAt(x, y);
             if (row >= 0) {
                 const Row::Kind kind = rows_[static_cast<size_t>(row)].kind;
@@ -2880,6 +3307,18 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     SetCapture(hwnd);
                     return 0;
                 }
+                if (rows_[static_cast<size_t>(row)].kind == Row::Kind::Colour) {
+                    // The whole card opens it. A swatch is twenty-six pixels of
+                    // target on a four-hundred pixel row, and the row does not
+                    // do anything else.
+                    CommitEdit();
+                    openColour_ = (openColour_ == row) ? -1 : row;
+                    pickerDrag_ = -1;
+                    LayoutRows();
+                    ApplyWindowSize();
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
                 // A slider's card *is* its track, so a click anywhere on it
                 // sets the value - the label is written on the track, not
                 // beside it. A choice still needs its segments: clicking its
@@ -2913,6 +3352,11 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         }
 
         case WM_LBUTTONUP:
+            if (pickerDrag_ >= 0) {
+                pickerDrag_ = -1;
+                ReleaseCapture();
+                return 0;
+            }
             if (dragRow_ >= 0) {
                 dragRow_ = -1;
                 ReleaseCapture();

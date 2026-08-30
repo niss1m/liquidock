@@ -1325,7 +1325,9 @@ void DockWindow::Render() {
         constants.tint[2] = 1.0f;
         constants.tint[3] = 1.0f;
     } else {
-        memcpy(constants.tint, design::kBarTint, sizeof(constants.tint));
+        constants.tint[0] = settings_.tintColour[0];
+        constants.tint[1] = settings_.tintColour[1];
+        constants.tint[2] = settings_.tintColour[2];
         constants.tint[3] = settings_.tintAlpha;
     }
 
