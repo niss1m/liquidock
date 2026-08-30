@@ -132,9 +132,24 @@ static const float kRimHalfPx = 1.1;
 // vertical edges the design's 0.130 is almost entirely refraction pulling in
 // what is beside the pane, not a rim - our own render measures 0.127 there
 // from refraction alone.
-static const float kRimBase = 0.005;
-static const float kRimAmp = 0.425;
-static const float kRimLean = 0.106;
+// Two different things were being confused for one. What makes the rim bright
+// along the top and bottom and dark down the sides is not the lamp - it is that
+// a sheet of glass reflects the sky above it and the ground below, and its
+// vertical edges are looking sideways at neither. That is a property of the
+// sheet, and it does not move when you move the light.
+//
+// So: an environment term on how vertical the edge's normal is, with the sky
+// brighter than the ground, plus a genuinely directional term from the light
+// angle. Fitted to the design at its own stated -45: top 0.535, bottom 0.324,
+// sides near nothing.
+//
+// Treating the whole rim as directional is what forced the light angle to -90
+// to reproduce a design that says -45, and then to an offset that made the
+// number on the slider disagree with the light it produced.
+static const float kRimBase = 0.020;   // everywhere, including edge-on
+static const float kRimSky = 0.410;    // the sheet looking up or down
+static const float kRimGround = 0.070; // how much brighter up is than down
+static const float kRimLight = 0.050;  // the lamp, and only the lamp
 
 // The shoulder is directional too, though less sharply: the design's is -17
 // under the top edge and -7 beside the left one.
@@ -268,16 +283,17 @@ float4 PSMain(Varyings input) : SV_Target
     const float2 lightPlane = float2(-cos(LIGHT_ANGLE), sin(LIGHT_ANGLE));
     // +1 where the edge faces the light, -1 where it faces away, 0 edge-on.
     const float facing = dot(outward, lightPlane);
-    // How square-on the edge is, either way. With the light overhead this is 1
-    // along the top and bottom and 0 down the sides, which is the shape the
-    // design's perimeter has.
-    const float square = abs(facing);
+    // How much the edge looks up or down rather than sideways. This is the
+    // sheet's own geometry, not the light's, so it is taken from the normal
+    // directly instead of from the light direction.
+    const float edgeUp = abs(outward.y);
+    const float upward = -outward.y; // +1 at the top edge, -1 at the bottom
 
     const float inward = -dist;
     const float u = saturate((inward - kRimCentrePx * scale) / (kShoulderPx * scale));
     const float shoulder = u * pow(1.0 - u, 3.0) / 0.1055;
     colour *= 1.0 - shoulder * kShoulderDepth * saturate(INNER_SHADOW) *
-                        lerp(kShoulderSide, 1.0, square);
+                        lerp(kShoulderSide, 1.0, edgeUp);
 
     // --- The rim -----------------------------------------------------------
 
@@ -305,7 +321,8 @@ float4 PSMain(Varyings input) : SV_Target
     // glass rather than like a rectangle with a border.
     const float intensity = saturate(LIGHT_INTENSITY);
     const float lift = saturate(intensity * saturate(RIM_OPACITY) *
-                                (kRimBase + square * (kRimAmp + kRimLean * facing)) / 0.80);
+                                (kRimBase + edgeUp * (kRimSky + kRimGround * upward) +
+                                 kRimLight * facing) / 0.80);
     colour = lerp(colour, float3(1.0, 1.0, 1.0), rim * lift);
 
     // A far softer sheen inside the rim where the surface turns towards the

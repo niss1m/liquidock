@@ -79,13 +79,10 @@ namespace glass {
 // anyone to translate between them.
 inline constexpr float kLightAngleDegrees = -45.0f;
 
-// What to add before the shader uses it. Figma's angle and ours are not the
-// same zero: the design's render, at its stated -45, has its bright edges along
-// the top and the bottom with the sides dark, and reproducing that in our own
-// terms takes -90. One calibration point only fixes an offset, not a direction,
-// so this is exactly that - the amount that makes the panel's number produce
-// the panel's picture.
-inline constexpr float kLightAngleOffset = -45.0f;
+// No offset. There was one, to make -45 behave like -90, and it was a fudge
+// covering a wrong model: the rim's top-and-bottom character comes from the
+// sheet reflecting sky and ground, not from where the lamp is, so the lamp
+// never needed moving. The angle here is the angle in the shader.
 inline constexpr float kLightIntensity = 0.80f;
 inline constexpr float kRefraction = 0.80f;
 inline constexpr float kDepth = 0.20f;
