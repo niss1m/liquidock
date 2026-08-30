@@ -148,6 +148,10 @@ constexpr float kSearchHeight = 26.0f;
 // The fixed row of add buttons above the list, and how wide each one is.
 constexpr float kActionRow = 56.0f;
 constexpr float kActionWidth = 124.0f;
+// Tall enough to aim at. These were the list's row height with seven pixels
+// taken off each side, which left a twenty-pixel target under a fourteen-pixel
+// word - a button the size of its own text, which is not a button.
+constexpr float kActionHeight = 34.0f;
 constexpr float kCorner = design::kCornerRadius;
 } // namespace layout
 
@@ -526,7 +530,7 @@ void SettingsWindow::LayoutRows() {
         }
         if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
             row.bounds = D2D1::RectF(actionX, layout::kContentTop, actionX + layout::kActionWidth,
-                                     layout::kContentTop + layout::kItemHeight);
+                                     layout::kContentTop + layout::kActionHeight);
             row.control = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
             actionX += layout::kActionWidth + 10.0f;
             continue;
@@ -1964,13 +1968,27 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
     const auto& items = items_.items();
 
     if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
-        const D2D1_RECT_F pill = D2D1::RectF(row.bounds.left, row.bounds.top + 7.0f,
-                                             row.bounds.right, row.bounds.bottom - 7.0f);
-        brush_->SetColor(hovered ? Grey(1.0f, 0.16f) : Grey(1.0f, 0.10f));
-        d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 6.0f, 6.0f), brush_.Get());
+        // Outlined rather than filled. These two are the only things on the page
+        // that *do* something rather than set something, and a filled block
+        // states that more loudly than a page of settings wants - while an
+        // outline still reads as a button because nothing else here has one.
+        // The half-pixel is what keeps the stroke on the pixel grid instead of
+        // spread across two of them at half brightness.
+        const D2D1_RECT_F pill =
+            D2D1::RectF(row.bounds.left + 0.5f, row.bounds.top + 0.5f, row.bounds.right - 0.5f,
+                        row.bounds.bottom - 0.5f);
+        const float radius = (pill.bottom - pill.top) * 0.5f;
+        const float lit = std::clamp(row.hover, 0.0f, 1.0f);
+        if (lit > 0.0f) {
+            brush_->SetColor(Grey(1.0f, 0.07f * lit));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, radius, radius), brush_.Get());
+        }
+        brush_->SetColor(Mix(Grey(1.0f, 0.17f), Grey(1.0f, 0.38f), lit));
+        d2d_->DrawRoundedRectangle(D2D1::RoundedRect(pill, radius, radius), brush_.Get(), 1.0f);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         DrawText(row.label, valueFormat_.Get(),
-                 D2D1::RectF(pill.left, pill.top, pill.right, pill.bottom), kLabel);
+                 D2D1::RectF(pill.left, pill.top, pill.right, pill.bottom),
+                 Mix(kValue, kLabel, lit));
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
         return;
     }
