@@ -103,8 +103,39 @@ static const float kRimHalfPx = 1.1;
 // perimeter the rim lands at 152 at the top, 144 and 124 at the sides and 119
 // at the bottom, so it is a bright edge the whole way round that leans toward
 // the light rather than a highlight on one side.
-static const float kRimLift = 0.56;
-static const float kRimLean = 0.09;
+// How far the rim lifts what is behind it toward white. Sampled around the
+// design's whole perimeter, as the lift each point makes toward white:
+//
+//   top edge     0.535
+//   bottom edge  0.324
+//   sides        0.082     which is to say: very nearly no rim at all
+//
+// Measured against each edge's own interior rather than the backdrop outside
+// it. Against the outside the numbers come out lower and are not comparable
+// between the design's render and ours, because the design's surroundings are
+// the same wallpaper the glass is showing and a screenshot's are whatever
+// window happens to be there.
+//
+// The border nearly *disappears* on the vertical edges. That is the difference
+// between a reflection and a stroke, and drawing it at even weight the whole
+// way round - which is what these numbers replaced - is what makes an edge read
+// as drawn on rather than lit.
+//
+// Split into the part that is there regardless, the part that depends on how
+// square-on the edge is to the light, and the lean that makes the top brighter
+// than the bottom. Quoted at the design's own light intensity of 0.80 and
+// divided by it here, so the setting scales them.
+// Solved from the three measurements. The base is very nearly nothing: on the
+// vertical edges the design's 0.130 is almost entirely refraction pulling in
+// what is beside the pane, not a rim - our own render measures 0.127 there
+// from refraction alone.
+static const float kRimBase = 0.005;
+static const float kRimAmp = 0.425;
+static const float kRimLean = 0.106;
+
+// The shoulder is directional too, though less sharply: the design's is -17
+// under the top edge and -7 beside the left one.
+static const float kShoulderSide = 0.40;
 
 // The rest of the ridge. A bright line on its own is a line; what makes an edge
 // read as raised is what happens either side of it. Measured off the design's
@@ -230,15 +261,21 @@ float4 PSMain(Varyings input) : SV_Target
     // across the band and returns to zero at both ends, which is the shape the
     // measurements have; the constant is its own maximum, so kShoulderDepth is
     // the depth at the peak rather than an amplitude to be guessed at.
+    // Screen space has y pointing down, hence the sign on the second component.
+    const float2 lightPlane = float2(-cos(LIGHT_ANGLE), sin(LIGHT_ANGLE));
+    // +1 where the edge faces the light, -1 where it faces away, 0 edge-on.
+    const float facing = dot(outward, lightPlane);
+    // How square-on the edge is, either way. With the light overhead this is 1
+    // along the top and bottom and 0 down the sides, which is the shape the
+    // design's perimeter has.
+    const float square = abs(facing);
+
     const float inward = -dist;
     const float u = saturate((inward - kRimCentrePx * scale) / (kShoulderPx * scale));
     const float shoulder = u * pow(1.0 - u, 3.0) / 0.1055;
-    colour *= 1.0 - shoulder * kShoulderDepth;
+    colour *= 1.0 - shoulder * kShoulderDepth * lerp(kShoulderSide, 1.0, square);
 
     // --- The rim -----------------------------------------------------------
-    // Screen space has y pointing down, hence the sign on the second component.
-    const float2 lightPlane = float2(-cos(LIGHT_ANGLE), sin(LIGHT_ANGLE));
-    const float facing = dot(outward, lightPlane);
 
     // A crisp line just *inside* the boundary, not a broad Fresnel dome - and
     // not on the boundary itself, where the shape's own antialiasing fades to
@@ -263,7 +300,8 @@ float4 PSMain(Varyings input) : SV_Target
     // what a specular highlight does, and the whole reason glass looks like
     // glass rather than like a rectangle with a border.
     const float intensity = saturate(LIGHT_INTENSITY);
-    const float lift = saturate(intensity * (kRimLift + kRimLean * facing));
+    const float lift =
+        saturate(intensity * (kRimBase + square * (kRimAmp + kRimLean * facing)) / 0.80);
     colour = lerp(colour, float3(1.0, 1.0, 1.0), rim * lift);
 
     // A far softer sheen inside the rim where the surface turns towards the

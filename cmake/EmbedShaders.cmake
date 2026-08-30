@@ -32,9 +32,28 @@ foreach(shader ${SHADERS})
     endif()
     list(APPEND seen_symbols "${symbol}")
     file(READ "${shader}" source)
-    string(APPEND header "\ninline constexpr std::string_view k${symbol} = R\"HLSL(\n")
-    string(APPEND header "${source}")
-    string(APPEND header ")HLSL\";\n")
+    # Emitted as several adjacent raw literals rather than one. MSVC caps a
+    # single string literal at 16380 bytes and fails with C2026 past it, which
+    # is a limit a well-commented shader reaches sooner than you would think -
+    # and the error points at generated code with no hint of which file grew.
+    # Adjacent literals concatenate, and the cap is per literal.
+    string(LENGTH "${source}" source_length)
+    string(APPEND header "\ninline constexpr std::string_view k${symbol} =\n")
+    set(offset 0)
+    while(offset LESS source_length)
+        math(EXPR remaining "${source_length} - ${offset}")
+        set(piece 8000)
+        if(remaining LESS piece)
+            set(piece ${remaining})
+        endif()
+        string(SUBSTRING "${source}" ${offset} ${piece} chunk)
+        string(APPEND header "    R\"HLSL(${chunk})HLSL\"\n")
+        math(EXPR offset "${offset} + ${piece}")
+    endwhile()
+    if(source_length EQUAL 0)
+        string(APPEND header "    R\"HLSL()HLSL\"\n")
+    endif()
+    string(APPEND header "    ;\n")
     string(APPEND table "    {\"${filename}\", k${symbol}},\n")
 endforeach()
 
