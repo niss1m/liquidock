@@ -43,6 +43,14 @@ float BounceOffset(float time) {
 // The magnification wave. A raised cosine: zero slope at the cursor and zero
 // slope where it dies out, so neither the peak nor the edge of the wave has a
 // crease in it.
+float DockLayout::GapPx(Element::Gap gap) const {
+    switch (gap) {
+        case Element::Gap::Icon: return kIconGap;
+        case Element::Gap::Divider: return dividerGap_;
+        default: return 0.0f;
+    }
+}
+
 float DockLayout::WaveScale(float distance) const {
     if (!magnification_) {
         return 1.0f;
@@ -113,7 +121,7 @@ void DockLayout::SetItems(const std::vector<DockItem>& items) {
             Element hairline;
             hairline.itemIndex = -1;
             hairline.baseWidth = kSeparatorWidth;
-            hairline.gapBefore = kGroupGap;
+            hairline.gapBefore = Element::Gap::Divider;
             elements_.push_back(hairline);
             separatorPlaced = true;
         }
@@ -124,7 +132,7 @@ void DockLayout::SetItems(const std::vector<DockItem>& items) {
             Element rule;
             rule.itemIndex = -1;
             rule.baseWidth = kSeparatorWidth;
-            rule.gapBefore = first ? 0.0f : kGroupGap;
+            rule.gapBefore = first ? Element::Gap::None : Element::Gap::Divider;
             elements_.push_back(rule);
             first = false;
             continue;
@@ -134,12 +142,12 @@ void DockLayout::SetItems(const std::vector<DockItem>& items) {
         element.itemIndex = static_cast<int>(index);
         element.baseWidth = kIconSize;
         if (first) {
-            element.gapBefore = 0.0f;
+            element.gapBefore = Element::Gap::None;
         } else if (!elements_.empty() && elements_.back().itemIndex < 0) {
             // The far side of a rule, whether it is the group's or the user's.
-            element.gapBefore = kGroupGap;
+            element.gapBefore = Element::Gap::Divider;
         } else {
-            element.gapBefore = kIconGap;
+            element.gapBefore = Element::Gap::Icon;
         }
         elements_.push_back(element);
         first = false;
@@ -169,7 +177,7 @@ void DockLayout::Bounce(int itemIndex) {
 float DockLayout::ContentWidth() const {
     float total = 0.0f;
     for (const Element& element : elements_) {
-        total += element.gapBefore + element.baseWidth * element.scale;
+        total += GapPx(element.gapBefore) + element.baseWidth * element.scale;
     }
     return total * scale();
 }
@@ -200,7 +208,7 @@ float DockLayout::TargetScale(const Element& element, float baseCenterX) const {
 float DockLayout::RestingBarWidth() const {
     float total = 0.0f;
     for (const Element& element : elements_) {
-        total += element.gapBefore + element.baseWidth;
+        total += GapPx(element.gapBefore) + element.baseWidth;
     }
     return (total + 2.0f * kPaddingX) * scale();
 }
@@ -213,7 +221,7 @@ float DockLayout::MaxBarWidth() const {
     centers.reserve(elements_.size());
     float x = 0.0f;
     for (const Element& element : elements_) {
-        x += element.gapBefore;
+        x += GapPx(element.gapBefore);
         centers.push_back(x + element.baseWidth * 0.5f);
         x += element.baseWidth;
     }
@@ -236,7 +244,7 @@ float DockLayout::MaxBarWidth() const {
                 (elements_[i].itemIndex < 0)
                     ? 1.0f
                     : WaveScale(std::fabs(cursor - centers[i] * scale()));
-            total += elements_[i].gapBefore + elements_[i].baseWidth * magnified;
+            total += GapPx(elements_[i].gapBefore) + elements_[i].baseWidth * magnified;
         }
         widest = std::max(widest, total);
     }
@@ -261,7 +269,7 @@ bool DockLayout::Advance(float deltaSeconds) {
     {
         float x = restLeft;
         for (const Element& element : elements_) {
-            x += element.gapBefore * scale();
+            x += GapPx(element.gapBefore) * scale();
             restCenters.push_back(x + element.baseWidth * 0.5f * scale());
             x += element.baseWidth * scale();
         }
@@ -365,7 +373,7 @@ void DockLayout::Place() {
 
     float x = left;
     for (const Element& element : elements_) {
-        x += element.gapBefore * scale();
+        x += GapPx(element.gapBefore) * scale();
         const float width = element.baseWidth * element.scale * scale();
         const float centerX = x + width * 0.5f;
         x += width;

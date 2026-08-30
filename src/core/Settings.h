@@ -76,6 +76,11 @@ struct Settings {
     // Nexus theme's `sep.png` or anything else can be dropped in.
     std::wstring separatorImage;
 
+    // The air on each side of a divider. The design's own value is a group gap;
+    // raising it is how a divider stops being a hairline between neighbours and
+    // starts being a break between runs.
+    float dividerGap = 0.0f;
+
     // --- Placement --------------------------------------------------------
     // Which monitor the dock lives on. 0 means the primary one; otherwise it is
     // a 1-based index into the display order, and an index that no longer

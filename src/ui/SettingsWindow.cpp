@@ -295,6 +295,9 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Dock, L"Reach", L"How far the swell carries", &settings_.influencePx, 40.0f, 320.0f,
            0, 0, L" px");
 
+    slider(Tab::Dock, L"Divider spacing", L"The air on each side of a divider",
+           &settings_.dividerGap, 0.0f, 120.0f, 0, 0, L" px");
+
     section(Tab::Dock, L"Movement", 1);
     toggle(Tab::Dock, L"Follow the cursor",
            L"The row slides so the hovered icon stays put", &settings_.followCursor, 1);

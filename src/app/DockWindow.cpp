@@ -627,6 +627,14 @@ void DockWindow::ApplySettings() {
     }
     layout_.SetMagnification(settings_.magnification, settings_.maxScale, settings_.influencePx,
                              settings_.iconBulge, settings_.followCursor);
+    layout_.SetDividerGap(settings_.dividerGap);
+    // The layout's own numbers after a reload. They are otherwise only
+    // checkable with a screenshot, and a dock is exactly the thing that is hard
+    // to screenshot - it excludes itself from capture in screen mode, and
+    // another dock on the same edge ruins the shot in either.
+    LogDebug("Bar now {:.0f}x{:.0f} logical at {:.0f}%, divider gap {:.0f}",
+             layout_.RestingBarWidth(), layout_.bar_half_height() * 2.0f,
+             layout_.scale() * 100.0f, settings_.dividerGap);
     // The frost is a cached blur at a particular radius, and the radius is a
     // setting, so it is stale by definition after a reload.
     frostDirty_ = true;

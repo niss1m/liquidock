@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "core/DesignTokens.h"
 #include "model/DockItem.h"
 
 namespace liquidock {
@@ -61,6 +62,12 @@ public:
 
     // The size the user asked for, as a fraction of the design's own icon size.
     void SetIconScale(float userScale);
+
+    // How much air a divider gets on each side, in design units - so it scales
+    // with the dock like every other measurement in the layout. Held as a kind
+    // of gap rather than baked into each element, because changing it must not
+    // require rebuilding the element list from items the layout does not keep.
+    void SetDividerGap(float gap) { dividerGap_ = gap; }
 
     // Everything the layout draws is this times the design's measurements: the
     // size asked for, reduced further if the row would not fit the screen. One
@@ -136,14 +143,20 @@ public:
 private:
     // A slot in the row: an icon, or the hairline between the two groups.
     struct Element {
+        // What kind of space goes in front of this element. Resolved to pixels
+        // at use, not stored as one, so the divider gap is a setting rather
+        // than something frozen when the list was built.
+        enum class Gap { None, Icon, Divider };
+
         int itemIndex = -1; // -1 marks the separator
         float baseWidth = 0.0f;
-        float gapBefore = 0.0f;
+        Gap gapBefore = Gap::None;
         float scale = 1.0f;
         float velocity = 0.0f;
         float bounceTime = -1.0f; // seconds into the launch bounce, or < 0
     };
 
+    float GapPx(Element::Gap gap) const;
     float ContentWidth() const;
     float WaveScale(float distance) const;
     float TargetScale(const Element& element, float baseCenterX) const;
@@ -164,6 +177,7 @@ private:
     float influencePx_ = 1.0f;
     bool bulge_ = false;
     bool followCursor_ = false;
+    float dividerGap_ = design::kGroupGap;
     float userScale_ = 1.0f;
     // 1 until the row would not fit the screen.
     float fitScale_ = 1.0f;

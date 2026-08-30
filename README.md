@@ -90,7 +90,7 @@ each line, so comments you add survive being edited from the UI.
 
 Glass: `backdrop`, `refraction`, `depth`, `dispersion`, `frost`, `splay`, `light-angle`,
 `light-intensity`, `tint-alpha`. Magnification: `magnification`, `max-scale`, `influence`,
-`icon-bulge`, `follow-cursor`. Appearance: `separator-image`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `hide-when-covered`,
+`icon-bulge`, `follow-cursor`. Appearance: `separator-image`, `divider-gap`. Placement: `monitor`, `reserve-space`. Auto-hide: `auto-hide`, `hide-when-covered`,
 `dwell-seconds`, `slide-seconds`.
 
 `hide-when-covered` is **on** by default and is what makes auto-hide behave the way people expect:
@@ -124,6 +124,12 @@ sides; the hovered icon drifts by a few pixels and the dock sits still.
 `separator-image` replaces the divider between the two groups with an image, stretched to the
 divider's height and keeping its own aspect, so a 1×59 hairline stays a hairline. A Nexus theme's
 `sep.png` drops straight in. Empty draws the built-in rule.
+
+`divider-gap` is the air on each side of a divider, and applies to both kinds — the structural
+hairline between the two groups and any divider you place yourself. The design's own value is 8;
+raising it is how a divider stops being a hairline between two neighbours and starts being a break
+between runs. It scales with the dock like every other measurement in the layout, so the bar grows
+by twice the increase times the dock's scale.
 
 `icon-bulge` is **off** by default. With it on, the glass swells around a raised icon — the bar's
 outline fuses to the icons and reads as liquid clinging to them, which is a much stronger effect
