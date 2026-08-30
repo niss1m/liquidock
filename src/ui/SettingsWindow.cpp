@@ -103,6 +103,12 @@ constexpr float kControlWidth = 120.0f;
 constexpr float kChoicePadX = 13.0f;
 constexpr float kChoiceHeight = 29.0f;
 constexpr float kEmptyHeight = 30.0f;
+
+// The faces offered by name. Every one of these ships with Windows, so the list
+// cannot offer something that is not there - and `label-font` in the file takes
+// any family at all, which is the escape hatch for anyone who has a favourite.
+const wchar_t* const kLabelFonts[] = {L"Segoe UI", L"Segoe UI Variable Text", L"Verdana",
+                                      L"Consolas"};
 // The value gets a column of its own on the right of the card, and the track
 // stops before it. Sharing the width meant that at the top of a range the knob
 // arrived on top of the number - "2.00x" with a caret through the x, and two
@@ -155,7 +161,7 @@ constexpr float kActionHeight = 34.0f;
 constexpr float kCorner = design::kCornerRadius;
 } // namespace layout
 
-const wchar_t* const kTabNames[] = {L"Items", L"Glass", L"Dock", L"Behaviour"};
+const wchar_t* const kTabNames[] = {L"Items", L"Glass", L"Dock", L"Appearance", L"Behaviour"};
 
 D2D1_COLOR_F Grey(float level, float alpha) {
     return D2D1::ColorF(level, level, level, alpha);
@@ -431,10 +437,36 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Behaviour, L"Slide time", L"How long the dock takes to arrive",
            &settings_.slideSeconds, 0.0f, 0.8f, 2, 0, L" s");
 
-    section(Tab::Behaviour, L"Hover label", 1);
-    slider(Tab::Behaviour, L"Label size", L"The name shown above an icon",
-           &settings_.labelFontSize, 9.0f, design::label::kMaxFontSize, 1, 1, L" px");
-    toggle(Tab::Behaviour, L"Bold label", L"Heavier text on the pill", &settings_.labelBold, 1);
+    // --- Appearance -------------------------------------------------------
+    // The hover label used to be two rows tucked under the hiding settings,
+    // which is where it ended up rather than where it belongs: nothing about it
+    // is behaviour. It has its own page now, and the rest of the pill with it.
+    fontChoice_ = 0;
+    for (int i = 0; i < static_cast<int>(std::size(layout::kLabelFonts)); ++i) {
+        if (_wcsicmp(settings_.labelFont.c_str(), layout::kLabelFonts[i]) == 0) {
+            fontChoice_ = i;
+            break;
+        }
+    }
+    section(Tab::Appearance, L"Hover label", 0);
+    choice(Tab::Appearance, L"Font", L"The face the name is set in", &fontChoice_,
+           {L"Segoe", L"Variable", L"Verdana", L"Consolas"}, 0);
+    slider(Tab::Appearance, L"Size", L"The name shown above an icon", &settings_.labelFontSize,
+           9.0f, design::label::kMaxFontSize, 1, 0, L" px");
+    toggle(Tab::Appearance, L"Bold", L"Heavier text on the pill", &settings_.labelBold, 0);
+    slider(Tab::Appearance, L"Opacity", L"How solid the pill behind it is",
+           &settings_.labelOpacity, 0.30f, 1.0f, 2, 0, L"");
+
+    section(Tab::Appearance, L"The pill", 1);
+    slider(Tab::Appearance, L"Padding across", L"Air to the left and right of the name",
+           &settings_.labelPadX, 0.0f, 40.0f, 0, 1, L" px");
+    slider(Tab::Appearance, L"Padding down", L"Air above and below it",
+           &settings_.labelPadY, 0.0f, 24.0f, 0, 1, L" px");
+    slider(Tab::Appearance, L"Corner", L"How round the pill is", &settings_.labelRadius, 0.0f,
+           24.0f, 0, 1, L" px");
+    slider(Tab::Appearance, L"Distance", L"Between the icon and the label", &settings_.labelGap,
+           0.0f, 40.0f, 0, 1, L" px");
+    toggle(Tab::Appearance, L"Tail", L"The point that aims at the icon", &settings_.labelTail, 1);
 
     for (Row& row : rows_) {
         if (row.kind != Row::Kind::Toggle || !row.label) {
@@ -1393,6 +1425,12 @@ void SettingsWindow::DrainIcons() {
 }
 
 void SettingsWindow::CommitChange() {
+    // The font is chosen by index and stored by name, because the file takes any
+    // family that is installed and the window only offers the four that always
+    // are.
+    if (fontChoice_ >= 0 && fontChoice_ < static_cast<int>(std::size(layout::kLabelFonts))) {
+        settings_.labelFont = layout::kLabelFonts[fontChoice_];
+    }
     settings_.backdrop =
         backdropChoice_ == 1 ? BackdropSource::Screen : BackdropSource::Wallpaper;
     if (onChanged_) {

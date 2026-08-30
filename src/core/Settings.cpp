@@ -109,6 +109,13 @@ void Settings::Load() {
     iconSize = design::kDefaultIconSize;
     labelFontSize = design::label::kFontSize;
     labelBold = design::label::kBold;
+    labelFont = design::label::kFontFamily;
+    labelPadX = design::label::kPaddingX;
+    labelPadY = design::label::kPaddingY;
+    labelRadius = design::label::kRadius;
+    labelGap = design::label::kGap;
+    labelOpacity = design::label::kFill[3];
+    labelTail = true;
     iconBulge = false;
 
     monitorIndex = 0;
@@ -195,6 +202,23 @@ bool Settings::ReadFile(const std::wstring& path) {
             labelFontSize = ParseFloat(value, labelFontSize, 9.0f, design::label::kMaxFontSize);
         } else if (key == L"label-bold") {
             labelBold = ParseBool(value, labelBold);
+        } else if (key == L"label-font") {
+            labelFont = Trim(value);
+            if (labelFont.empty()) {
+                labelFont = design::label::kFontFamily;
+            }
+        } else if (key == L"label-pad-x") {
+            labelPadX = ParseFloat(value, labelPadX, 0.0f, 40.0f);
+        } else if (key == L"label-pad-y") {
+            labelPadY = ParseFloat(value, labelPadY, 0.0f, 24.0f);
+        } else if (key == L"label-radius") {
+            labelRadius = ParseFloat(value, labelRadius, 0.0f, 24.0f);
+        } else if (key == L"label-gap") {
+            labelGap = ParseFloat(value, labelGap, 0.0f, 40.0f);
+        } else if (key == L"label-opacity") {
+            labelOpacity = ParseFloat(value, labelOpacity, 0.30f, 1.0f);
+        } else if (key == L"label-tail") {
+            labelTail = ParseBool(value, labelTail);
         } else if (key == L"icon-bulge") {
             iconBulge = ParseBool(value, iconBulge);
         } else if (key == L"monitor") {
@@ -250,6 +274,13 @@ std::wstring Settings::ValueFor(const std::wstring& key) const {
     if (key == L"icon-size") return number(L"%.0f", iconSize);
     if (key == L"label-font-size") return number(L"%.1f", labelFontSize);
     if (key == L"label-bold") return labelBold ? L"on" : L"off";
+    if (key == L"label-font") return labelFont;
+    if (key == L"label-pad-x") return number(L"%.0f", labelPadX);
+    if (key == L"label-pad-y") return number(L"%.0f", labelPadY);
+    if (key == L"label-radius") return number(L"%.0f", labelRadius);
+    if (key == L"label-gap") return number(L"%.0f", labelGap);
+    if (key == L"label-opacity") return number(L"%.2f", labelOpacity);
+    if (key == L"label-tail") return labelTail ? L"on" : L"off";
     if (key == L"icon-bulge") return iconBulge ? L"on" : L"off";
     if (key == L"monitor") {
         if (monitorIndex <= 0) {
@@ -322,7 +353,8 @@ bool Settings::Save() const {
         L"follow-cursor", L"separator-image", L"divider-gap", L"icon-gap",
         L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
         L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
-        L"label-font-size", L"label-bold",
+        L"label-font-size", L"label-bold", L"label-font", L"label-pad-x", L"label-pad-y",
+        L"label-radius", L"label-gap", L"label-opacity", L"label-tail",
     };
     for (const wchar_t* key : kAllKeys) {
         if (std::find(written.begin(), written.end(), key) == written.end()) {
@@ -461,6 +493,20 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              L"label-font-size = %.1f\n"
              L"label-bold = %s\n"
              L"\n"
+             L"# The family name, as DirectWrite understands it. Anything installed\n"
+             L"# works; an unknown name falls back to whatever the system offers.\n"
+             L"label-font = %s\n"
+             L"\n"
+             L"# The pill the label sits on: the air around the text, how round its\n"
+             L"# corners are, how far its tail sits below the icon, how opaque it is,\n"
+             L"# and whether it has a tail at all.\n"
+             L"label-pad-x = %.0f\n"
+             L"label-pad-y = %.0f\n"
+             L"label-radius = %.0f\n"
+             L"label-gap = %.0f\n"
+             L"label-opacity = %.2f\n"
+             L"label-tail = %s\n"
+             L"\n"
              L"# Whether the glass swells around a raised icon. Off by default: it\n"
              L"# fuses the bar's outline to the icons, which reads as liquid clinging\n"
              L"# to them rather than as a pane of glass.\n"
@@ -494,7 +540,8 @@ bool Settings::WriteDefaults(const std::wstring& path) const {
              backdrop == BackdropSource::Screen ? L"screen" : L"wallpaper",
              magnification ? L"on" : L"off", iconSize, maxScale, influencePx,
              followCursor ? L"on" : L"off", separatorImage.c_str(), dividerGap, iconGap, labelFontSize,
-             labelBold ? L"on" : L"off",
+             labelBold ? L"on" : L"off", labelFont.c_str(), labelPadX, labelPadY, labelRadius,
+             labelGap, labelOpacity, labelTail ? L"on" : L"off",
              iconBulge ? L"on" : L"off", monitorText, reserveSpace ? L"on" : L"off",
              autoHide ? L"on" : L"off", hideWhenCovered ? L"on" : L"off", dwellSeconds,
              slideSeconds);

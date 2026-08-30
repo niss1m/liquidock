@@ -184,6 +184,9 @@ inline constexpr float kMaxFontSize = 22.0f;
 inline constexpr float kPaddingX = 11.0f;
 inline constexpr float kPaddingY = 5.0f;
 inline constexpr float kRadius = 8.0f;
+// The face itself. Nexus asks for plain "Segoe UI"; the preferences window
+// offers the variable one and a couple of others beside it.
+inline constexpr wchar_t kFontFamily[] = L"Segoe UI";
 // The tail. Measured to the point, not to the pill's flat bottom edge, so the
 // gap below stays the same whatever the tail's height is.
 inline constexpr float kTailWidth = 13.0f;

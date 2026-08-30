@@ -75,6 +75,26 @@ struct Settings {
     // settings so the match can be dialled in rather than guessed at.
     float labelFontSize = 0.0f;
     bool labelBold = false;
+    // The family name, as DirectWrite understands it. A free string rather than
+    // one of a fixed few: the preferences window offers the faces every Windows
+    // has, and anything else typed in here is honoured as long as it is
+    // installed. An unknown name falls back the way DirectWrite always does.
+    std::wstring labelFont;
+
+    // The pill the label sits on. All of these were constants tuned against a
+    // photograph of Nexus, which is a good starting point and a bad rule: the
+    // right padding for "Firefox" at 16px is not the right padding for a long
+    // path at 22.
+    float labelPadX = 0.0f;
+    float labelPadY = 0.0f;
+    float labelRadius = 0.0f;
+    // Between the top of the icon and the tip of the tail.
+    float labelGap = 0.0f;
+    // How opaque the pill is. The label has to stay readable over a photograph,
+    // so the floor is deliberately high.
+    float labelOpacity = 0.0f;
+    // The little point connecting the pill to the icon under it.
+    bool labelTail = true;
 
     // Whether the glass swells around a raised icon. Off by default: it fuses
     // the bar's silhouette to the icons, which reads as liquid clinging to them

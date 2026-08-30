@@ -82,8 +82,8 @@ private:
     // table declarative, which is what makes it cheap to add a setting.
     // Which page a row lives on. Items first: it is what the window is most
     // often opened for.
-    enum class Tab { Items, Glass, Dock, Behaviour };
-    static constexpr int kTabCount = 4;
+    enum class Tab { Items, Glass, Dock, Appearance, Behaviour };
+    static constexpr int kTabCount = 5;
 
     struct Row {
         enum class Kind {
@@ -261,6 +261,8 @@ private:
     D2D1_RECT_F searchRect_{};
     Tab activeTab_ = Tab::Items;
     D2D1_RECT_F tabBounds_[kTabCount]{};
+    // Which of the offered faces is selected. The setting itself is a name.
+    int fontChoice_ = 0;
     D2D1_RECT_F buttonBounds_[2]{};
     // Where the rule between the two grids sits, in the panel's own space.
     float gridRuleY_ = 0.0f;

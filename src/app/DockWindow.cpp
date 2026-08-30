@@ -544,7 +544,7 @@ bool DockWindow::CreateResources() {
     if (!text_.Initialize(*device_, settings_.labelFontSize,
                           settings_.labelBold ? DWRITE_FONT_WEIGHT_BOLD
                                               : DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                          L"Segoe UI")) {
+                          settings_.labelFont.c_str())) {
         return false;
     }
 
@@ -677,6 +677,7 @@ void DockWindow::ReloadSettings() {
     const float previousIconSize = settings_.iconSize;
     const float previousFontSize = settings_.labelFontSize;
     const bool previousBold = settings_.labelBold;
+    const std::wstring previousFont = settings_.labelFont;
     const bool previousAutoHide = autoHide_;
 
     settings_.Load();
@@ -700,15 +701,16 @@ void DockWindow::ReloadSettings() {
         UpdatePlacement();
     }
 
-    // The text format is built once and holds the size and weight, so a change
-    // to either has to rebuild it - editing the file and watching the label
-    // change is the whole point of these two being settings.
-    if (device_ && (settings_.labelFontSize != previousFontSize ||
-                    settings_.labelBold != previousBold)) {
+    // The text format is built once and holds the family, size and weight, so a
+    // change to any of them has to rebuild it - editing the setting and watching
+    // the label change is the whole point of them being settings.
+    if (device_ &&
+        (settings_.labelFontSize != previousFontSize || settings_.labelBold != previousBold ||
+         settings_.labelFont != previousFont)) {
         text_.Initialize(*device_, settings_.labelFontSize,
                          settings_.labelBold ? DWRITE_FONT_WEIGHT_BOLD
                                              : DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                         L"Segoe UI");
+                         settings_.labelFont.c_str());
         RequestRedraw();
     }
 
@@ -1750,11 +1752,11 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
         return moving;
     }
 
-    const float width = text_.MeasureWidth(name) + 2.0f * design::label::kPaddingX;
+    const float width = text_.MeasureWidth(name) + 2.0f * settings_.labelPadX;
     // From the setting rather than the token: kLabelHeight is sized for the
     // largest font the setting allows, because that is what the window has to
     // reserve headroom for, not what this label is actually drawn at.
-    const float height = settings_.labelFontSize + 2.0f * design::label::kPaddingY;
+    const float height = settings_.labelFontSize + 2.0f * settings_.labelPadY;
     // Measured off where a *fully magnified* icon reaches, not off this icon's
     // current top. The icon under the cursor is at full size anyway, so the
     // tail still lands just above it - but the height no longer rides the swell,
@@ -1768,8 +1770,9 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     left = std::clamp(left, 4.0f, std::max(4.0f, viewWidth - width - 4.0f));
     // The gap is measured to the tip of the tail, so the pill itself sits a
     // tail's height further up.
-    const float point = iconTop - design::label::kGap;
-    const float bottom = point - design::label::kTailHeight;
+    const float point = iconTop - settings_.labelGap;
+    const float tail = settings_.labelTail ? design::label::kTailHeight : 0.0f;
+    const float bottom = point - tail;
     const D2D1_RECT_F pill = D2D1::RectF(left, bottom - height, left + width, bottom);
 
     auto colour = [](const float rgba[4], float alpha) {
@@ -1778,9 +1781,11 @@ bool DockWindow::RenderHoverLabel(float scale, float slideLogical, float deltaSe
     // The tail points at the icon, not at the middle of the pill: at either end
     // of the row the pill is pushed inward to stay on screen, and a tail centred
     // on it would then be pointing at a neighbour.
-    text_.FillTooltip(pill, design::label::kRadius, icon->centerX, design::label::kTailWidth,
-                      design::label::kTailHeight, colour(design::label::kFill, labelAlpha_),
-                      colour(design::label::kEdge, labelAlpha_));
+    const float fill[4] = {design::label::kFill[0], design::label::kFill[1],
+                           design::label::kFill[2], settings_.labelOpacity};
+    text_.FillTooltip(pill, settings_.labelRadius, icon->centerX,
+                      settings_.labelTail ? design::label::kTailWidth : 0.0f, tail,
+                      colour(fill, labelAlpha_), colour(design::label::kEdge, labelAlpha_));
     text_.DrawInkCentred(name, pill, colour(design::label::kText, labelAlpha_));
     text_.End();
 
