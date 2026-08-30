@@ -85,7 +85,14 @@ static const float kMaxDispersion = 0.16;
 // 2.25x export - 0.44 logical, genuinely sub-pixel - with its neighbours only
 // partly lit. A wide soft one is a glow, and a glow is the single most Aero
 // thing a surface can do.
-static const float kRimPx = 0.8;
+// Where the bright line sits, measured inward from the boundary, and how wide
+// it is. Not *on* the boundary: that pixel is the shape's own antialiasing, so
+// it is only partly covered and anything drawn there is composited at a
+// fraction of its strength. Measured, the rim came out at 37 over the interior
+// where the design has 95, and the missing two thirds was coverage. A pixel
+// further in it lands on solid ground.
+static const float kRimCentrePx = 1.5;
+static const float kRimHalfPx = 1.1;
 
 // How far the rim lifts what is behind it toward white, at the light intensity
 // the design states (0.80), and how much of that leans with the light.
@@ -98,6 +105,23 @@ static const float kRimPx = 0.8;
 // the light rather than a highlight on one side.
 static const float kRimLift = 0.56;
 static const float kRimLean = 0.09;
+
+// The rest of the ridge. A bright line on its own is a line; what makes an edge
+// read as raised is what happens either side of it. Measured off the design's
+// render as its deviation from a plain blur of itself:
+//
+//   0.9 px outside   -12    a tight dark edge against whatever is behind
+//   at the boundary  +95    the bright line
+//   0.9 px inside    -17    the shoulder, at its darkest
+//   2.2 px inside     -9
+//   4.4 px inside      0
+//
+// Dark, bright, dark. Without the two dark parts the highlight has nothing to
+// stand on and reads as paint rather than as a lit edge.
+static const float kShoulderPx = 4.5;
+static const float kShoulderDepth = 0.26;
+static const float kShadowPx = 3.0;
+static const float kShadowAlpha = 0.20;
 
 Varyings VSMain(uint id : SV_VertexID)
 {
@@ -135,13 +159,22 @@ float4 PSMain(Varyings input) : SV_Target
     const float aa = max(fwidth(dist), 1e-4);
     const float2 gradient = float2(ddx(dist), ddy(dist));
 
-    const float coverage = 1.0 - smoothstep(-aa, aa, dist);
-    if (coverage <= 0.0)
-    {
-        discard;
-    }
-
     const float scale = max(PIXEL_SCALE, 0.5);
+
+    const float coverage = 1.0 - smoothstep(-aa, aa, dist);
+    if (coverage <= 0.001)
+    {
+        // Outside the pane, but not nothing: the design puts a tight dark edge
+        // here, and it is half of why the bright line reads as a ridge. Black
+        // at a falling alpha, premultiplied - which over any backdrop is the
+        // same as multiplying it down, and needs no second sample to do it.
+        const float shadow = saturate(1.0 - dist / (kShadowPx * scale));
+        if (shadow <= 0.002)
+        {
+            discard;
+        }
+        return float4(0.0, 0.0, 0.0, shadow * kShadowAlpha);
+    }
 
     // --- The bevel ---------------------------------------------------------
     // Two parameters with two jobs, and they are now genuinely different ones.
@@ -192,6 +225,16 @@ float4 PSMain(Varyings input) : SV_Target
     colour += (1.0 - colour) * 0.025 * (1.0 - vertical);
     colour *= 1.0 - 0.02 * vertical;
 
+    // The shoulder: a dark band just inside the rim, deepest about a pixel in
+    // and gone by four and a half. u*(1-u)^3 peaks at a quarter of the way
+    // across the band and returns to zero at both ends, which is the shape the
+    // measurements have; the constant is its own maximum, so kShoulderDepth is
+    // the depth at the peak rather than an amplitude to be guessed at.
+    const float inward = -dist;
+    const float u = saturate((inward - kRimCentrePx * scale) / (kShoulderPx * scale));
+    const float shoulder = u * pow(1.0 - u, 3.0) / 0.1055;
+    colour *= 1.0 - shoulder * kShoulderDepth;
+
     // --- The rim -----------------------------------------------------------
     // Screen space has y pointing down, hence the sign on the second component.
     const float2 lightPlane = float2(-cos(LIGHT_ANGLE), sin(LIGHT_ANGLE));
@@ -208,9 +251,9 @@ float4 PSMain(Varyings input) : SV_Target
     // that appears on one side and a shadow on the other. An earlier version
     // had it at 0.20 on the unlit side, which is a quarter of what the design
     // shows, and is why the bottom of the bar had no edge to it at all.
-    const float rimCentre = kRimPx * 0.55 * scale;
-    const float rimHalf = kRimPx * 0.75 * scale;
-    const float rim = saturate(1.0 - abs(-dist - rimCentre) / max(rimHalf, 1e-4));
+    const float rimCentre = kRimCentrePx * scale;
+    const float rimHalf = kRimHalfPx * scale;
+    const float rim = saturate(1.0 - abs(inward - rimCentre) / max(rimHalf, 1e-4));
 
     // A *reflection*, not a stroke. Adding a constant is what makes an edge
     // read as painted on: over a dark backdrop it is a grey line, over a bright
