@@ -1210,18 +1210,19 @@ void SettingsWindow::DrawSlider(const Row& row, float hover) {
     const float t = std::clamp((*row.number - row.minimum) / span, 0.0f, 1.0f);
     const float knobX = row.control.left + t * (row.control.right - row.control.left);
 
-    // The filled part runs from the start of the track, which is past the
-    // label, to the knob. It used to start at the card's left edge and sweep
-    // under the label on its way; at a low value that put a rounded cap through
-    // the first letters of the very setting it belonged to.
-    const float trackLeft = row.control.left - layout::kKnobWidth;
-    if (knobX - trackLeft > 2.0f) {
-        brush_->SetColor(Mix(kFill, kFillHover, hover));
-        d2d_->FillRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(trackLeft, pill.top, knobX, pill.bottom),
-                              layout::kPillRadius, layout::kPillRadius),
-            brush_.Get());
-    }
+    // The fill runs from the card's left edge, under the label, the way the
+    // reference does - the label sits on filled track. Only the *thumb* is kept
+    // out of the label, which is the part that was crossing text.
+    d2d_->PushLayer(D2D1::LayerParameters(pill, nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                          D2D1::IdentityMatrix(), 1.0f, nullptr,
+                                          D2D1_LAYER_OPTIONS_NONE),
+                    nullptr);
+    brush_->SetColor(Mix(kFill, kFillHover, hover));
+    d2d_->FillRoundedRectangle(
+        D2D1::RoundedRect(D2D1::RectF(pill.left, pill.top, knobX + layout::kKnobInset, pill.bottom),
+                          layout::kPillRadius, layout::kPillRadius),
+        brush_.Get());
+    d2d_->PopLayer();
 
     // The knob. A bar rather than a circle: a circle on a track this tall reads
     // as a bead threaded on a wire, and the reference's is a caret sitting in
