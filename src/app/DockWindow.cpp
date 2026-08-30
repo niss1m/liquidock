@@ -380,7 +380,7 @@ bool DockWindow::DockIsCovered() const {
     // And the foreground alone is not enough either: a window can sit over the
     // dock without being the one you are typing in.
     char culprit[64]{};
-    bool covered = !CoverWatch::DesktopIsForeground(culprit, std::size(culprit));
+    bool covered = CoverWatch::WorkingInAnApp(culprit, std::size(culprit));
     if (!covered) {
         covered = CoverWatch::IsCovered(bar, culprit, std::size(culprit));
     }

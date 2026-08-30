@@ -47,7 +47,11 @@ public:
     // geometry alone answers it badly: an app window that stops short of the
     // bottom of the screen overlaps nothing, so a purely geometric check leaves
     // the dock sitting on top of the work you just switched to.
-    static bool DesktopIsForeground(char* culprit = nullptr, size_t culpritChars = 0);
+    // True when the window in front is one the user could actually be working
+    // in: visible, on screen, not minimised, not cloaked, not ours and not the
+    // shell's. False means the desktop is what is showing, whatever the
+    // foreground handle happens to still point at.
+    static bool WorkingInAnApp(char* culprit = nullptr, size_t culpritChars = 0);
 
 private:
     static void CALLBACK EventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject,

@@ -49,31 +49,43 @@ struct ScanState {
     size_t culpritChars = 0;
 };
 
+// A window someone could actually be working in. The alt-tab test, near
+// enough: visible, on screen, not minimised, not one of ours, not the shell's
+// own furniture, and not a tool window, overlay or owned popup - which
+// deliberately excludes other docks and always-on-top widgets, since those are
+// not "in the way" in any sense the user means.
+bool IsWorkWindow(HWND hwnd, DWORD ownProcess) {
+    if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) {
+        return false;
+    }
+    DWORD process = 0;
+    GetWindowThreadProcessId(hwnd, &process);
+    if (process == ownProcess) {
+        return false;
+    }
+    const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if ((exStyle & WS_EX_TOOLWINDOW) != 0) {
+        return false;
+    }
+    if (GetWindow(hwnd, GW_OWNER) != nullptr && (exStyle & WS_EX_APPWINDOW) == 0) {
+        return false;
+    }
+    if (IsShellWindow(hwnd) || IsCloaked(hwnd)) {
+        return false;
+    }
+    // A window with no area is not covering anything either, and plenty of
+    // processes keep one around as a message sink.
+    RECT box{};
+    if (!GetWindowRect(hwnd, &box) || box.right <= box.left || box.bottom <= box.top) {
+        return false;
+    }
+    return true;
+}
+
 BOOL CALLBACK ScanProc(HWND hwnd, LPARAM param) {
     auto* state = reinterpret_cast<ScanState*>(param);
 
-    if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) {
-        return TRUE;
-    }
-
-    DWORD process = 0;
-    GetWindowThreadProcessId(hwnd, &process);
-    if (process == state->ownProcess) {
-        return TRUE; // the dock, its menu and its preferences do not count
-    }
-
-    const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    // The alt-tab test, near enough: a window someone is working in is one they
-    // could switch to. Tool windows, overlays and owned popups are not - and
-    // that deliberately includes other docks and always-on-top widgets, which
-    // are not "in the way" in any sense the user means.
-    if ((exStyle & WS_EX_TOOLWINDOW) != 0) {
-        return TRUE;
-    }
-    if (GetWindow(hwnd, GW_OWNER) != nullptr && (exStyle & WS_EX_APPWINDOW) == 0) {
-        return TRUE;
-    }
-    if (IsShellWindow(hwnd) || IsCloaked(hwnd)) {
+    if (!IsWorkWindow(hwnd, state->ownProcess)) {
         return TRUE;
     }
 
@@ -165,25 +177,26 @@ void CALLBACK CoverWatch::EventProc(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObje
     }
 }
 
-bool CoverWatch::DesktopIsForeground(char* culprit, size_t culpritChars) {
+bool CoverWatch::WorkingInAnApp(char* culprit, size_t culpritChars) {
     const HWND foreground = GetForegroundWindow();
     if (!foreground) {
-        return true; // nothing focused at all
+        return false; // nothing focused at all
     }
-    DWORD process = 0;
-    GetWindowThreadProcessId(foreground, &process);
-    if (process == GetCurrentProcessId()) {
-        // Our own preferences window counts as the desktop: opening it is not a
-        // reason for the dock it configures to run away.
-        return true;
-    }
-    if (IsShellWindow(foreground)) {
-        return true;
+    // The same test the scan uses, so the two cannot disagree about what counts
+    // as a window. This used to ask only "is the foreground the desktop", and
+    // answered "no" for a foreground window that was minimised, cloaked or
+    // gone - which is what Show Desktop routinely leaves behind. The dock then
+    // hid itself from an empty desktop, which is the one place it must not.
+    //
+    // Our own preferences window is excluded by the same rule: opening the
+    // window that configures the dock is not a reason for the dock to leave.
+    if (!IsWorkWindow(foreground, GetCurrentProcessId())) {
+        return false;
     }
     if (culprit && culpritChars > 0) {
         GetClassNameA(foreground, culprit, static_cast<int>(culpritChars));
     }
-    return false;
+    return true;
 }
 
 bool CoverWatch::IsCovered(const RECT& screenRect, char* culprit, size_t culpritChars) {
