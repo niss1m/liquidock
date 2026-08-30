@@ -1857,26 +1857,27 @@ void SettingsWindow::DrawHeader() {
     // to keep the panel's corners, squared off below by a second fill - a
     // rounded rectangle would have rounded the bottom two as well, and a plain
     // one would have squared off all four.
+    // Inset by a pixel so it stops short of the panel's own outline. Painting
+    // to the edge covered that outline, and putting it back with two lines drew
+    // it twice - which is what turned the top of the window into a box with
+    // sides brighter than the rest of the frame.
     brush_->SetColor(kPanel);
     d2d_->FillRoundedRectangle(
-        D2D1::RoundedRect(D2D1::RectF(0.5f, 0.5f, layout::kWidth - 0.5f, bottom), layout::kCorner,
-                          layout::kCorner),
+        D2D1::RoundedRect(D2D1::RectF(1.0f, 1.0f, layout::kWidth - 1.0f, bottom),
+                          layout::kCorner - 1.0f, layout::kCorner - 1.0f),
         brush_.Get());
-    d2d_->FillRectangle(D2D1::RectF(0.5f, layout::kCorner, layout::kWidth - 0.5f, bottom),
+    // Squared off below: a rounded rectangle would have rounded the bottom two
+    // corners as well, and a plain one would have squared off all four.
+    d2d_->FillRectangle(D2D1::RectF(1.0f, layout::kCorner, layout::kWidth - 1.0f, bottom),
                         brush_.Get());
-    // The panel's own edge, redrawn over the fill that just covered it.
-    brush_->SetColor(kPanelEdge);
-    d2d_->DrawLine(D2D1::Point2F(0.5f, layout::kCorner), D2D1::Point2F(0.5f, bottom), brush_.Get(),
-                   1.0f);
-    d2d_->DrawLine(D2D1::Point2F(layout::kWidth - 0.5f, layout::kCorner),
-                   D2D1::Point2F(layout::kWidth - 0.5f, bottom), brush_.Get(), 1.0f);
 
     // A hairline under it, but only while there is something to scroll. A
     // header separated from a page that cannot move is a line for its own sake.
     if (itemScrollMax_ > 0.0f) {
         brush_->SetColor(Grey(1.0f, 0.07f));
-        d2d_->FillRectangle(D2D1::RectF(1.0f, bottom - 1.0f, layout::kWidth - 1.0f, bottom),
-                            brush_.Get());
+        d2d_->FillRectangle(
+            D2D1::RectF(layout::kPadding, bottom - 1.0f, layout::kWidth - layout::kPadding, bottom),
+            brush_.Get());
     }
 
     DrawText(L"LiquiDock", titleFormat_.Get(),
