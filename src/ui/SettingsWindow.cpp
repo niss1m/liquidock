@@ -1,3 +1,4 @@
+#include "resources/Resource.h"
 #include "ui/SettingsWindow.h"
 
 #include <shellapi.h>
@@ -371,6 +372,17 @@ bool SettingsWindow::Create(GraphicsDevice& device, const Settings& settings,
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = kWindowClass;
+    // The application icon, so Alt+Tab, the taskbar and the title bar all show
+    // the same thing Explorer does for the executable. Loaded at both sizes
+    // rather than letting Windows scale one: a 32-pixel icon squeezed into 16
+    // is the blurriest thing on the screen.
+    HINSTANCE self = GetModuleHandleW(nullptr);
+    wc.hIcon = static_cast<HICON>(LoadImageW(self, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXICON),
+                                             GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(self, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
+                                               GetSystemMetrics(SM_CXSMICON),
+                                               GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
     RegisterClassExW(&wc);
 
     // An ordinary top-level window, not a panel belonging to the dock. It was

@@ -83,11 +83,19 @@ add_executable(liquidock WIN32
     # `cmake -E vs_link_exe --manifests`. Passing /MANIFEST:EMBED and
     # /MANIFESTINPUT by hand instead leaves that list empty, and mt.exe fails
     # with c10100a7 "No manifest inputs were specified".
-    src/app/liquidock.manifest)
+    src/app/liquidock.manifest
+    # The application icon and version block. Explorer, the taskbar and Alt+Tab
+    # all read this rather than anything the program does at runtime.
+    resources/LiquiDock.rc)
 
 add_dependencies(liquidock liquidock_shaders)
 
 target_include_directories(liquidock PRIVATE src "${GENERATED_DIR}")
+# The resource script includes "resources/Resource.h" by that path, and rc.exe
+# needs the project root on its search path to find it.
+target_include_directories(liquidock PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+set_source_files_properties(resources/LiquiDock.rc PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
 
 target_compile_definitions(liquidock PRIVATE
     UNICODE

@@ -1,0 +1,41 @@
+#include <windows.h>
+
+#include "resources/Resource.h"
+
+// The application icon. First in the file on purpose: Explorer shows whichever
+// icon resource has the lowest ordinal as the executable's own, so this has to
+// come before anything else that might be added later.
+IDI_APPICON ICON "LiquiDock.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION LIQUIDOCK_VERSION_COMMAS
+PRODUCTVERSION LIQUIDOCK_VERSION_COMMAS
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+FILEFLAGS VS_FF_DEBUG
+#else
+FILEFLAGS 0
+#endif
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0" // US English, Unicode
+        BEGIN
+            VALUE "CompanyName", "WEBLANE LABS"
+            VALUE "FileDescription", "LiquiDock"
+            VALUE "FileVersion", LIQUIDOCK_VERSION_STRING
+            VALUE "InternalName", "liquidock"
+            VALUE "LegalCopyright", "Copyright (C) WEBLANE LABS. Licensed under the BSL 1.1."
+            VALUE "OriginalFilename", "liquidock.exe"
+            VALUE "ProductName", "LiquiDock"
+            VALUE "ProductVersion", LIQUIDOCK_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
