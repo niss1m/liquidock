@@ -135,6 +135,9 @@ private:
     void CommitChange();
     void CommitItems();
 
+    // The rounded card a setting sits on. For a slider it is also the track,
+    // which is why the whole row responds to a click.
+    D2D1_RECT_F PillRect(const Row& row) const;
     void DrawSlider(const Row& row, bool hovered);
     void DrawToggle(const Row& row, bool hovered);
     void DrawChoice(const Row& row, float pointerX);

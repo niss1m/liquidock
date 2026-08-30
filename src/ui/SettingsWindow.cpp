@@ -32,11 +32,23 @@ constexpr float kTabGap = 6.0f;
 constexpr float kTabPadX = 18.0f;
 constexpr float kTabsTop = 66.0f;
 constexpr float kContentTop = kTabsTop + kTabHeight + 22.0f;
-constexpr float kRowHeight = 54.0f;
+// A row is a card: the label, what it is for, and the control all live on one
+// rounded track, and for a slider that track *is* the control. Measured off the
+// reference: a 651x70 pill with a radius of 12 and a 12 px gap, which is a
+// radius of 0.17 of the height and a gap of 0.17 again.
+constexpr float kRowHeight = 62.0f;   // pitch, gap included
+constexpr float kPillHeight = 52.0f;
+constexpr float kPillRadius = 9.0f;
+constexpr float kPillPadX = 16.0f;
+// The knob: a bright bar half the track's height, three pixels wide, kept a
+// radius clear of either end so it never rides the rounding.
+constexpr float kKnobWidth = 3.0f;
+constexpr float kKnobHeight = 26.0f;
+constexpr float kKnobInset = kPillRadius + 5.0f;
 constexpr float kSectionHeight = 46.0f;
 constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
-constexpr float kValueWidth = 48.0f;
+constexpr float kValueWidth = 66.0f;
 constexpr float kFooterHeight = 34.0f;
 // One line per item. The path used to sit under the name on a second line,
 // which is a lot of vertical space spent on something you only want when you
@@ -80,8 +92,13 @@ const D2D1_COLOR_F kSection = Grey(1.0f, 0.42f);
 const D2D1_COLOR_F kLabel = Grey(1.0f, 0.88f);
 const D2D1_COLOR_F kHint = Grey(1.0f, 0.40f);
 const D2D1_COLOR_F kValue = Grey(1.0f, 0.62f);
-const D2D1_COLOR_F kTrack = Grey(1.0f, 0.14f);
-const D2D1_COLOR_F kFill = Grey(1.0f, 0.70f);
+// The track, and the part of it behind the value. The fill has to be clearly
+// brighter than the track and clearly dimmer than the text, or it reads as a
+// second control rather than as how far along this one is.
+const D2D1_COLOR_F kTrack = Grey(1.0f, 0.07f);
+const D2D1_COLOR_F kTrackHover = Grey(1.0f, 0.10f);
+const D2D1_COLOR_F kFill = Grey(1.0f, 0.17f);
+const D2D1_COLOR_F kFillHover = Grey(1.0f, 0.21f);
 const D2D1_COLOR_F kKnob = Grey(1.0f, 0.95f);
 const D2D1_COLOR_F kRowHover = Grey(1.0f, 0.045f);
 const D2D1_COLOR_F kOn = D2D1::ColorF(0.25f, 0.60f, 1.0f, 0.95f);
@@ -393,12 +410,22 @@ void SettingsWindow::LayoutRows() {
             row.control = D2D1::RectF(row.bounds.right - 3.0f * layout::kItemButton, top,
                                       row.bounds.right, top + layout::kItemButton);
         } else {
-            // The control hugs the right-hand edge of its column, with the
-            // numeric readout beyond it, so every control in a column shares one
-            // baseline.
-            const float controlRight = row.bounds.right - layout::kValueWidth;
-            row.control = D2D1::RectF(controlRight - layout::kControlWidth, row.bounds.top + 12.0f,
-                                      controlRight, row.bounds.top + 34.0f);
+            const D2D1_RECT_F pill = D2D1::RectF(
+                row.bounds.left, row.bounds.top,
+                row.bounds.right, row.bounds.top + layout::kPillHeight);
+            if (row.kind == Row::Kind::Slider) {
+                // The knob's travel, not a separate widget: the card is the
+                // track, so the value maps across the whole card less the
+                // margin that keeps the knob off the rounded ends.
+                row.control = D2D1::RectF(pill.left + layout::kKnobInset, pill.top,
+                                          pill.right - layout::kKnobInset, pill.bottom);
+            } else {
+                // Toggles and choices keep a widget on the right of the card.
+                const float centreY = (pill.top + pill.bottom) * 0.5f;
+                row.control =
+                    D2D1::RectF(pill.right - layout::kPillPadX - layout::kControlWidth,
+                                centreY - 12.0f, pill.right - layout::kPillPadX, centreY + 12.0f);
+            }
         }
         y[column] += height;
     }
@@ -473,6 +500,8 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
         case Row::Kind::Toggle:
             return IDC_HAND; // the whole row flips it
         case Row::Kind::Slider:
+            // The whole card, because the whole card is the track.
+            return (y <= PillRect(row).bottom) ? IDC_HAND : IDC_ARROW;
         case Row::Kind::Choice:
             return inControl ? IDC_HAND : IDC_ARROW;
         case Row::Kind::AddItem:
@@ -568,6 +597,9 @@ bool SettingsWindow::CreateDeviceResources() {
     hintFormat_->SetTrimming(&trimming, ellipsis.Get());
     LD_CHECK(format(12.5f, DWRITE_FONT_WEIGHT_NORMAL, &valueFormat_));
     valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    // The value is drawn into the whole height of the card now, not onto a
+    // single baseline beside a control, so it has to find its own middle.
+    valueFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     return true;
 }
 
@@ -981,35 +1013,60 @@ void SettingsWindow::DrawText(const std::wstring& text, IDWriteTextFormat* forma
                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
 }
 
+D2D1_RECT_F SettingsWindow::PillRect(const Row& row) const {
+    return D2D1::RectF(row.bounds.left, row.bounds.top, row.bounds.right,
+                       row.bounds.top + layout::kPillHeight);
+}
+
 void SettingsWindow::DrawSlider(const Row& row, bool hovered) {
-    const float centreY = (row.control.top + row.control.bottom) * 0.5f;
-    const float radius = 2.0f;
-    const D2D1_ROUNDED_RECT track = D2D1::RoundedRect(
-        D2D1::RectF(row.control.left, centreY - radius, row.control.right, centreY + radius),
-        radius, radius);
-    brush_->SetColor(kTrack);
-    d2d_->FillRoundedRectangle(track, brush_.Get());
+    const D2D1_RECT_F pill = PillRect(row);
+    const D2D1_ROUNDED_RECT card =
+        D2D1::RoundedRect(pill, layout::kPillRadius, layout::kPillRadius);
+
+    brush_->SetColor(hovered ? kTrackHover : kTrack);
+    d2d_->FillRoundedRectangle(card, brush_.Get());
 
     const float span = std::max(row.maximum - row.minimum, 1e-5f);
     const float t = std::clamp((*row.number - row.minimum) / span, 0.0f, 1.0f);
     const float knobX = row.control.left + t * (row.control.right - row.control.left);
 
-    if (t > 0.0f) {
-        brush_->SetColor(kFill);
+    // The filled part, clipped to the card so its square right edge cannot
+    // escape the rounding at either end. Drawn as a plain rectangle inside that
+    // clip rather than a second rounded rect: a rounded right edge would read as
+    // a separate pill sitting on the track instead of as part of it.
+    if (t > 0.001f) {
+        d2d_->PushLayer(D2D1::LayerParameters(pill, nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                              D2D1::IdentityMatrix(), 1.0f, nullptr,
+                                              D2D1_LAYER_OPTIONS_NONE),
+                        nullptr);
+        brush_->SetColor(hovered ? kFillHover : kFill);
         d2d_->FillRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(row.control.left, centreY - radius, knobX,
-                                          centreY + radius),
-                              radius, radius),
+            D2D1::RoundedRect(D2D1::RectF(pill.left, pill.top, knobX + layout::kKnobInset,
+                                          pill.bottom),
+                              layout::kPillRadius, layout::kPillRadius),
             brush_.Get());
+        d2d_->PopLayer();
     }
 
+    // The knob. A bar rather than a circle: a circle on a track this tall reads
+    // as a bead threaded on a wire, and the reference's is a caret sitting in
+    // the text - which is what says "this is the value" rather than "this is a
+    // thing to grab".
+    const float centreY = (pill.top + pill.bottom) * 0.5f;
+    const D2D1_RECT_F knob =
+        D2D1::RectF(knobX - layout::kKnobWidth * 0.5f, centreY - layout::kKnobHeight * 0.5f,
+                    knobX + layout::kKnobWidth * 0.5f, centreY + layout::kKnobHeight * 0.5f);
     brush_->SetColor(kKnob);
-    const float knobRadius = hovered ? 7.0f : 6.0f;
-    d2d_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(knobX, centreY), knobRadius, knobRadius),
-                      brush_.Get());
+    d2d_->FillRoundedRectangle(
+        D2D1::RoundedRect(knob, layout::kKnobWidth * 0.5f, layout::kKnobWidth * 0.5f),
+        brush_.Get());
 }
 
 void SettingsWindow::DrawToggle(const Row& row, bool hovered) {
+    brush_->SetColor(hovered ? kTrackHover : kTrack);
+    d2d_->FillRoundedRectangle(
+        D2D1::RoundedRect(PillRect(row), layout::kPillRadius, layout::kPillRadius), brush_.Get());
+
     const float centreY = (row.control.top + row.control.bottom) * 0.5f;
     const float height = 22.0f;
     const float width = 40.0f;
@@ -1029,6 +1086,10 @@ void SettingsWindow::DrawToggle(const Row& row, bool hovered) {
 }
 
 void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
+    brush_->SetColor(pointerX >= 0.0f ? kTrackHover : kTrack);
+    d2d_->FillRoundedRectangle(
+        D2D1::RoundedRect(PillRect(row), layout::kPillRadius, layout::kPillRadius), brush_.Get());
+
     const int count = static_cast<int>(row.options.size());
     if (count <= 0) {
         return;
@@ -1038,7 +1099,7 @@ void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
     const D2D1_RECT_F frame = D2D1::RectF(row.control.left, centreY - height * 0.5f,
                                           row.control.right, centreY + height * 0.5f);
 
-    brush_->SetColor(kTrack);
+    brush_->SetColor(Grey(1.0f, 0.10f));
     d2d_->FillRoundedRectangle(D2D1::RoundedRect(frame, 6.0f, 6.0f), brush_.Get());
 
     const float segment = (frame.right - frame.left) / count;
@@ -1458,42 +1519,43 @@ void SettingsWindow::Render() {
             continue;
         }
 
-        if (hovered) {
-            brush_->SetColor(kRowHover);
-            d2d_->FillRoundedRectangle(
-                D2D1::RoundedRect(D2D1::RectF(row.bounds.left - 8.0f, row.bounds.top + 2.0f,
-                                              row.bounds.right + 8.0f, row.bounds.bottom - 2.0f),
-                                  8.0f, 8.0f),
-                brush_.Get());
-        }
-
-        const float textRight = row.control.left - 14.0f;
-        DrawText(row.label, labelFormat_.Get(),
-                 D2D1::RectF(row.bounds.left, row.bounds.top + 8.0f, textRight, row.bounds.top + 30.0f),
-                 kLabel);
-        if (row.hint) {
-            DrawText(row.hint, hintFormat_.Get(),
-                     D2D1::RectF(row.bounds.left, row.bounds.top + 27.0f, textRight,
-                                 row.bounds.bottom),
-                     kHint);
-        }
-
+        // The card first: it is the background every row's text sits on, and for
+        // a slider it is the track, so it has to be under the label rather than
+        // beside it.
         switch (row.kind) {
-            case Row::Kind::Slider:
-                DrawSlider(row, hovered);
-                DrawText(FormatValue(*row.number, row.decimals, row.suffix), valueFormat_.Get(),
-                         D2D1::RectF(row.control.right + 8.0f, row.control.top,
-                                     row.bounds.right, row.control.bottom + 4.0f),
-                         kValue);
-                break;
-            case Row::Kind::Toggle:
-                DrawToggle(row, hovered);
-                break;
-            case Row::Kind::Choice:
-                DrawChoice(row, hovered ? pointerX_ : -1.0f);
-                break;
-            default:
-                break;
+            case Row::Kind::Slider: DrawSlider(row, hovered); break;
+            case Row::Kind::Toggle: DrawToggle(row, hovered); break;
+            case Row::Kind::Choice: DrawChoice(row, hovered ? pointerX_ : -1.0f); break;
+            default: break;
+        }
+
+        const D2D1_RECT_F pill = PillRect(row);
+        // The value is right-aligned inside the card; the label and its
+        // explanation stack against the left, stopping short of the value.
+        const float textLeft = pill.left + layout::kPillPadX;
+        const float textRight = (row.kind == Row::Kind::Slider)
+                                    ? (pill.right - layout::kPillPadX - layout::kValueWidth)
+                                    : (row.control.left - 14.0f);
+
+        if (row.hint) {
+            DrawText(row.label, labelFormat_.Get(),
+                     D2D1::RectF(textLeft, pill.top + 8.0f, textRight, pill.top + 30.0f), kLabel);
+            DrawText(row.hint, hintFormat_.Get(),
+                     D2D1::RectF(textLeft, pill.top + 27.0f, textRight, pill.bottom - 4.0f), kHint);
+        } else {
+            // No explanation to stack under it, so the label takes the card's
+            // middle instead of its top.
+            labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            DrawText(row.label, labelFormat_.Get(),
+                     D2D1::RectF(textLeft, pill.top, textRight, pill.bottom), kLabel);
+            labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        }
+
+        if (row.kind == Row::Kind::Slider) {
+            DrawText(FormatValue(*row.number, row.decimals, row.suffix), valueFormat_.Get(),
+                     D2D1::RectF(pill.right - layout::kPillPadX - layout::kValueWidth, pill.top,
+                                 pill.right - layout::kPillPadX, pill.bottom),
+                     kLabel);
         }
     }
 
@@ -1699,15 +1761,21 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     SetCapture(hwnd);
                     return 0;
                 }
-                // Sliders and choices only respond over their own control.
-                // They used to take a click anywhere on the row, so clicking a
-                // label slammed the value to whichever end was nearer - which
-                // the pointer would now be promising is safe.
+                // A slider's card *is* its track, so a click anywhere on it
+                // sets the value - the label is written on the track, not
+                // beside it. A choice still needs its segments: clicking its
+                // label would otherwise pick whichever option was nearest.
                 const Row& control = rows_[static_cast<size_t>(row)];
-                const bool needsControl =
-                    (control.kind == Row::Kind::Slider || control.kind == Row::Kind::Choice);
-                if (needsControl && (x < control.control.left || x > control.control.right)) {
+                if (control.kind == Row::Kind::Choice &&
+                    (x < control.control.left || x > control.control.right)) {
                     return 0;
+                }
+                if (control.kind != Row::Kind::Slider && control.kind != Row::Kind::Toggle &&
+                    control.kind != Row::Kind::Choice) {
+                    return 0;
+                }
+                if (control.kind == Row::Kind::Slider && y > PillRect(control).bottom) {
+                    return 0; // the gap under the card is not the track
                 }
                 if (ApplyPointer(row, x, false)) {
                     CommitChange();
