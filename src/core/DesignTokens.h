@@ -161,6 +161,18 @@ inline constexpr float kBounceSeconds = 0.62f;
 // ones that stay in place only have to be seen, and a third of a second is
 // long enough to register and short enough not to be waited on.
 inline constexpr float kLaunchSeconds = 0.34f;
+// How much further the cursor has to travel to leave the hover region than it
+// did to enter it. Without it the boundary is a single line, and a cursor
+// resting on that line crosses it back and forth on the sub-pixel noise of a
+// hand holding a mouse still - which turns the whole wave on and off several
+// times a second. Six pixels is below what anyone aims with and far above the
+// noise.
+inline constexpr float kHoverHysteresisPx = 6.0f;
+// How long the wave takes to come up when the cursor arrives and go down when
+// it leaves. The per-icon springs already smooth the shape; this smooths the
+// amplitude, so entering at the very edge fades the wave in rather than
+// starting it at whatever height the cursor happens to be over.
+inline constexpr float kHoverFadeSeconds = 0.12f;
 // How far the ghost swells past the icon before it is gone. Enough to read as
 // the app leaving the dock, not so far that it reaches its neighbours.
 inline constexpr float kZoomScale = 1.9f;

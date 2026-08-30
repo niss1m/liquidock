@@ -1316,7 +1316,10 @@ void DockWindow::Render() {
     float cursorY = 0.0f;
     bool hovered = false;
     if (!menuOpen_ && GetCursorPos(&cursor) && CursorToLayout(cursor, &cursorX, &cursorY)) {
-        hovered = layout_.HoverContains(cursorX, cursorY);
+        // Wider to stay than to arrive. A cursor resting on a single boundary
+        // line crosses it back and forth on the noise of a hand holding still,
+        // and every crossing turned the whole wave on or off.
+        hovered = layout_.HoverContains(cursorX, cursorY, layout_.hovered());
     }
     layout_.SetCursor(cursorX, hovered);
     const bool layoutMoving = layout_.Advance(deltaSeconds);

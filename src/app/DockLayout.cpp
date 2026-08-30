@@ -190,10 +190,13 @@ float DockLayout::FitWithin(float availableLogical) {
 }
 
 float DockLayout::TargetScale(const Element& element, float baseCenterX) const {
-    if (element.itemIndex < 0 || !hovered_) {
+    if (element.itemIndex < 0 || hoverAmount_ <= 0.0f) {
         return 1.0f; // the hairline never magnifies
     }
-    return WaveScale(std::fabs(cursorX_ - baseCenterX));
+    // The wave, faded in by how far the row has committed to being hovered.
+    // Scaling toward 1 rather than gating on a boolean is what makes arriving
+    // at the edge a rise rather than a jump.
+    return 1.0f + (WaveScale(std::fabs(cursorX_ - baseCenterX)) - 1.0f) * hoverAmount_;
 }
 
 float DockLayout::RestingBarWidth() const {
@@ -268,6 +271,23 @@ bool DockLayout::Advance(float deltaSeconds) {
 
     const float omega = std::sqrt(magnify::kStiffness);
     bool moving = false;
+
+    // The wave's amplitude rises rather than switching on. Arriving at the very
+    // edge of the region used to hand every icon its full wave height in one
+    // frame, which is a jump even when the cursor moved a pixel. Leaving still
+    // drops it at once, because the per-icon springs below are what eases the
+    // way out and easing the amplitude too would only make that slower.
+    if (hovered_) {
+        hoverAmount_ = (magnify::kHoverFadeSeconds > 0.0f)
+                           ? std::min(1.0f, hoverAmount_ + deltaSeconds /
+                                                               magnify::kHoverFadeSeconds)
+                           : 1.0f;
+        if (hoverAmount_ < 1.0f) {
+            moving = true;
+        }
+    } else {
+        hoverAmount_ = 0.0f;
+    }
 
     for (size_t i = 0; i < elements_.size(); ++i) {
         Element& element = elements_[i];
@@ -458,15 +478,16 @@ bool DockLayout::Contains(float x, float y) const {
     return false;
 }
 
-bool DockLayout::HoverContains(float x, float y) const {
+bool DockLayout::HoverContains(float x, float y, bool sticky) const {
     if (elements_.empty()) {
         return false;
     }
     // The *resting* bar, not the current one. barCenterX_ and barHalfWidth_ both
     // move as the row swells, and that is exactly the feedback this region
     // exists to avoid.
-    const float halfWidth = RestingBarWidth() * 0.5f;
-    return y >= magnified_icon_top() && y <= bar_bottom() &&
+    const float margin = sticky ? magnify::kHoverHysteresisPx : 0.0f;
+    const float halfWidth = RestingBarWidth() * 0.5f + margin;
+    return y >= magnified_icon_top() - margin && y <= bar_bottom() + margin &&
            std::fabs(x - windowWidth_ * 0.5f) <= halfWidth;
 }
 

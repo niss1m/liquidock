@@ -143,7 +143,13 @@ public:
     // the cursor is. It reaches as high as a fully magnified icon can, which
     // also means the wave starts as the cursor approaches rather than at the
     // instant it crosses the bar's edge.
-    bool HoverContains(float x, float y) const;
+    // `sticky` widens the region, for asking "is the cursor still in it"
+    // rather than "has it arrived". The two answers have to differ or the
+    // boundary chatters.
+    bool HoverContains(float x, float y, bool sticky = false) const;
+    // Whether the row currently thinks it is hovered, for asking the sticky
+    // question above.
+    bool hovered() const { return hovered_; }
 
     // Index into the item list of the icon under the point, or -1.
     int ItemAt(float x, float y) const;
@@ -180,6 +186,11 @@ private:
     float windowWidth_ = 0.0f;
     float cursorX_ = 0.0f;
     bool hovered_ = false;
+    // The wave's amplitude, eased between 0 and 1 rather than switched. What
+    // the icons scale by is this times the wave, so arriving at the edge of the
+    // region raises the whole row from rest instead of snapping it to whatever
+    // height the cursor is already over.
+    float hoverAmount_ = 0.0f;
     bool magnification_ = true;
     float maxScale_ = 1.0f;
     float influencePx_ = 1.0f;
