@@ -11,7 +11,7 @@ namespace liquidock {
 
 // The dock's contents, and the file they live in.
 //
-// The file is one item per line - `group | path | label` - because it has to be
+// The file was once one item per line - `group | path | label` - because it has to be
 // hand-editable long before the preferences UI in M4 exists, and because a
 // dock's contents are a list, not an object graph. Anything richer would be
 // inventing a config format to hold twelve strings.
@@ -44,23 +44,21 @@ public:
     const std::vector<DockItem>& items() const { return items_; }
     std::vector<DockItem>& items() { return items_; }
 
-    int MainCount() const;
-    int UtilityCount() const;
 
     // Removes one item and rewrites the file. Returns false if the index is out
     // of range.
     bool Remove(size_t index);
 
-    // Adds `item` to the end of its group and writes the file. False if the
+    // Adds `item` to the end of the list and writes the file. False if the
     // dock is already full.
     bool Add(DockItem item);
 
-    // Swaps an item with its neighbour, staying inside its own group so a move
+    // Swaps an item with its neighbour so a move
     // can never shuffle an app across the hairline into the utility run.
     // Returns the item's new index, or -1 if it could not move.
     int Move(size_t index, int direction);
 
-    // Moves an item to a new index, taking the group of wherever it lands.
+    // Moves an item to a new index.
     // Distinct from Move: that is the up/down buttons stepping one place, this
     // is a drag dropping somewhere entirely. Returns the resulting index.
     int MoveTo(size_t from, size_t to);

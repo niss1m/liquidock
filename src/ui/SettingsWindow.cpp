@@ -2030,16 +2030,6 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
                  D2D1::RectF(textLeft, mid - 11.0f, textRight, line.bottom), kLabel);
     }
 
-    if (item.group == ItemGroup::Utility) {
-        const D2D1_RECT_F pill = D2D1::RectF(row.control.left - 78.0f, mid - 9.0f,
-                                             row.control.left - 18.0f, mid + 9.0f);
-        brush_->SetColor(Grey(1.0f, 0.10f));
-        d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 9.0f, 9.0f), brush_.Get());
-        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        DrawText(L"utility", valueFormat_.Get(),
-                 D2D1::RectF(pill.left, pill.top, pill.right, pill.bottom), kValue);
-        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    }
 
     // Only shown on hover: three sets of buttons against every row is noise, and
     // the row you are pointing at is the only one you can act on anyway.
@@ -2942,10 +2932,9 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 item.label = entry.label;
                 wanted.push_back(std::move(item));
             }
-            const float scale = static_cast<float>(dpi_) / 96.0f;
-            suggestionLoader_.Start(std::move(wanted),
-                                    static_cast<int>(std::lround(layout::kTileIcon * scale)), hwnd_,
-                                    kSuggestionIconsMessage);
+            const float pixels = layout::kTileIcon * static_cast<float>(dpi_) / 96.0f;
+            suggestionLoader_.Start(std::move(wanted), static_cast<int>(std::lround(pixels)),
+                                    hwnd_, kSuggestionIconsMessage);
             BuildRows();
             LayoutRows();
             ApplyWindowSize();

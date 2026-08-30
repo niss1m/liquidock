@@ -4,15 +4,12 @@
 
 namespace liquidock {
 
-// Which run of the bar an item belongs to. The design puts frequently launched
-// applications on the left and the standing shortcuts - downloads, the recycle
-// bin - on the right, with a hairline between them.
-enum class ItemGroup { Main, Utility };
-
 // What an entry is. A separator is a divider the user placed themselves - it
 // launches nothing, carries no icon, and exists purely to break a long row into
-// runs you can find things in. Distinct from the hairline between the two
-// groups, which is structural and comes from the design.
+// runs you can find things in. It is the only thing that puts a rule on the bar:
+// there was once a second, structural one that the dock drew by itself between
+// a "main" and a "utility" group, and it was removed because a rule nobody
+// could find in the list is a rule nobody can get rid of.
 enum class ItemKind { App, Separator };
 
 // How the target's window should come up. Nexus's Dock Entry Properties offers
@@ -47,8 +44,6 @@ struct DockItem {
     // Empty means "ask the shell", which is right for most things and wrong for
     // exactly the case people care about most: a themed icon set.
     std::wstring iconPath;
-
-    ItemGroup group = ItemGroup::Main;
 
     RunState runState = RunState::Normal;
     // Launch elevated. The shell's "runas" verb, which is the same thing the

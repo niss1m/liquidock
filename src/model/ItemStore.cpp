@@ -25,8 +25,8 @@ const wchar_t kFileHeader[] =
     L"# One block per entry:\n"
     L"#\n"
     L"#     [item]\n"
-    L"#     group   = main | utility     read but no longer used; a rule on the\n"
-    L"#                                  dock is an entry whose kind is separator\n"
+    L"#     kind    = separator         a divider; it launches nothing and needs\n"
+    L"#                                  no path\n"
     L"#     path    = what to launch     a program, shortcut, folder, document, a\n"
     L"#                                  shell:AppsFolder\\... moniker for a Store app,\n"
     L"#                                  or a ::{guid} parsing name\n"
@@ -36,7 +36,8 @@ const wchar_t kFileHeader[] =
     L"#     icon    = an image file      optional; png, jpg, bmp, ico, gif, tiff\n"
     L"#\n"
     L"# Environment variables are expanded. Blank lines and # lines are ignored.\n"
-    L"# The old `group | path | label` one-liners are still read.\n"
+    L"# The old `group | path | label` one-liners are still read; the group they\n"
+    L"# start with is ignored.\n"
     L"\n";
 
 std::wstring Trim(std::wstring_view text) {
@@ -107,16 +108,6 @@ std::wstring ItemStore::ConfigPath() {
     return ConfigFilePath(kFileName);
 }
 
-int ItemStore::MainCount() const {
-    return static_cast<int>(
-        std::count_if(items_.begin(), items_.end(),
-                      [](const DockItem& item) { return item.group == ItemGroup::Main; }));
-}
-
-int ItemStore::UtilityCount() const {
-    return static_cast<int>(items_.size()) - MainCount();
-}
-
 void ItemStore::Load() {
     items_.clear();
 
@@ -130,7 +121,7 @@ void ItemStore::Load() {
     if (!path.empty()) {
         Save(); // so the user has something to edit
     }
-    LogInfo("Seeded {} dock items ({} pinned)", items_.size(), MainCount());
+    LogInfo("Seeded {} dock items", items_.size());
 }
 
 bool ItemStore::ReadFile(const std::wstring& path) {
@@ -192,10 +183,10 @@ bool ItemStore::ReadFile(const std::wstring& path) {
         if (!building && text.find(L'|') != std::wstring::npos) {
             const size_t first = text.find(L'|');
             const size_t second = text.find(L'|', first + 1);
+            // The leading field named a group. Skipped rather than parsed:
+            // it no longer means anything, and the two after it are what the
+            // line was really for.
             DockItem item;
-            item.group = (_wcsicmp(Trim(text.substr(0, first)).c_str(), L"utility") == 0)
-                             ? ItemGroup::Utility
-                             : ItemGroup::Main;
             if (second == std::wstring::npos) {
                 item.path = Trim(text.substr(first + 1));
             } else {
@@ -223,8 +214,8 @@ bool ItemStore::ReadFile(const std::wstring& path) {
         if (key == L"kind") {
             current.kind = (value == L"separator") ? ItemKind::Separator : ItemKind::App;
         } else if (key == L"group") {
-            current.group = (_wcsicmp(value.c_str(), L"utility") == 0) ? ItemGroup::Utility
-                                                                       : ItemGroup::Main;
+            // Read and dropped, so a file written by an older build still loads
+            // without warning about a key this one does not know.
         } else if (key == L"path") {
             current.path = value;
         } else if (key == L"label") {
@@ -364,13 +355,6 @@ int ItemStore::MoveTo(size_t from, size_t to) {
     }
     to = std::min(to, items_.size());
 
-    // The group comes from where it landed. Dropping something to the right of
-    // the hairline is how you say "this belongs over there", and asking the user
-    // to then set the group separately would be asking them twice.
-    if (!items_.empty()) {
-        const size_t neighbour = (to < items_.size()) ? to : items_.size() - 1;
-        moving.group = items_[neighbour].group;
-    }
     items_.insert(items_.begin() + static_cast<ptrdiff_t>(to), std::move(moving));
     Save();
     return static_cast<int>(to);
@@ -398,11 +382,7 @@ bool ItemStore::Add(DockItem item) {
     if (item.label.empty()) {
         item.label = LabelFromPath(item.path);
     }
-    // At the end of its own group, so a new app does not land on the far side of
-    // the hairline among the folders.
-    const size_t at = (item.group == ItemGroup::Main) ? static_cast<size_t>(MainCount())
-                                                      : items_.size();
-    items_.insert(items_.begin() + static_cast<ptrdiff_t>(at), std::move(item));
+    items_.push_back(std::move(item));
     Save();
     return true;
 }
@@ -416,18 +396,10 @@ int ItemStore::Move(size_t index, int direction) {
         return -1;
     }
     Remember();
-    // Crossing the group boundary moves the item into that group rather than
-    // refusing. Refusing left the preferences window with no way at all to put
-    // an app in the utility run - the boundary read as a wall you could see and
-    // not pass, which is the worst kind.
-    DockItem& moving = items_[index];
-    DockItem& other = items_[static_cast<size_t>(target)];
-    if (other.group != moving.group) {
-        moving.group = other.group;
-        Save();
-        return static_cast<int>(index);
-    }
-    std::swap(moving, other);
+    // One step is one step. A boundary used to sit in here that a move could
+    // only convert an item *across* - costing a click and moving nothing, which
+    // became invisible the moment the boundary stopped being drawn.
+    std::swap(items_[index], items_[static_cast<size_t>(target)]);
     Save();
     return static_cast<int>(target);
 }
@@ -468,7 +440,6 @@ bool ItemStore::PickProgram(HWND owner, DockItem* out) {
         return false;
     }
     out->path = path;
-    out->group = ItemGroup::Main;
     out->label = LabelFromPath(out->path);
     CoTaskMemFree(path);
     return true;
