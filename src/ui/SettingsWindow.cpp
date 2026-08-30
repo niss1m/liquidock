@@ -2,6 +2,7 @@
 
 #include <shellapi.h>
 
+#include "model/ProfileStore.h"
 #include "ui/PathIcon.h"
 
 #include <shellscalingapi.h>
@@ -205,7 +206,8 @@ constexpr float kActionHeight = 34.0f;
 constexpr float kCorner = design::kCornerRadius;
 } // namespace layout
 
-const wchar_t* const kTabNames[] = {L"Items", L"Glass", L"Dock", L"Appearance", L"Behaviour"};
+const wchar_t* const kTabNames[] = {L"Items",     L"Glass",     L"Dock",
+                                   L"Appearance", L"Behaviour", L"Profiles"};
 
 D2D1_COLOR_F Grey(float level, float alpha) {
     return D2D1::ColorF(level, level, level, alpha);
@@ -458,6 +460,15 @@ void SettingsWindow::BuildRows() {
         row.column = column;
         rows_.push_back(std::move(row));
     };
+    auto action = [this](Tab tab, const wchar_t* label, int id, int column) {
+        Row row;
+        row.kind = Row::Kind::Action;
+        row.tab = tab;
+        row.label = label;
+        row.itemIndex = id;
+        row.column = column;
+        rows_.push_back(std::move(row));
+    };
     auto colour = [this](Tab tab, const wchar_t* label, const wchar_t* hint, float* rgb,
                          int column) {
         Row row;
@@ -569,6 +580,24 @@ void SettingsWindow::BuildRows() {
     section(Tab::Dock, L"Placement", 1);
     toggle(Tab::Dock, L"Reserve screen space", L"Maximised windows stop above it",
            &settings_.reserveSpace, 1);
+
+    // --- Profiles ---------------------------------------------------------
+    // A profile is the whole settings file under a name, so switching is a copy
+    // and nothing here needs to know what a setting is.
+    section(Tab::Profiles, L"Saved profiles", 0);
+    for (size_t i = 0; i < profiles_.size(); ++i) {
+        Row row;
+        row.kind = Row::Kind::Profile;
+        row.tab = Tab::Profiles;
+        row.itemIndex = static_cast<int>(i);
+        row.column = 0;
+        rows_.push_back(std::move(row));
+    }
+    action(Tab::Profiles, L"Save as a new profile...", 0, 0);
+
+    section(Tab::Profiles, L"Share", 1);
+    action(Tab::Profiles, L"Copy my config", 1, 1);
+    action(Tab::Profiles, L"Paste a config", 2, 1);
 
     // --- Behaviour --------------------------------------------------------
     section(Tab::Behaviour, L"Hiding", 0);
@@ -966,7 +995,17 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
         case Row::Kind::AddSeparator:
         case Row::Kind::Suggestion:
         case Row::Kind::Colour:
+        case Row::Kind::Action:
             return IDC_HAND;
+        case Row::Kind::Profile: {
+            for (int i = 0; i < 3; ++i) {
+                const D2D1_RECT_F box = ProfileAction(row, i);
+                if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) {
+                    return IDC_HAND;
+                }
+            }
+            return IDC_ARROW;
+        }
         case Row::Kind::Item:
             return IDC_HAND; // opens the editor, or drags to reorder
         default:
@@ -1240,6 +1279,9 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
 
     // After the device resources, because turning the pixels into D2D bitmaps
     // needs the context that CreateDeviceResources builds.
+    ReloadProfiles();
+    naming_ = false;
+    notice_.clear();
     search_.clear();
     searchFocused_ = false;
     filtered_.clear();
@@ -1694,6 +1736,7 @@ void SettingsWindow::DrawText(const std::wstring& text, IDWriteTextFormat* forma
 float SettingsWindow::FrameDelta() {
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
+    now_ = now;
     if (frequency_.QuadPart == 0) {
         QueryPerformanceFrequency(&frequency_);
     }
@@ -2212,6 +2255,135 @@ bool SettingsWindow::HandlePicker(const D2D1_RECT_F& panel, float* rgb, float x,
     }
     HsvToRgb(pickerHue_, sv, value, rgb);
     return true;
+}
+
+std::wstring SettingsWindow::ClipboardText() const {
+    if (!OpenClipboard(hwnd_)) {
+        return {};
+    }
+    std::wstring text;
+    if (HANDLE handle = GetClipboardData(CF_UNICODETEXT)) {
+        if (const wchar_t* locked = static_cast<const wchar_t*>(GlobalLock(handle))) {
+            text = locked;
+            GlobalUnlock(handle);
+        }
+    }
+    CloseClipboard();
+    return text;
+}
+
+bool SettingsWindow::SetClipboardText(const std::wstring& text) const {
+    if (!OpenClipboard(hwnd_)) {
+        return false;
+    }
+    EmptyClipboard();
+    const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    HANDLE handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!handle) {
+        CloseClipboard();
+        return false;
+    }
+    if (void* locked = GlobalLock(handle)) {
+        memcpy(locked, text.c_str(), bytes);
+        GlobalUnlock(handle);
+        SetClipboardData(CF_UNICODETEXT, handle);
+    }
+    CloseClipboard();
+    return true;
+}
+
+void SettingsWindow::Announce(const std::wstring& text) {
+    notice_ = text;
+    QueryPerformanceCounter(&noticeSince_);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void SettingsWindow::ReloadProfiles() {
+    profiles_ = ProfileStore::List();
+}
+
+void SettingsWindow::DrawAction(const Row& row, bool hovered) {
+    const D2D1_RECT_F pill = PillRect(row);
+    const float centreY = (pill.top + pill.bottom) * 0.5f;
+    const D2D1_RECT_F box =
+        D2D1::RectF(pill.left + 0.5f, centreY - layout::kActionHeight * 0.5f,
+                    pill.left + 260.0f, centreY + layout::kActionHeight * 0.5f);
+    const float radius = (box.bottom - box.top) * 0.5f;
+    const bool typing = naming_ && row.itemIndex == 0 && row.tab == Tab::Profiles;
+    const float lit = typing ? 1.0f : std::clamp(row.hover, 0.0f, 1.0f);
+
+    if (lit > 0.0f) {
+        brush_->SetColor(Grey(1.0f, 0.07f * lit));
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, radius, radius), brush_.Get());
+    }
+    brush_->SetColor(Mix(Grey(1.0f, 0.17f), Grey(1.0f, 0.38f), lit));
+    d2d_->DrawRoundedRectangle(D2D1::RoundedRect(box, radius, radius), brush_.Get(), 1.0f);
+
+    if (typing) {
+        // The button becomes the field. Asking for a name in a dialog would be
+        // a second window for eight characters.
+        const D2D1_RECT_F text =
+            D2D1::RectF(box.left + 16.0f, box.top, box.right - 16.0f, box.bottom);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        DrawText(editText_.empty() ? std::wstring(L"Name it, then Enter") : editText_,
+                 valueFormat_.Get(), text, editText_.empty() ? kHint : kLabel);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+        const float caret = text.left + MeasureText(valueFormat_.Get(), editText_) + 1.0f;
+        brush_->SetColor(kOn);
+        d2d_->FillRectangle(D2D1::RectF(caret, box.top + 8.0f, caret + 1.4f, box.bottom - 8.0f),
+                            brush_.Get());
+        return;
+    }
+
+    valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    DrawText(row.label, valueFormat_.Get(), box, Mix(kValue, kLabel, lit));
+    valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+}
+
+void SettingsWindow::DrawProfile(const Row& row, bool hovered) {
+    const size_t index = static_cast<size_t>(row.itemIndex);
+    if (index >= profiles_.size()) {
+        return;
+    }
+    const D2D1_RECT_F pill = PillRect(row);
+    brush_->SetColor(Mix(kTrack, kTrackHover, row.hover));
+    d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, layout::kPillRadius, layout::kPillRadius),
+                               brush_.Get());
+
+    DrawText(profiles_[index], labelFormat_.Get(),
+             D2D1::RectF(pill.left + layout::kLabelIndent, pill.top,
+                         pill.right - 150.0f, pill.bottom),
+             kLabel);
+
+    if (!hovered) {
+        return;
+    }
+    // Three words rather than three glyphs. This row does something
+    // irreversible and something that overwrites; an icon for either would be
+    // a guess the reader has to make.
+    const wchar_t* const actions[3] = {L"Use", L"Save", L"Delete"};
+    for (int i = 0; i < 3; ++i) {
+        const D2D1_RECT_F box = ProfileAction(row, i);
+        const bool under = pointerX_ >= box.left && pointerX_ <= box.right &&
+                           pointerY_ >= box.top && pointerY_ <= box.bottom;
+        if (under) {
+            const float radius = (box.bottom - box.top) * 0.5f;
+            brush_->SetColor(Grey(1.0f, 0.10f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, radius, radius), brush_.Get());
+        }
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        DrawText(actions[i], valueFormat_.Get(), box,
+                 under ? Grey(1.0f, 0.95f) : kValue);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
+}
+
+D2D1_RECT_F SettingsWindow::ProfileAction(const Row& row, int index) const {
+    const D2D1_RECT_F pill = PillRect(row);
+    const float centreY = (pill.top + pill.bottom) * 0.5f;
+    const float width = 52.0f;
+    const float right = pill.right - layout::kPillPadX - (2 - index) * (width + 6.0f);
+    return D2D1::RectF(right - width, centreY - 13.0f, right, centreY + 13.0f);
 }
 
 void SettingsWindow::DrawChevron(const D2D1_RECT_F& box, bool up, const D2D1_COLOR_F& colour) {
@@ -3107,7 +3279,15 @@ void SettingsWindow::Render() {
             case Row::Kind::Toggle: DrawToggle(row, row.hover); break;
             case Row::Kind::Choice: DrawChoice(row, hovered ? pointerX_ : -1.0f); break;
             case Row::Kind::Colour: DrawColour(row); break;
+            case Row::Kind::Profile: DrawProfile(row, hovered); break;
+            case Row::Kind::Action: DrawAction(row, hovered); break;
             default: break;
+        }
+        // These two draw their own text inside their own shapes. The shared
+        // pass below writes a label on the left of the card and a value on the
+        // right, which for a button is the same word twice, a few pixels apart.
+        if (row.kind == Row::Kind::Profile || row.kind == Row::Kind::Action) {
+            continue;
         }
 
         const D2D1_RECT_F pill = PillRect(row);
@@ -3214,6 +3394,21 @@ void SettingsWindow::Render() {
     // Last, and over everything: the strip at the top does not scroll, so it
     // has to be painted after whatever scrolled underneath it.
     DrawHeader();
+
+    if (!notice_.empty() && frequency_.QuadPart != 0) {
+        const float age = static_cast<float>(now_.QuadPart - noticeSince_.QuadPart) /
+                          static_cast<float>(frequency_.QuadPart);
+        if (age < 4.0f) {
+            DrawText(notice_, hintFormat_.Get(),
+                     D2D1::RectF(layout::kPadding,
+                                 static_cast<float>(height_) / scale - 48.0f,
+                                 layout::kWidth - layout::kPadding,
+                                 static_cast<float>(height_) / scale - 28.0f),
+                     Mix(kHint, Grey(1.0f, 0.0f), std::max(0.0f, (age - 3.0f))));
+        } else {
+            notice_.clear();
+        }
+    }
 
     DrawTooltip();
 
@@ -3499,6 +3694,74 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     SetCapture(hwnd);
                     return 0;
                 }
+                if (rows_[static_cast<size_t>(row)].kind == Row::Kind::Profile) {
+                    const Row& entry = rows_[static_cast<size_t>(row)];
+                    const size_t index = static_cast<size_t>(entry.itemIndex);
+                    if (index >= profiles_.size()) {
+                        return 0;
+                    }
+                    const std::wstring name = profiles_[index];
+                    for (int i = 0; i < 3; ++i) {
+                        const D2D1_RECT_F box = ProfileAction(entry, i);
+                        if (x < box.left || x > box.right || y < box.top || y > box.bottom) {
+                            continue;
+                        }
+                        if (i == 0) {
+                            // Switching is a copy over the live file; the dock's
+                            // watcher does the rest, and ReloadFromDisk brings
+                            // this window along with it.
+                            if (ProfileStore::Load(name)) {
+                                ReloadFromDisk();
+                                Announce(L"Switched to " + name);
+                            } else {
+                                Announce(L"Could not read that profile");
+                            }
+                        } else if (i == 1) {
+                            Announce(ProfileStore::Save(name)
+                                         ? (L"Saved the current settings into " + name)
+                                         : L"Could not write that profile");
+                        } else {
+                            if (ProfileStore::Remove(name)) {
+                                Announce(L"Deleted " + name);
+                                ReloadProfiles();
+                                BuildRows();
+                                LayoutRows();
+                                ApplyWindowSize();
+                            }
+                        }
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                        return 0;
+                    }
+                    return 0;
+                }
+                if (rows_[static_cast<size_t>(row)].kind == Row::Kind::Action) {
+                    const int id = rows_[static_cast<size_t>(row)].itemIndex;
+                    if (id == 0) {
+                        naming_ = true;
+                        editText_.clear();
+                        caret_ = 0;
+                    } else if (id == 1) {
+                        const std::wstring token = settings_.ToToken();
+                        Announce(SetClipboardText(token)
+                                     ? (L"Copied - " + std::to_wstring(token.size()) +
+                                        L" characters, paste it anywhere")
+                                     : L"Could not reach the clipboard");
+                    } else {
+                        Settings incoming = settings_;
+                        if (incoming.FromToken(ClipboardText())) {
+                            settings_ = incoming;
+                            CommitChange();
+                            BuildRows();
+                            LayoutRows();
+                            ApplyWindowSize();
+                            Announce(L"Applied the config on your clipboard");
+                        } else {
+                            Announce(L"No readable LiquiDock config on the clipboard");
+                        }
+                    }
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
                 if (rows_[static_cast<size_t>(row)].kind == Row::Kind::Colour) {
                     // The whole card opens it. A swatch is twenty-six pixels of
                     // target on a four-hundred pixel row, and the row does not
@@ -3609,6 +3872,18 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         }
 
         case WM_CHAR:
+            if (naming_) {
+                const wchar_t ch = static_cast<wchar_t>(wParam);
+                if (ch == VK_BACK) {
+                    if (!editText_.empty()) {
+                        editText_.pop_back();
+                    }
+                } else if (ch >= 0x20) {
+                    editText_.push_back(ch);
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (searchFocused_) {
                 const wchar_t ch = static_cast<wchar_t>(wParam);
                 if (ch == VK_BACK) {
@@ -3651,6 +3926,24 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_KEYDOWN:
+            if (naming_ && (wParam == VK_RETURN || wParam == VK_ESCAPE)) {
+                const std::wstring name = ProfileStore::Clean(editText_);
+                naming_ = false;
+                editText_.clear();
+                if (wParam == VK_RETURN && !name.empty()) {
+                    if (ProfileStore::Save(name)) {
+                        Announce(L"Saved " + name);
+                        ReloadProfiles();
+                        BuildRows();
+                        LayoutRows();
+                        ApplyWindowSize();
+                    } else {
+                        Announce(L"Could not write that profile");
+                    }
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) != 0) {
                 CommitEdit();
                 if (items_.Undo()) {

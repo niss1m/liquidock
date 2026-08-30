@@ -3,6 +3,8 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstring>
+#include <cstdint>
 #include <cstdio>
 #include <cwchar>
 #include <filesystem>
@@ -212,107 +214,312 @@ bool Settings::ReadFile(const std::wstring& path) {
         const std::wstring key = Trim(text.substr(0, equals));
         const std::wstring value = Trim(text.substr(equals + 1));
 
-        if (key == L"refraction") {
-            refraction = ParseFloat(value, refraction, 0.0f, 1.0f);
-        } else if (key == L"depth") {
-            depth = ParseFloat(value, depth, 0.0f, 1.0f);
-        } else if (key == L"dispersion") {
-            dispersion = ParseFloat(value, dispersion, 0.0f, 1.0f);
-        } else if (key == L"frost") {
-            frost = ParseFloat(value, frost, 0.0f, 1.0f);
-        } else if (key == L"splay") {
-            splay = ParseFloat(value, splay, 0.0f, 1.0f);
-        } else if (key == L"light-angle") {
-            lightAngleDegrees = ParseFloat(value, lightAngleDegrees, -360.0f, 360.0f);
-        } else if (key == L"light-intensity") {
-            lightIntensity = ParseFloat(value, lightIntensity, 0.0f, 1.0f);
-        } else if (key == L"tint-alpha") {
-            tintAlpha = ParseFloat(value, tintAlpha, 0.0f, 1.0f);
-        } else if (key == L"inner-shadow") {
-            innerShadow = ParseFloat(value, innerShadow, 0.0f, 1.0f);
-        } else if (key == L"rim-opacity") {
-            rimOpacity = ParseFloat(value, rimOpacity, 0.0f, 1.0f);
-        } else if (key == L"backdrop") {
-            if (_wcsicmp(value.c_str(), L"screen") == 0) {
-                backdrop = BackdropSource::Screen;
-            } else if (_wcsicmp(value.c_str(), L"wallpaper") == 0) {
-                backdrop = BackdropSource::Wallpaper;
-            } else {
-                LogWarn("backdrop must be `wallpaper` or `screen`; keeping the default");
-            }
-        } else if (key == L"magnification") {
-            magnification = ParseBool(value, magnification);
-        } else if (key == L"follow-cursor") {
-            followCursor = ParseBool(value, followCursor);
-        } else if (key == L"separator-image") {
-            separatorImage = value;
-        } else if (key == L"divider-gap") {
-            dividerGap = ParseFloat(value, dividerGap, 0.0f, 120.0f);
-        } else if (key == L"icon-gap") {
-            iconGap = ParseFloat(value, iconGap, 0.0f, 60.0f);
-        } else if (key == L"max-scale") {
-            maxScale = ParseFloat(value, maxScale, 1.0f, design::kMaxConfigurableScale);
-        } else if (key == L"icon-size") {
-            iconSize = ParseFloat(value, iconSize, design::kMinIconSize, design::kMaxIconSize);
-        } else if (key == L"influence") {
-            influencePx = ParseFloat(value, influencePx, 16.0f, 600.0f);
-        } else if (key == L"label-font-size") {
-            labelFontSize = ParseFloat(value, labelFontSize, 9.0f, design::label::kMaxFontSize);
-        } else if (key == L"label-bold") {
-            labelBold = ParseBool(value, labelBold);
-        } else if (key == L"theme") {
-            if (_wcsicmp(value.c_str(), L"light") == 0) {
-                theme = Theme::Light;
-            } else if (_wcsicmp(value.c_str(), L"system") == 0 ||
-                       _wcsicmp(value.c_str(), L"auto") == 0) {
-                theme = Theme::System;
-            } else {
-                theme = Theme::Dark;
-            }
-        } else if (key == L"tint-colour") {
-            ParseColour(value, tintColour);
-        } else if (key == L"label-font") {
-            labelFont = Trim(value);
-            if (labelFont.empty()) {
-                labelFont = design::label::kFontFamily;
-            }
-        } else if (key == L"label-pad-x") {
-            labelPadX = ParseFloat(value, labelPadX, 0.0f, 40.0f);
-        } else if (key == L"label-pad-y") {
-            labelPadY = ParseFloat(value, labelPadY, 0.0f, 24.0f);
-        } else if (key == L"label-radius") {
-            labelRadius = ParseFloat(value, labelRadius, 0.0f, 24.0f);
-        } else if (key == L"label-gap") {
-            labelGap = ParseFloat(value, labelGap, 0.0f, 40.0f);
-        } else if (key == L"label-opacity") {
-            labelOpacity = ParseFloat(value, labelOpacity, 0.30f, 1.0f);
-        } else if (key == L"label-tail") {
-            labelTail = ParseBool(value, labelTail);
-        } else if (key == L"icon-bulge") {
-            iconBulge = ParseBool(value, iconBulge);
-        } else if (key == L"monitor") {
-            if (_wcsicmp(value.c_str(), L"primary") == 0) {
-                monitorIndex = 0;
-            } else {
-                monitorIndex = static_cast<int>(ParseFloat(value, 0.0f, 0.0f, 16.0f));
-            }
-        } else if (key == L"reserve-space") {
-            reserveSpace = ParseBool(value, reserveSpace);
-        } else if (key == L"auto-hide") {
-            autoHide = ParseBool(value, autoHide);
-        } else if (key == L"hide-when-covered") {
-            hideWhenCovered = ParseBool(value, hideWhenCovered);
-        } else if (key == L"dwell-seconds") {
-            dwellSeconds = ParseFloat(value, dwellSeconds, 0.2f, 120.0f);
-        } else if (key == L"slide-seconds") {
-            slideSeconds = ParseFloat(value, slideSeconds, 0.0f, 2.0f);
-        } else {
-            LogWarn("Unknown key in settings.txt; ignoring it");
-        }
+        ApplyPair(key, value);
     }
 
     fclose(file);
     return true;
+}
+
+// One `key = value`, wherever it came from. Pulled out of the file reader so a
+// shared token can be applied through exactly the same clamps and fallbacks -
+// a config arriving from a stranger has to go through the same door as one
+// typed into the file.
+void Settings::ApplyPair(const std::wstring& key, const std::wstring& value) {
+    if (key == L"refraction") {
+        refraction = ParseFloat(value, refraction, 0.0f, 1.0f);
+    } else if (key == L"depth") {
+        depth = ParseFloat(value, depth, 0.0f, 1.0f);
+    } else if (key == L"dispersion") {
+        dispersion = ParseFloat(value, dispersion, 0.0f, 1.0f);
+    } else if (key == L"frost") {
+        frost = ParseFloat(value, frost, 0.0f, 1.0f);
+    } else if (key == L"splay") {
+        splay = ParseFloat(value, splay, 0.0f, 1.0f);
+    } else if (key == L"light-angle") {
+        lightAngleDegrees = ParseFloat(value, lightAngleDegrees, -360.0f, 360.0f);
+    } else if (key == L"light-intensity") {
+        lightIntensity = ParseFloat(value, lightIntensity, 0.0f, 1.0f);
+    } else if (key == L"tint-alpha") {
+        tintAlpha = ParseFloat(value, tintAlpha, 0.0f, 1.0f);
+    } else if (key == L"inner-shadow") {
+        innerShadow = ParseFloat(value, innerShadow, 0.0f, 1.0f);
+    } else if (key == L"rim-opacity") {
+        rimOpacity = ParseFloat(value, rimOpacity, 0.0f, 1.0f);
+    } else if (key == L"backdrop") {
+        if (_wcsicmp(value.c_str(), L"screen") == 0) {
+            backdrop = BackdropSource::Screen;
+        } else if (_wcsicmp(value.c_str(), L"wallpaper") == 0) {
+            backdrop = BackdropSource::Wallpaper;
+        } else {
+            LogWarn("backdrop must be `wallpaper` or `screen`; keeping the default");
+        }
+    } else if (key == L"magnification") {
+        magnification = ParseBool(value, magnification);
+    } else if (key == L"follow-cursor") {
+        followCursor = ParseBool(value, followCursor);
+    } else if (key == L"separator-image") {
+        separatorImage = value;
+    } else if (key == L"divider-gap") {
+        dividerGap = ParseFloat(value, dividerGap, 0.0f, 120.0f);
+    } else if (key == L"icon-gap") {
+        iconGap = ParseFloat(value, iconGap, 0.0f, 60.0f);
+    } else if (key == L"max-scale") {
+        maxScale = ParseFloat(value, maxScale, 1.0f, design::kMaxConfigurableScale);
+    } else if (key == L"icon-size") {
+        iconSize = ParseFloat(value, iconSize, design::kMinIconSize, design::kMaxIconSize);
+    } else if (key == L"influence") {
+        influencePx = ParseFloat(value, influencePx, 16.0f, 600.0f);
+    } else if (key == L"label-font-size") {
+        labelFontSize = ParseFloat(value, labelFontSize, 9.0f, design::label::kMaxFontSize);
+    } else if (key == L"label-bold") {
+        labelBold = ParseBool(value, labelBold);
+    } else if (key == L"theme") {
+        if (_wcsicmp(value.c_str(), L"light") == 0) {
+            theme = Theme::Light;
+        } else if (_wcsicmp(value.c_str(), L"system") == 0 ||
+                   _wcsicmp(value.c_str(), L"auto") == 0) {
+            theme = Theme::System;
+        } else {
+            theme = Theme::Dark;
+        }
+    } else if (key == L"tint-colour") {
+        ParseColour(value, tintColour);
+    } else if (key == L"label-font") {
+        labelFont = Trim(value);
+        if (labelFont.empty()) {
+            labelFont = design::label::kFontFamily;
+        }
+    } else if (key == L"label-pad-x") {
+        labelPadX = ParseFloat(value, labelPadX, 0.0f, 40.0f);
+    } else if (key == L"label-pad-y") {
+        labelPadY = ParseFloat(value, labelPadY, 0.0f, 24.0f);
+    } else if (key == L"label-radius") {
+        labelRadius = ParseFloat(value, labelRadius, 0.0f, 24.0f);
+    } else if (key == L"label-gap") {
+        labelGap = ParseFloat(value, labelGap, 0.0f, 40.0f);
+    } else if (key == L"label-opacity") {
+        labelOpacity = ParseFloat(value, labelOpacity, 0.30f, 1.0f);
+    } else if (key == L"label-tail") {
+        labelTail = ParseBool(value, labelTail);
+    } else if (key == L"icon-bulge") {
+        iconBulge = ParseBool(value, iconBulge);
+    } else if (key == L"monitor") {
+        if (_wcsicmp(value.c_str(), L"primary") == 0) {
+            monitorIndex = 0;
+        } else {
+            monitorIndex = static_cast<int>(ParseFloat(value, 0.0f, 0.0f, 16.0f));
+        }
+    } else if (key == L"reserve-space") {
+        reserveSpace = ParseBool(value, reserveSpace);
+    } else if (key == L"auto-hide") {
+        autoHide = ParseBool(value, autoHide);
+    } else if (key == L"hide-when-covered") {
+        hideWhenCovered = ParseBool(value, hideWhenCovered);
+    } else if (key == L"dwell-seconds") {
+        dwellSeconds = ParseFloat(value, dwellSeconds, 0.2f, 120.0f);
+    } else if (key == L"slide-seconds") {
+        slideSeconds = ParseFloat(value, slideSeconds, 0.0f, 2.0f);
+    } else {
+        LogWarn("Unknown key in settings.txt; ignoring it");
+    }
+}
+
+namespace {
+
+// base64url, so the token survives being pasted anywhere: no + or / for a URL
+// to mangle, and no = for a chat client to trim off the end as punctuation.
+const char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+std::wstring Base64Encode(const std::string& bytes) {
+    std::wstring out;
+    out.reserve((bytes.size() + 2) / 3 * 4);
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        const unsigned b0 = static_cast<unsigned char>(bytes[i]);
+        const unsigned b1 = (i + 1 < bytes.size()) ? static_cast<unsigned char>(bytes[i + 1]) : 0u;
+        const unsigned b2 = (i + 2 < bytes.size()) ? static_cast<unsigned char>(bytes[i + 2]) : 0u;
+        const unsigned triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push_back(static_cast<wchar_t>(kAlphabet[(triple >> 18) & 0x3F]));
+        out.push_back(static_cast<wchar_t>(kAlphabet[(triple >> 12) & 0x3F]));
+        if (i + 1 < bytes.size()) {
+            out.push_back(static_cast<wchar_t>(kAlphabet[(triple >> 6) & 0x3F]));
+        }
+        if (i + 2 < bytes.size()) {
+            out.push_back(static_cast<wchar_t>(kAlphabet[triple & 0x3F]));
+        }
+    }
+    return out;
+}
+
+bool Base64Decode(const std::wstring& text, std::string* out) {
+    int values[4]{};
+    int have = 0;
+    out->clear();
+    for (const wchar_t ch : text) {
+        if (ch == L'\n' || ch == L'\r' || ch == L' ' || ch == L'\t') {
+            continue; // a token that wrapped on the way through a chat is still a token
+        }
+        if (ch <= 0 || ch > 127) {
+            return false;
+        }
+        const char* found = strchr(kAlphabet, static_cast<char>(ch));
+        if (!found) {
+            return false;
+        }
+        values[have++] = static_cast<int>(found - kAlphabet);
+        if (have == 4) {
+            const unsigned triple = (static_cast<unsigned>(values[0]) << 18) |
+                                    (static_cast<unsigned>(values[1]) << 12) |
+                                    (static_cast<unsigned>(values[2]) << 6) |
+                                    static_cast<unsigned>(values[3]);
+            out->push_back(static_cast<char>((triple >> 16) & 0xFF));
+            out->push_back(static_cast<char>((triple >> 8) & 0xFF));
+            out->push_back(static_cast<char>(triple & 0xFF));
+            have = 0;
+        }
+    }
+    if (have == 1) {
+        return false; // one character cannot make a byte
+    }
+    if (have >= 2) {
+        const unsigned triple = (static_cast<unsigned>(values[0]) << 18) |
+                                (static_cast<unsigned>(values[1]) << 12) |
+                                (static_cast<unsigned>(have > 2 ? values[2] : 0) << 6);
+        out->push_back(static_cast<char>((triple >> 16) & 0xFF));
+        if (have == 3) {
+            out->push_back(static_cast<char>((triple >> 8) & 0xFF));
+        }
+    }
+    return true;
+}
+
+// CRC-32, so a paste that lost its tail is refused rather than half applied.
+// Computed bit by bit: a 256-entry table for one short string is more code than
+// the loop it would save.
+uint32_t Crc32(const std::string& bytes) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (const char raw : bytes) {
+        crc ^= static_cast<unsigned char>(raw);
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+    }
+    return ~crc;
+}
+
+std::string ToUtf8(const std::wstring& text) {
+    if (text.empty()) {
+        return {};
+    }
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                                         nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), size,
+                        nullptr, nullptr);
+    return out;
+}
+
+std::wstring FromUtf8(const std::string& bytes) {
+    if (bytes.empty()) {
+        return {};
+    }
+    const int size = MultiByteToWideChar(CP_UTF8, 0, bytes.data(), static_cast<int>(bytes.size()),
+                                         nullptr, 0);
+    std::wstring out(static_cast<size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, bytes.data(), static_cast<int>(bytes.size()), out.data(), size);
+    return out;
+}
+
+constexpr wchar_t kTokenPrefix[] = L"LQD1-";
+
+} // namespace
+
+std::wstring Settings::ToToken() const {
+    // Every value, one per line, in the canonical order. No comments: this is
+    // machine to machine, and the file's explanations are written fresh on the
+    // far side anyway.
+    std::wstring text;
+    for (const std::wstring& key : Keys()) {
+        text += key + L"=" + ValueFor(key) + L"\n";
+    }
+    const std::string payload = ToUtf8(text);
+
+    wchar_t sum[16]{};
+    swprintf_s(sum, L"%08X", Crc32(payload));
+    const std::string blob = ToUtf8(std::wstring(sum) + L"\n") + payload;
+    return kTokenPrefix + Base64Encode(blob);
+}
+
+bool Settings::FromToken(const std::wstring& token) {
+    // Tolerant about what surrounds it: people paste tokens wrapped in
+    // backticks, or with the word "config:" in front, and having to clean that
+    // up by hand is how a share stops being one click.
+    const size_t start = token.find(kTokenPrefix);
+    if (start == std::wstring::npos) {
+        LogWarn("That does not look like a LiquiDock config token");
+        return false;
+    }
+    std::wstring body = token.substr(start + wcslen(kTokenPrefix));
+    size_t end = 0;
+    while (end < body.size() && body[end] > 0 && body[end] < 128 &&
+           strchr(kAlphabet, static_cast<char>(body[end])) != nullptr) {
+        ++end;
+    }
+    body = body.substr(0, end);
+
+    std::string blob;
+    if (!Base64Decode(body, &blob) || blob.size() < 10) {
+        LogWarn("That config token is not readable");
+        return false;
+    }
+    // Eight hex digits of checksum, then a newline, then the settings.
+    if (blob.size() < 9 || blob[8] != '\n') {
+        LogWarn("That config token is not readable");
+        return false;
+    }
+    const std::string payload = blob.substr(9);
+    wchar_t expected[16]{};
+    swprintf_s(expected, L"%08X", Crc32(payload));
+    if (FromUtf8(blob.substr(0, 8)) != std::wstring(expected)) {
+        LogWarn("That config token arrived damaged; nothing was changed");
+        return false;
+    }
+
+    // Only now is anything touched. Half a config is worse than none, and the
+    // checksum is what makes "all or nothing" true rather than hoped for.
+    const std::wstring text = FromUtf8(payload);
+    size_t at = 0;
+    int applied = 0;
+    while (at < text.size()) {
+        const size_t lineEnd = text.find(L'\n', at);
+        const size_t count = (lineEnd == std::wstring::npos) ? std::wstring::npos : lineEnd - at;
+        const std::wstring line = Trim(text.substr(at, count));
+        at = (lineEnd == std::wstring::npos) ? text.size() : lineEnd + 1;
+        const size_t equals = line.find(L'=');
+        if (equals == std::wstring::npos) {
+            continue;
+        }
+        ApplyPair(Trim(line.substr(0, equals)), Trim(line.substr(equals + 1)));
+        ++applied;
+    }
+    LogInfo("Applied {} settings from a shared config", applied);
+    return applied > 0;
+}
+
+const std::vector<std::wstring>& Settings::Keys() {
+    static const std::vector<std::wstring> keys = {
+        L"refraction",      L"depth",        L"dispersion",      L"frost",
+        L"splay",           L"light-angle",  L"light-intensity", L"tint-alpha",
+        L"inner-shadow",    L"rim-opacity",  L"backdrop",        L"magnification",
+        L"follow-cursor",   L"separator-image", L"divider-gap",  L"icon-gap",
+        L"max-scale",       L"influence",    L"icon-size",       L"icon-bulge",
+        L"monitor",         L"reserve-space", L"auto-hide",      L"hide-when-covered",
+        L"dwell-seconds",   L"slide-seconds", L"theme",          L"tint-colour",
+        L"label-font-size", L"label-bold",   L"label-font",      L"label-pad-x",
+        L"label-pad-y",     L"label-radius", L"label-gap",       L"label-opacity",
+        L"label-tail",
+    };
+    return keys;
 }
 
 std::wstring Settings::ValueFor(const std::wstring& key) const {
@@ -420,17 +627,7 @@ bool Settings::Save() const {
 
     // A key the file predates - it was written by an older build - is appended
     // rather than lost, so upgrading never silently drops a setting.
-    static const wchar_t* const kAllKeys[] = {
-        L"refraction", L"depth",        L"dispersion",    L"frost",         L"splay",
-        L"light-angle", L"light-intensity", L"tint-alpha", L"inner-shadow", L"rim-opacity", L"backdrop", L"magnification",
-        L"follow-cursor", L"separator-image", L"divider-gap", L"icon-gap",
-        L"max-scale",  L"influence",    L"icon-size",    L"icon-bulge",    L"monitor",       L"reserve-space",
-        L"auto-hide",  L"hide-when-covered", L"dwell-seconds", L"slide-seconds",
-        L"theme", L"tint-colour",
-        L"label-font-size", L"label-bold", L"label-font", L"label-pad-x", L"label-pad-y",
-        L"label-radius", L"label-gap", L"label-opacity", L"label-tail",
-    };
-    for (const wchar_t* key : kAllKeys) {
+    for (const std::wstring& key : Keys()) {
         if (std::find(written.begin(), written.end(), key) == written.end()) {
             lines.push_back(std::wstring(key) + L" = " + ValueFor(key));
         }

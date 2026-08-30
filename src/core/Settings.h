@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace liquidock {
 
@@ -182,7 +183,20 @@ struct Settings {
     // any future exporter agree on the representation.
     std::wstring ValueFor(const std::wstring& key) const;
 
+    // Everything a token carries, in the order it is written. One list, so the
+    // writer, the exporter and anything reading a token cannot disagree about
+    // what a config is.
+    static const std::vector<std::wstring>& Keys();
+
+    // The whole config as one pasteable string, and back again. Long on
+    // purpose: it is meant to be dropped into a chat window, not typed.
+    std::wstring ToToken() const;
+    // False if it is not a LiquiDock token, or if it arrived damaged - a
+    // truncated paste must not half-apply.
+    bool FromToken(const std::wstring& token);
+
 private:
+    void ApplyPair(const std::wstring& key, const std::wstring& value);
     bool ReadFile(const std::wstring& path);
     bool WriteDefaults(const std::wstring& path) const;
 };

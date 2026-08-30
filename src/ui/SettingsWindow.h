@@ -82,13 +82,15 @@ private:
     // table declarative, which is what makes it cheap to add a setting.
     // Which page a row lives on. Items first: it is what the window is most
     // often opened for.
-    enum class Tab { Items, Glass, Dock, Appearance, Behaviour };
-    static constexpr int kTabCount = 5;
+    enum class Tab { Items, Glass, Dock, Appearance, Behaviour, Profiles };
+    static constexpr int kTabCount = 6;
 
     struct Row {
         enum class Kind {
             Section, Slider, Toggle, Choice,
             Colour,        // a swatch that opens a picker
+            Profile,       // one saved config, with its own actions
+            Action,        // a ghost button that does one thing
             Item,          // one icon in the dock's own grid
             Suggestion,    // one installed app not on the dock yet
             AddItem, AddSeparator
@@ -227,6 +229,16 @@ private:
     // open. Saturation and value on the square, hue on the rail beneath, and a
     // row of the colours anyone actually reaches for.
     void DrawColour(const Row& row);
+    void DrawProfile(const Row& row, bool hovered);
+    void DrawAction(const Row& row, bool hovered);
+    // True while the new-profile button has become a field waiting for a
+    // name. Enter keeps it, Escape gives up.
+    bool naming_ = false;
+    D2D1_RECT_F ProfileAction(const Row& row, int index) const;
+    void ReloadProfiles();
+    void Announce(const std::wstring& text);
+    std::wstring ClipboardText() const;
+    bool SetClipboardText(const std::wstring& text) const;
     void DrawPicker(const D2D1_RECT_F& panel, float* rgb);
     D2D1_RECT_F PickerPanel(const Row& row) const;
     D2D1_RECT_F SwatchRect(const Row& row) const;
@@ -304,6 +316,15 @@ private:
     D2D1_RECT_F tabBounds_[kTabCount]{};
     // Which of the offered faces is selected. The setting itself is a name.
     int fontChoice_ = 0;
+    // The saved profiles, read from disk when the window opens and after
+    // anything changes them.
+    std::vector<std::wstring> profiles_;
+    // A line of feedback under the buttons - copying a token and applying
+    // one both succeed silently otherwise, which reads as nothing happening.
+    std::wstring notice_;
+    LARGE_INTEGER noticeSince_{};
+    // This frame's clock, so the notice can fade without reading it again.
+    LARGE_INTEGER now_{};
     // Dark, Light or Auto. The setting is an enum; the row is an index.
     int themeChoice_ = 0;
     // Which colour row has its picker open, and which part of it is being
