@@ -37,8 +37,9 @@ const D2D1_COLOR_F kTextDim = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.42f);
 const D2D1_COLOR_F kHover = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f);
 const D2D1_COLOR_F kRule = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.13f);
 
-float Radians(float degrees) {
-    return degrees * std::numbers::pi_v<float> / 180.0f;
+// The design tokens are plain float[4]; this is the one place they meet D2D.
+D2D1_COLOR_F Colour(const float rgba[4]) {
+    return D2D1::ColorF(rgba[0], rgba[1], rgba[2], rgba[3]);
 }
 
 } // namespace
@@ -50,7 +51,6 @@ GlassMenu::~GlassMenu() {
 bool GlassMenu::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
     device_ = &device;
     shaders_ = &shaders;
-    backdrop_.Initialize(device);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -68,23 +68,7 @@ bool GlassMenu::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
         return false;
     }
 
-    D3D11_BUFFER_DESC desc{};
-    desc.ByteWidth = sizeof(GlassConstants);
-    desc.Usage = D3D11_USAGE_DYNAMIC;
-    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    LD_CHECK(device_->d3d()->CreateBuffer(&desc, nullptr, &constantBuffer_));
-
-    D3D11_SAMPLER_DESC sampler{};
-    sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler.MaxLOD = D3D11_FLOAT32_MAX;
-    LD_CHECK(device_->d3d()->CreateSamplerState(&sampler, &sampler_));
-
-    if (!frost_.Initialize(*device_, *shaders_) ||
-        !text_.Initialize(*device_, layout::kFontSize)) {
+    if (!text_.Initialize(*device_, layout::kFontSize)) {
         return false;
     }
     text_.SetAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -93,7 +77,6 @@ bool GlassMenu::Initialize(GraphicsDevice& device, ShaderCache& shaders) {
 
 void GlassMenu::Destroy() {
     text_.Reset();
-    frost_.Reset();
     target_.Reset();
     if (hwnd_) {
         DestroyWindow(hwnd_);
@@ -135,29 +118,31 @@ void GlassMenu::Place(POINT screen) {
 
     const int windowWidth =
         static_cast<int>(std::lround((width_ + 2.0f * layout::kBleed) * scale));
-    const int windowHeight =
-        static_cast<int>(std::lround((height_ + 2.0f * layout::kBleed) * scale));
+    const int windowHeight = static_cast<int>(
+        std::lround((height_ + 2.0f * layout::kBleed + design::label::kTailHeight) * scale));
 
-    // The dock lives at the bottom of the screen, so the menu almost always has
-    // to open upward. Flipping rather than clamping keeps the cursor at the
-    // corner the menu grows from, which is what makes it feel anchored.
-    int x = screen.x - static_cast<int>(layout::kBleed * scale);
-    int y = screen.y - static_cast<int>(layout::kBleed * scale);
-    if (screen.y + windowHeight > work.bottom) {
-        y = screen.y - windowHeight + static_cast<int>(layout::kBleed * scale);
-    }
-    if (screen.x + windowWidth > work.right) {
-        x = screen.x - windowWidth + static_cast<int>(layout::kBleed * scale);
-    }
+    // Centred over the point it was opened from and sitting above it, with the
+    // tail pointing back down at it - the dock is at the bottom of the screen,
+    // so the menu always opens upward and the tail always points down.
+    const float tailPx = design::label::kTailHeight * scale;
+    int x = screen.x - windowWidth / 2;
+    int y = screen.y - windowHeight - static_cast<int>(std::lround(tailPx));
+
+    // Clamped horizontally rather than flipped: the tail moves along the bottom
+    // edge to stay over the anchor, so the menu can slide sideways to fit and
+    // still point at the thing it came from.
     x = std::clamp(x, static_cast<int>(work.left), static_cast<int>(work.right) - windowWidth);
-    y = std::clamp(y, static_cast<int>(work.top), static_cast<int>(work.bottom) - windowHeight);
+    if (y < work.top) {
+        y = static_cast<int>(work.top);
+    }
+
+    // Where the tail meets the panel, in the panel's own logical space. Kept
+    // clear of the corners, or the tail grows out of the rounding.
+    const float anchorLocal = (static_cast<float>(screen.x - x) / scale) - layout::kBleed;
+    const float margin = layout::kCorner + design::label::kTailWidth;
+    tailCenterX_ = std::clamp(anchorLocal, margin, std::max(margin, width_ - margin));
 
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, windowWidth, windowHeight, SWP_NOACTIVATE);
-
-    // Taken now, while the window is positioned but still hidden, so it copies
-    // what is actually behind the menu rather than the menu itself.
-    const RECT screenRect{x, y, x + windowWidth, y + windowHeight};
-    backdrop_.Capture(monitor, screenRect);
 
     if (target_.width() == 0) {
         target_.Initialize(*device_, hwnd_, static_cast<UINT>(windowWidth),
@@ -166,7 +151,6 @@ void GlassMenu::Place(POINT screen) {
         target_.Resize(static_cast<UINT>(windowWidth), static_cast<UINT>(windowHeight));
         text_.Invalidate();
     }
-    frost_.Resize(static_cast<UINT>(windowWidth), static_cast<UINT>(windowHeight));
 }
 
 int GlassMenu::ItemAt(float x, float y) const {
@@ -186,93 +170,33 @@ int GlassMenu::ItemAt(float x, float y) const {
 }
 
 void GlassMenu::Render() {
-    ComPtr<ID3D11VertexShader> vs = shaders_->VertexShader("Glass", "VSMain");
-    ComPtr<ID3D11PixelShader> ps = shaders_->PixelShader("Glass", "PSMain");
-    if (!vs || !ps || !target_.width()) {
+    if (!target_.width() || !text_.ready()) {
         return;
     }
-
     const float scale = static_cast<float>(dpi_) / 96.0f;
-    if (!backdrop_.srv()) {
-        return;
-    }
-
-    RECT windowRect{};
-    GetWindowRect(hwnd_, &windowRect);
-    const RECT monitorRect = backdrop_.monitor_rect();
-    const POINT origin{windowRect.left - monitorRect.left, windowRect.top - monitorRect.top};
-    const SIZE size{static_cast<LONG>(target_.width()), static_cast<LONG>(target_.height())};
-
-    // Rebuilt every time the menu opens rather than cached: it is on screen for
-    // a second and a half, and it has moved since last time.
-    frost_.Build(backdrop_, origin, size, design::menu::kFrost * design::glass::kMaxFrostSigmaPx * scale);
-
-    const float viewWidth = static_cast<float>(target_.width());
-    const float viewHeight = static_cast<float>(target_.height());
-
-    GlassConstants constants{};
-    constants.viewportCenter[0] = viewWidth;
-    constants.viewportCenter[1] = viewHeight;
-    constants.viewportCenter[2] = viewWidth * 0.5f;
-    constants.viewportCenter[3] = viewHeight * 0.5f;
-    constants.shape[0] = width_ * 0.5f * scale;
-    constants.shape[1] = height_ * 0.5f * scale;
-    constants.shape[2] = layout::kCorner * scale;
-    constants.light[0] = Radians(design::glass::kLightAngleDegrees);
-    constants.light[1] = design::menu::kLightIntensity;
-    constants.light[2] = design::menu::kRefraction;
-    constants.light[3] = design::menu::kDepth;
-    constants.material[0] = design::menu::kDispersion;
-    constants.material[1] = design::menu::kFrost;
-    constants.material[2] = design::menu::kSplay;
-    constants.material[3] = 0.0f;
-    // No window origin or backdrop transform: the glass pass reads one texture,
-    // the frost chain's output, which the menu builds over its own window.
-    constants.lensInfo[2] = scale;
-    constants.tint[0] = 1.0f;
-    constants.tint[1] = 1.0f;
-    constants.tint[2] = 1.0f;
-    constants.tint[3] = design::menu::kTintAlpha;
-
-    ID3D11DeviceContext1* ctx = device_->context();
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(ctx->Map(constantBuffer_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-        return;
-    }
-    memcpy(mapped.pData, &constants, sizeof(constants));
-    ctx->Unmap(constantBuffer_.Get(), 0);
 
     ID3D11RenderTargetView* rtv = target_.BeginFrame();
     if (!rtv) {
         return;
     }
-
-    const D3D11_VIEWPORT viewport{0.0f, 0.0f, viewWidth, viewHeight, 0.0f, 1.0f};
     constexpr float kTransparent[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    ctx->ClearRenderTargetView(rtv, kTransparent);
-    ctx->OMSetRenderTargets(1, &rtv, nullptr);
-    ctx->RSSetViewports(1, &viewport);
-    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ctx->IASetInputLayout(nullptr);
-    ctx->VSSetShader(vs.Get(), nullptr, 0);
-    ctx->PSSetShader(ps.Get(), nullptr, 0);
-    ID3D11Buffer* cb = constantBuffer_.Get();
-    ctx->VSSetConstantBuffers(0, 1, &cb);
-    ctx->PSSetConstantBuffers(0, 1, &cb);
-    ID3D11ShaderResourceView* resources[2] = {backdrop_.srv(), frost_.srv()};
-    ctx->PSSetShaderResources(0, 2, resources);
-    ID3D11SamplerState* samplers[1] = {sampler_.Get()};
-    ctx->PSSetSamplers(0, 1, samplers);
-    ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
-    ctx->Draw(3, 0);
-
-    ID3D11ShaderResourceView* nullResources[2] = {nullptr, nullptr};
-    ctx->PSSetShaderResources(0, 2, nullResources);
+    device_->context()->ClearRenderTargetView(rtv, kTransparent);
     ID3D11RenderTargetView* nullRtv = nullptr;
-    ctx->OMSetRenderTargets(1, &nullRtv, nullptr);
+    device_->context()->OMSetRenderTargets(1, &nullRtv, nullptr);
 
-    // The text, straight onto the finished glass.
     if (text_.Begin(target_.swap_chain(), scale)) {
+        // The same shape as the hover label, for the same reason: a menu that
+        // came from the dock should say so, and a tail pointing back at the
+        // icon says it without a word. It is also why this is flat black rather
+        // than glass - the tooltip established that language first, and two
+        // different materials for two things that both hang off the dock reads
+        // as two different programs.
+        const D2D1_RECT_F panel = D2D1::RectF(layout::kBleed, layout::kBleed,
+                                              layout::kBleed + width_, layout::kBleed + height_);
+        text_.FillTooltip(panel, layout::kCorner, tailCenterX_, design::label::kTailWidth,
+                          design::label::kTailHeight, Colour(design::label::kFill),
+                          Colour(design::label::kEdge));
+
         for (size_t i = 0; i < items_.size(); ++i) {
             const Item& item = items_[i];
             const float top = layout::kBleed + tops_[i];
@@ -317,17 +241,37 @@ UINT GlassMenu::Track(std::vector<Item> items, POINT screen) {
     chosen_ = 0;
     hover_ = -1;
 
+    LARGE_INTEGER opened{};
+    LARGE_INTEGER frequency{};
+    QueryPerformanceCounter(&opened);
+    QueryPerformanceFrequency(&frequency);
+
     Measure();
     Place(screen);
 
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+    // Drawn here rather than left to WM_PAINT. WM_PAINT is synthesised only when
+    // the message queue is empty, and while a menu is up the dock is still being
+    // driven by its capture thread - so on a busy desktop the first paint could
+    // be seconds late. For those seconds the menu was invisible *and* holding
+    // mouse capture, which is exactly the shape of "the menu takes ages and I
+    // cannot click anything".
+    Render();
     // Capture rather than activation: the dock is a no-activate window and a
     // menu that stole the foreground would deactivate whatever the user was
     // working in just to show them four commands. Capture gets every mouse
     // message wherever it lands, which is all a menu actually needs.
     SetCapture(hwnd_);
     running_ = true;
-    InvalidateRect(hwnd_, nullptr, FALSE);
+
+    // How long from the click to pixels on screen. Logged because this was
+    // seconds once, and the failure was invisible: the window was up and had
+    // the mouse, it just had not painted.
+    LARGE_INTEGER shown{};
+    QueryPerformanceCounter(&shown);
+    LogDebug("Menu shown in {:.1f} ms",
+             1000.0 * static_cast<double>(shown.QuadPart - opened.QuadPart) /
+                 static_cast<double>(frequency.QuadPart));
 
     MSG message{};
     while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
@@ -389,7 +333,7 @@ LRESULT GlassMenu::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             const int hit = ItemAt(x, y);
             if (hit != hover_) {
                 hover_ = hit;
-                InvalidateRect(hwnd, nullptr, FALSE);
+                Render(); // never through WM_PAINT; see Track
             }
             return 0;
         }

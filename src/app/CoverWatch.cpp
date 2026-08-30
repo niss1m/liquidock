@@ -106,28 +106,46 @@ bool CoverWatch::Initialize(HWND notify, UINT message) {
     g_notify = notify;
     g_message = message;
 
-    // EVENT_SYSTEM_FOREGROUND through EVENT_SYSTEM_MINIMIZEEND covers every way
-    // the answer changes without a window being created or destroyed: switching
-    // apps, minimising and restoring, and the end of a move or resize. Window
-    // creation and destruction arrive separately, through RunningState's hook,
-    // which the dock already listens to.
+    // Exactly the three events that can change the answer without a window
+    // being created or destroyed: switching apps, finishing a move or resize,
+    // and minimising or restoring. Creation and destruction arrive separately
+    // through RunningState's hook, which the dock already listens to.
     //
-    // Deliberately *not* EVENT_OBJECT_LOCATIONCHANGE: that fires continuously
-    // while a window is being dragged, and re-scanning every top-level window
-    // on each of those would be the one polling loop in the whole program.
-    hook_ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, nullptr, &EventProc,
-                            0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    if (!hook_) {
-        LogWarn("Cover watch hook failed; the dock will hide on its dwell regardless");
+    // Deliberately *not* a single hook spanning FOREGROUND..MINIMIZEEND. That
+    // range also carries CAPTURESTART/END and SCROLLINGSTART/END, which fire
+    // continuously while anything is scrolled or takes the mouse - and the
+    // measured result was a full window scan several times a second on an idle
+    // desktop, which is the polling loop this class exists to not be.
+    //
+    // Also not EVENT_OBJECT_LOCATIONCHANGE: that fires for every pixel of a
+    // window drag. MOVESIZEEND says the same thing once, at the end.
+    static constexpr DWORD kEvents[] = {EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MOVESIZEEND,
+                                        EVENT_SYSTEM_MINIMIZEEND};
+    bool any = false;
+    for (size_t i = 0; i < std::size(kEvents); ++i) {
+        // MINIMIZESTART and MINIMIZEEND are adjacent, so the last hook covers
+        // both ends of a minimise with one registration.
+        const DWORD last = (kEvents[i] == EVENT_SYSTEM_MINIMIZEEND) ? EVENT_SYSTEM_MINIMIZEEND
+                                                                   : kEvents[i];
+        const DWORD first = (kEvents[i] == EVENT_SYSTEM_MINIMIZEEND) ? EVENT_SYSTEM_MINIMIZESTART
+                                                                     : kEvents[i];
+        hooks_[i] = SetWinEventHook(first, last, nullptr, &EventProc, 0, 0,
+                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        any = any || (hooks_[i] != nullptr);
+    }
+    if (!any) {
+        LogWarn("Cover watch hooks failed; the dock will hide on its dwell regardless");
         return false;
     }
     return true;
 }
 
 void CoverWatch::Shutdown() {
-    if (hook_) {
-        UnhookWinEvent(hook_);
-        hook_ = nullptr;
+    for (HWINEVENTHOOK& hook : hooks_) {
+        if (hook) {
+            UnhookWinEvent(hook);
+            hook = nullptr;
+        }
     }
     if (g_notify == notify_) {
         g_notify = nullptr;

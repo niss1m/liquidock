@@ -79,6 +79,7 @@ enum ItemMenuCommand : UINT {
     kCommandPreferences = 4,
     kCommandEditFile = 5,
     kCommandQuit = 6,
+    kCommandUndo = 7,
 };
 
 constexpr int kTriggerThicknessPx = 2; // the strip that notices the cursor
@@ -344,8 +345,13 @@ bool DockWindow::DockIsCovered() const {
 
     char culprit[64]{};
     const bool covered = CoverWatch::IsCovered(bar, culprit, std::size(culprit));
-    LogDebug("Dock strip ({},{})-({},{}) is {}{}", bar.left, bar.top, bar.right, bar.bottom,
-             covered ? "covered by " : "clear", culprit);
+    // Logged only when the answer changes. A line per scan turned the log into
+    // a scroll of identical entries and made an event-driven check read like a
+    // poll, which is the opposite of what it is.
+    if (covered != covered_) {
+        LogDebug("Dock strip ({},{})-({},{}) is now {}{}", bar.left, bar.top, bar.right, bar.bottom,
+                 covered ? "covered by " : "clear", culprit);
+    }
     return covered;
 }
 
@@ -812,6 +818,10 @@ void DockWindow::Launch(int itemIndex) {
     const std::wstring path = ItemStore::ExpandPath(item.path);
     const std::wstring arguments = ItemStore::ExpandPath(item.arguments);
     const std::wstring directory = ItemStore::ExpandPath(item.workingDirectory);
+    const bool elevated = item.runAsAdmin;
+    const int show = (item.runState == RunState::Minimized)   ? SW_SHOWMINNOACTIVE
+                     : (item.runState == RunState::Maximized) ? SW_SHOWMAXIMIZED
+                                                              : SW_SHOWNORMAL;
     LogInfo("Launching item {}", itemIndex);
 
     layout_.Bounce(itemIndex);
@@ -822,7 +832,7 @@ void DockWindow::Launch(int itemIndex) {
     // extension, resolve a stale shortcut, or wait on a slow network path - and
     // blocking here would freeze the magnification mid-wave. The thread is
     // detached because it touches nothing of ours and needs no result.
-    std::thread([path, arguments, directory] {
+    std::thread([path, arguments, directory, elevated, show] {
         if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
             return;
         }
@@ -833,13 +843,21 @@ void DockWindow::Launch(int itemIndex) {
         // gone. NO_UI keeps a bad path in the config file from putting a modal
         // error box on screen.
         info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-        info.lpVerb = L"open";
+        // "runas" is what Explorer's own Run as administrator uses: the shell
+        // puts up the UAC prompt and launches elevated, which is the only right
+        // way for an unelevated dock to do it.
+        info.lpVerb = elevated ? L"runas" : L"open";
+        if (elevated) {
+            // NO_UI would suppress the consent prompt itself, and a launch that
+            // silently does nothing is worse than one that asks.
+            info.fMask &= ~static_cast<ULONG>(SEE_MASK_FLAG_NO_UI);
+        }
         info.lpFile = path.c_str();
         // Null rather than an empty string: ShellExecuteEx treats "" as a real
         // (empty) argument for some verbs, and as a working directory of "".
         info.lpParameters = arguments.empty() ? nullptr : arguments.c_str();
         info.lpDirectory = directory.empty() ? nullptr : directory.c_str();
-        info.nShow = SW_SHOWNORMAL;
+        info.nShow = show;
         if (!ShellExecuteExW(&info)) {
             LogWarn("Could not launch a dock item: {}", GetLastError());
         }
@@ -863,6 +881,11 @@ void DockWindow::ShowDockMenu(int itemIndex, POINT screen) {
         items.push_back({0, L"", false, true, false});
     }
     items.push_back({kCommandAdd, L"Add app…", true, false, false});
+    // Only offered when there is something to undo. A permanently greyed-out
+    // command is a promise the program is not keeping.
+    if (store_.can_undo()) {
+        items.push_back({kCommandUndo, L"Undo the last change", true, false, false});
+    }
     items.push_back({kCommandPreferences, L"Preferences…", true, false, false});
     items.push_back({kCommandEditFile, L"Edit the items file…", true, false, false});
     items.push_back({0, L"", false, true, false});
@@ -890,6 +913,11 @@ void DockWindow::ShowDockMenu(int itemIndex, POINT screen) {
             break;
         case kCommandAdd:
             AddItemViaDialog();
+            break;
+        case kCommandUndo:
+            if (store_.Undo()) {
+                ReloadItems();
+            }
             break;
         case kCommandPreferences:
             PostMessageW(hwnd_, kShowSettingsMessage, 0, 0);

@@ -46,7 +46,7 @@ constexpr float kItemHeight = 34.0f;
 constexpr float kItemIcon = 24.0f;
 // Added to a row while its editor is open.
 constexpr float kEditorRow = 34.0f;
-constexpr float kEditorHeight = 5.0f * kEditorRow + 16.0f;
+constexpr float kEditorHeight = 7.0f * kEditorRow + 16.0f;
 constexpr float kEditorLabel = 104.0f;
 constexpr float kEditorButton = 92.0f;
 // The line under the list that says what the hovered row actually is.
@@ -555,7 +555,11 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     // it back from the taskbar as well as showing it the first time.
     ShowWindow(hwnd_, IsIconic(hwnd_) ? SW_RESTORE : SW_SHOW);
     SetForegroundWindow(hwnd_);
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    // Drawn now rather than left to WM_PAINT, which is only synthesised when
+    // the message queue is empty - and with the dock's capture thread feeding
+    // it, on a busy desktop that can be seconds away. An empty window for a
+    // second after a click reads as the program having hung.
+    Render();
 }
 
 void SettingsWindow::Hide() {
@@ -808,6 +812,25 @@ bool SettingsWindow::HandleEditorClick(const Row& row, float x, float y) {
 
         const D2D1_RECT_F& field = fields[i];
         if (x >= field.left && x <= field.right && y >= field.top && y <= field.bottom) {
+            if (i == static_cast<int>(Field::Show)) {
+                // Cycled rather than given a dropdown: three values, and a
+                // dropdown is a second window for a choice you can make by
+                // clicking the answer.
+                DockItem item = items_.items()[index];
+                item.runState = (item.runState == RunState::Normal)      ? RunState::Minimized
+                                : (item.runState == RunState::Minimized) ? RunState::Maximized
+                                                                         : RunState::Normal;
+                items_.Replace(index, std::move(item));
+                CommitItems();
+                return true;
+            }
+            if (i == static_cast<int>(Field::Admin)) {
+                DockItem item = items_.items()[index];
+                item.runAsAdmin = !item.runAsAdmin;
+                items_.Replace(index, std::move(item));
+                CommitItems();
+                return true;
+            }
             if (i == static_cast<int>(Field::Path) || i == static_cast<int>(Field::Icon)) {
                 return false; // read-only: use the button beside it
             }
@@ -1153,10 +1176,16 @@ void SettingsWindow::DrawEditor(const Row& row) {
     }
     const DockItem& item = items[index];
 
-    static const wchar_t* const kNames[] = {L"Name", L"Opens", L"Arguments", L"Start in", L"Icon"};
-    const std::wstring values[] = {item.label, item.path, item.arguments, item.workingDirectory,
-                                   item.iconPath};
-    static const wchar_t* const kButtons[] = {nullptr, L"Choose…", nullptr, L"Browse…", L"Choose…"};
+    static const wchar_t* const kNames[] = {L"Name",  L"Opens", L"Arguments", L"Start in",
+                                            L"Icon",  L"Opens as", L"Elevated"};
+    const std::wstring values[] = {
+        item.label, item.path, item.arguments, item.workingDirectory, item.iconPath,
+        item.runState == RunState::Minimized   ? L"Minimized"
+        : item.runState == RunState::Maximized ? L"Maximized"
+                                               : L"Normal window",
+        item.runAsAdmin ? L"Run as administrator" : L"No"};
+    static const wchar_t* const kButtons[] = {nullptr,    L"Choose…", nullptr, L"Browse…",
+                                              L"Choose…", nullptr,    nullptr};
 
     D2D1_RECT_F fields[static_cast<int>(Field::Count)];
     D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
@@ -1171,11 +1200,21 @@ void SettingsWindow::DrawEditor(const Row& row) {
                  kHint);
 
         const bool editing = (editItem_ == row.itemIndex && static_cast<int>(editField_) == i);
-        const bool typable = (i != static_cast<int>(Field::Path) &&
-                              i != static_cast<int>(Field::Icon));
+        const bool typable = (i == static_cast<int>(Field::Name) ||
+                              i == static_cast<int>(Field::Arguments) ||
+                              i == static_cast<int>(Field::WorkingDir));
         if (typable) {
             brush_->SetColor(editing ? Grey(1.0f, 0.14f) : Grey(1.0f, 0.06f));
             d2d_->FillRoundedRectangle(D2D1::RoundedRect(field, 5.0f, 5.0f), brush_.Get());
+        } else if (i == static_cast<int>(Field::Show) || i == static_cast<int>(Field::Admin)) {
+            // Clickable, so it has to look it - a value you can change and a
+            // value you can only read must not draw the same.
+            const bool under = pointerX_ >= field.left && pointerX_ <= field.right &&
+                               pointerY_ >= field.top && pointerY_ <= field.bottom;
+            const D2D1_RECT_F pill =
+                D2D1::RectF(field.left, field.top, field.left + 168.0f, field.bottom);
+            brush_->SetColor(under ? Grey(1.0f, 0.16f) : Grey(1.0f, 0.09f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 5.0f, 5.0f), brush_.Get());
         }
 
         const std::wstring text = editing ? editText_ : values[i];
@@ -1403,7 +1442,10 @@ void SettingsWindow::Render() {
         DrawDetailBar();
     }
 
-    DrawText(L"Esc to close  ·  these are the same values as settings.txt", hintFormat_.Get(),
+    DrawText(activeTab_ == Tab::Items
+                 ? L"Esc to close  ·  Ctrl+Z undoes the last change to the list"
+                 : L"Esc to close  ·  these are the same values as settings.txt",
+             hintFormat_.Get(),
              D2D1::RectF(layout::kPadding, static_cast<float>(height_) / scale - 28.0f,
                          layout::kWidth - layout::kPadding,
                          static_cast<float>(height_) / scale - 8.0f),
@@ -1638,6 +1680,17 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_KEYDOWN:
+            if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+                CommitEdit();
+                if (items_.Undo()) {
+                    expandedItem_ = -1;
+                    CommitItems();
+                } else {
+                    // Saying nothing at all would read as a dead key.
+                    MessageBeep(MB_OK);
+                }
+                return 0;
+            }
             if (editItem_ >= 0 && editField_ != Field::Count) {
                 switch (wParam) {
                     case VK_LEFT:

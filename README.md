@@ -56,6 +56,9 @@ group | path | label
 
 `group` is `main` or `utility` — utility items sit to the right of the hairline. `label` is optional.
 `kind = separator` makes an entry a divider instead — it has no path and launches nothing.
+`show = minimized|maximized` and `admin = on` cover the run state and elevation; elevation goes
+through the shell's `runas` verb, so it prompts through UAC rather than the dock running elevated
+and handing its token to everything it launches.
 
 `path` is anything the shell can open: a program, a shortcut, a folder, a `shell:AppsFolder\...`
 moniker for a packaged app, or a `::{guid}` parsing name. Environment variables are expanded.
@@ -71,7 +74,9 @@ running dock immediately and are written back to the settings file.
 **Items** is the dock's contents, one line each with its real icon. Hovering a row names what it
 actually runs in the bar underneath; **dragging one reorders the dock**, and dropping it on the far
 side of the group boundary moves it into that group. Clicking a row opens it: name, target,
-arguments, working directory and icon, each editable in place. The buttons on the hovered row still
+arguments, working directory, icon, whether the window opens normal, minimised or maximised, and
+whether it launches elevated — the same set as Nexus's Dock Entry Properties. **Ctrl+Z** undoes the
+last change to the list, and the dock's own context menu offers the same undo. The buttons on the hovered row still
 step it up, down, or off the dock. *Add app…* opens a file picker; *Add divider* drops a rule into
 the row, which is separate from the structural hairline between the two groups and can go anywhere.
 

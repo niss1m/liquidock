@@ -44,7 +44,13 @@ private:
     static void CALLBACK EventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject,
                                    LONG idChild, DWORD thread, DWORD time);
 
-    HWINEVENTHOOK hook_ = nullptr;
+    // One hook per event rather than one hook over a range. The range from
+    // FOREGROUND to MINIMIZEEND also contains CAPTURESTART/END and
+    // SCROLLINGSTART/END, which fire continuously while anything on the desktop
+    // is scrolled or grabs the mouse - so a single range hook turned an
+    // event-driven check into a scan several times a second, which is precisely
+    // the polling this was written to avoid.
+    HWINEVENTHOOK hooks_[3]{};
     HWND notify_ = nullptr;
     UINT message_ = 0;
 };

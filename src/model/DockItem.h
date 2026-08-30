@@ -15,6 +15,11 @@ enum class ItemGroup { Main, Utility };
 // groups, which is structural and comes from the design.
 enum class ItemKind { App, Separator };
 
+// How the target's window should come up. Nexus's Dock Entry Properties offers
+// exactly these three and they are the ones that earn their place: a terminal
+// you always want maximised, a sync client you always want out of the way.
+enum class RunState { Normal, Minimized, Maximized };
+
 // One thing on the dock.
 //
 // `path` is whatever ShellExecute would accept: a file, a .lnk, a folder, a
@@ -44,6 +49,14 @@ struct DockItem {
     std::wstring iconPath;
 
     ItemGroup group = ItemGroup::Main;
+
+    RunState runState = RunState::Normal;
+    // Launch elevated. The shell's "runas" verb, which is the same thing the
+    // Explorer context menu does, so it prompts through UAC rather than needing
+    // the dock itself to be elevated - a dock running as administrator would
+    // hand every program it launches the same token, which is not a thing
+    // anybody should ship.
+    bool runAsAdmin = false;
 
     // Index of this item's cell in the icon atlas, or -1 while its icon is
     // still being extracted on the loader thread.

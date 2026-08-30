@@ -229,6 +229,17 @@ bool ItemStore::ReadFile(const std::wstring& path) {
             current.workingDirectory = value;
         } else if (key == L"icon") {
             current.iconPath = value;
+        } else if (key == L"show") {
+            if (_wcsicmp(value.c_str(), L"minimized") == 0) {
+                current.runState = RunState::Minimized;
+            } else if (_wcsicmp(value.c_str(), L"maximized") == 0) {
+                current.runState = RunState::Maximized;
+            } else {
+                current.runState = RunState::Normal;
+            }
+        } else if (key == L"admin") {
+            current.runAsAdmin = (_wcsicmp(value.c_str(), L"on") == 0 ||
+                                  _wcsicmp(value.c_str(), L"true") == 0 || value == L"1");
         } else {
             LogWarn("Unknown key in items.txt; ignoring it");
         }
@@ -282,6 +293,13 @@ bool ItemStore::Save() const {
         if (!item.iconPath.empty()) {
             fwprintf(file, L"icon    = %s\n", item.iconPath.c_str());
         }
+        if (item.runState != RunState::Normal) {
+            fwprintf(file, L"show    = %s\n",
+                     item.runState == RunState::Minimized ? L"minimized" : L"maximized");
+        }
+        if (item.runAsAdmin) {
+            fwprintf(file, L"admin   = on\n");
+        }
         fwprintf(file, L"\n");
     }
     fclose(file);
@@ -292,7 +310,29 @@ bool ItemStore::Remove(size_t index) {
     if (index >= items_.size()) {
         return false;
     }
+    Remember();
     items_.erase(items_.begin() + static_cast<ptrdiff_t>(index));
+    Save();
+    return true;
+}
+
+void ItemStore::Remember() {
+    // Deep enough to cover a bad few seconds and shallow enough that nobody
+    // notices the memory. Undoing thirty steps is not a thing anyone does; the
+    // step that matters is the one just taken by accident.
+    constexpr size_t kDepth = 32;
+    undo_.push_back(items_);
+    if (undo_.size() > kDepth) {
+        undo_.erase(undo_.begin());
+    }
+}
+
+bool ItemStore::Undo() {
+    if (undo_.empty()) {
+        return false;
+    }
+    items_ = std::move(undo_.back());
+    undo_.pop_back();
     Save();
     return true;
 }
@@ -301,6 +341,7 @@ int ItemStore::MoveTo(size_t from, size_t to) {
     if (from >= items_.size() || to > items_.size()) {
         return -1;
     }
+    Remember();
     DockItem moving = items_[from];
     items_.erase(items_.begin() + static_cast<ptrdiff_t>(from));
     if (to > from) {
@@ -324,6 +365,7 @@ bool ItemStore::Replace(size_t index, DockItem item) {
     if (index >= items_.size()) {
         return false;
     }
+    Remember();
     if (item.label.empty()) {
         item.label = LabelFromPath(item.path);
     }
@@ -337,6 +379,7 @@ bool ItemStore::Add(DockItem item) {
         LogWarn("The dock is full ({} items); not adding another", design::kMaxItems);
         return false;
     }
+    Remember();
     if (item.label.empty()) {
         item.label = LabelFromPath(item.path);
     }
@@ -357,6 +400,7 @@ int ItemStore::Move(size_t index, int direction) {
     if (target < 0 || target >= static_cast<ptrdiff_t>(items_.size())) {
         return -1;
     }
+    Remember();
     // Crossing the group boundary moves the item into that group rather than
     // refusing. Refusing left the preferences window with no way at all to put
     // an app in the utility run - the boundary read as a wall you could see and

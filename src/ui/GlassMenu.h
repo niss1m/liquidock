@@ -9,22 +9,22 @@
 #include "gfx/GraphicsDevice.h"
 #include "gfx/ShaderCache.h"
 #include "gfx/TextLayer.h"
-#include "glass/FrostChain.h"
-#include "glass/SnapshotBackdrop.h"
 
 namespace liquidock {
 
-// The dock's context menu, made of the same glass as the dock.
+// The dock's context menu, drawn as the hover label's bigger sibling.
 //
 // A Win32 popup menu would be one call, and it would look like a Win32 popup
-// menu sitting under a sheet of glass - which is exactly the seam this project
-// exists to avoid. So it is the same shader, the same corner radius and the
-// same rim, with DirectWrite for the text on top.
+// menu hanging off a sheet of glass - which is exactly the seam this project
+// exists to avoid.
 //
-// The backdrop is deliberately the wallpaper rather than the live screen even
-// when the dock is capturing. The capture only covers the strip the dock sits
-// in, and a menu opens somewhere else; giving the menu its own duplication for
-// the second and a half it is on screen would cost far more than it is worth.
+// It was glass, and it should not have been. Two things hang off the dock - the
+// name of the icon under the cursor, and this - and making them different
+// materials reads as two different programs. The label got there first and got
+// it right: flat black, no border, and a tail pointing back at what it came
+// from. So this is the same shape, the same colour and the same tail, and it is
+// also far cheaper than the glass version, which had to snapshot the screen
+// behind it and run a blur chain before it could show anything.
 //
 // Track() runs its own message loop and returns the chosen command, the way
 // TrackPopupMenu does, so calling code reads the same as it did before.
@@ -63,20 +63,18 @@ private:
 
     GraphicsDevice* device_ = nullptr;
     ShaderCache* shaders_ = nullptr;
-    SnapshotBackdrop backdrop_;
 
     HWND hwnd_ = nullptr;
     CompositionTarget target_;
-    FrostChain frost_;
     TextLayer text_;
-    ComPtr<ID3D11Buffer> constantBuffer_;
-    ComPtr<ID3D11SamplerState> sampler_;
 
     std::vector<Item> items_;
     std::vector<float> tops_; // each item's top edge, logical, within the panel
 
     UINT dpi_ = 96;
-    float width_ = 0.0f;  // the glass panel, logical
+    float width_ = 0.0f;  // the panel, logical
+    // Where the tail meets the panel's bottom edge, in the panel's own space.
+    float tailCenterX_ = 0.0f;
     float height_ = 0.0f;
     int hover_ = -1;
     UINT chosen_ = 0;

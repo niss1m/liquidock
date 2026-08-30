@@ -22,6 +22,17 @@ namespace liquidock {
 // it starts rather than empty until configured.
 class ItemStore {
 public:
+    // Puts the list back the way it was before the last change. Returns false
+    // if there is nothing to undo.
+    //
+    // A stack of whole lists rather than a log of reversible operations. A dock
+    // holds a few dozen short records, so a snapshot is a few kilobytes and
+    // costs nothing to take - and it is right by construction, where an undo
+    // log has to get every operation's inverse right and is wrong the first
+    // time someone adds an operation and forgets.
+    bool Undo();
+    bool can_undo() const { return !undo_.empty(); }
+
     // Loads the config file, seeding and writing it first if it does not exist.
     // Always succeeds: a missing or unreadable file yields the built-in
     // defaults rather than an empty dock.
@@ -80,8 +91,11 @@ public:
 private:
     bool ReadFile(const std::wstring& path);
     void SeedDefaults();
+    // Snapshots the current list. Called by every mutation before it mutates.
+    void Remember();
 
     std::vector<DockItem> items_;
+    std::vector<std::vector<DockItem>> undo_;
 };
 
 } // namespace liquidock

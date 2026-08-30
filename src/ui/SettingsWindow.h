@@ -132,7 +132,7 @@ private:
     void DrawItem(const Row& row, bool hovered, float pointerX);
     // The open editor under an item row. Returns the field rectangles in the
     // order the enum below gives them, so drawing and hit testing cannot drift.
-    enum class Field { Name, Path, Arguments, WorkingDir, Icon, Count };
+    enum class Field { Name, Path, Arguments, WorkingDir, Icon, Show, Admin, Count };
     void EditorRects(const Row& row, D2D1_RECT_F* fields, D2D1_RECT_F* buttons) const;
     void DrawEditor(const Row& row);
     // Handles a click inside an open editor. True if anything changed.
