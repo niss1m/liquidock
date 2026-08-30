@@ -71,6 +71,12 @@ private:
     std::vector<Item> items_;
     std::vector<float> tops_; // each item's top edge, logical, within the panel
 
+    // Whether the last Render actually presented. A menu that drew nothing is
+    // an invisible window holding the mouse, which is the worst thing this
+    // class can be.
+    bool drawn_ = false;
+    // When a mouse message last arrived, for the watchdog.
+    LARGE_INTEGER lastInput_{};
     UINT dpi_ = 96;
     float width_ = 0.0f;  // the panel, logical
     // Where the tail meets the panel's bottom edge, in the panel's own space.

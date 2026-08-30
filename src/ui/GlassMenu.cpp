@@ -18,6 +18,20 @@ namespace {
 
 constexpr wchar_t kWindowClass[] = L"LiquiDock.Menu";
 
+// The menu takes the mouse for as long as it is up, which is how a menu is
+// supposed to work and also how it can trap someone. It is a no-activate
+// window, so keyboard messages go to whatever *is* focused and never reach this
+// thread - Escape included. That leaves the mouse as the only way out, and if
+// the menu is up but invisible there is nothing to aim at.
+//
+// So it holds capture on a leash. The watchdog checks that the menu still has
+// the capture it thinks it has, and gives up entirely after this long without a
+// single mouse message - a menu nobody has moved the pointer over for half a
+// minute is not a menu anyone is reading.
+constexpr UINT_PTR kWatchdogTimer = 1;
+constexpr UINT kWatchdogMs = 250;
+constexpr double kAbandonSeconds = 30.0;
+
 namespace layout {
 constexpr float kItemHeight = 32.0f;
 constexpr float kHeaderHeight = 30.0f;
@@ -178,6 +192,7 @@ int GlassMenu::ItemAt(float x, float y) const {
 }
 
 void GlassMenu::Render() {
+    drawn_ = false;
     if (!target_.width() || !text_.ready()) {
         return;
     }
@@ -232,6 +247,7 @@ void GlassMenu::Render() {
     }
 
     target_.EndFrame();
+    drawn_ = true;
 }
 
 void GlassMenu::Choose(int index) {
@@ -243,6 +259,12 @@ void GlassMenu::Choose(int index) {
 
 UINT GlassMenu::Track(std::vector<Item> items, POINT screen) {
     if (!hwnd_ || items.empty()) {
+        return 0;
+    }
+    // Never re-enter. Track runs a nested message loop, so a second one started
+    // from inside the first would share this object's state with it and leave
+    // two loops fighting over one `running_`.
+    if (running_) {
         return 0;
     }
     items_ = std::move(items);
@@ -269,8 +291,18 @@ UINT GlassMenu::Track(std::vector<Item> items, POINT screen) {
     // menu that stole the foreground would deactivate whatever the user was
     // working in just to show them four commands. Capture gets every mouse
     // message wherever it lands, which is all a menu actually needs.
+    // Nothing was drawn, so there is nothing to show and no way to aim at it.
+    // Showing it anyway would be a transparent window holding the mouse.
+    if (!drawn_) {
+        ShowWindow(hwnd_, SW_HIDE);
+        LogWarn("Menu could not draw; not showing it rather than trapping the pointer");
+        return 0;
+    }
+
     SetCapture(hwnd_);
     running_ = true;
+    QueryPerformanceCounter(&lastInput_);
+    SetTimer(hwnd_, kWatchdogTimer, kWatchdogMs, nullptr);
 
     // How long from the click to pixels on screen. Logged because this was
     // seconds once, and the failure was invisible: the window was up and had
@@ -298,6 +330,7 @@ UINT GlassMenu::Track(std::vector<Item> items, POINT screen) {
         }
     }
 
+    KillTimer(hwnd_, kWatchdogTimer);
     ReleaseCapture();
     ShowWindow(hwnd_, SW_HIDE);
     running_ = false;
@@ -352,6 +385,7 @@ LRESULT GlassMenu::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             // what both the hover and the dismiss test want.
             const float x = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
             const float y = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
+            QueryPerformanceCounter(&lastInput_);
             const int hit = ItemAt(x, y);
             if (hit != hover_) {
                 hover_ = hit;
@@ -360,8 +394,22 @@ LRESULT GlassMenu::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             return 0;
         }
 
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+            // A press outside the panel dismisses on the way down rather than
+            // waiting for the release, so a click that never gets a matching
+            // up - the pointer leaving to a window that takes capture, say -
+            // cannot leave the menu holding the mouse.
+            QueryPerformanceCounter(&lastInput_);
+            if (ItemAt(static_cast<float>(GET_X_LPARAM(lParam)) / scale,
+                       static_cast<float>(GET_Y_LPARAM(lParam)) / scale) < 0) {
+                running_ = false;
+            }
+            return 0;
+
         case WM_LBUTTONUP:
         case WM_RBUTTONUP: {
+            QueryPerformanceCounter(&lastInput_);
             const float x = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
             const float y = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
             const int hit = ItemAt(x, y);
@@ -375,6 +423,35 @@ LRESULT GlassMenu::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
 
         case WM_CAPTURECHANGED:
             running_ = false;
+            return 0;
+
+        case WM_TIMER:
+            if (wParam == kWatchdogTimer) {
+                // Someone else has the mouse, so our loop is holding nothing
+                // and would spin until a message it will never get.
+                if (GetCapture() != hwnd) {
+                    running_ = false;
+                    return 0;
+                }
+                LARGE_INTEGER now{};
+                LARGE_INTEGER frequency{};
+                QueryPerformanceCounter(&now);
+                QueryPerformanceFrequency(&frequency);
+                const double idle = static_cast<double>(now.QuadPart - lastInput_.QuadPart) /
+                                    static_cast<double>(frequency.QuadPart);
+                if (idle > kAbandonSeconds) {
+                    LogWarn("Menu abandoned after {:.0f}s without input", idle);
+                    running_ = false;
+                }
+            }
+            return 0;
+
+        case WM_ACTIVATEAPP:
+            // Another application came forward. Whatever the user is doing, it
+            // is not this menu.
+            if (wParam == FALSE) {
+                running_ = false;
+            }
             return 0;
 
         default:

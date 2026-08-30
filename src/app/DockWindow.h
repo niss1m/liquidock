@@ -167,6 +167,10 @@ private:
     ComPtr<ID3D11Buffer> constantBuffer_;
     ComPtr<ID3D11Buffer> iconConstantBuffer_;
     ComPtr<ID3D11SamplerState> sampler_;
+    // The icons need their own. They share a texture with no gutters between
+    // cells, so the mip levels the glass is happy to use blend one icon into
+    // the next.
+    ComPtr<ID3D11SamplerState> iconSampler_;
     // Premultiplied source-over. The glass writes straight into a cleared
     // target and needs no blending; the icons land on top of it and do.
     ComPtr<ID3D11BlendState> iconBlend_;

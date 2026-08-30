@@ -94,6 +94,13 @@ enum ItemMenuCommand : UINT {
 
 constexpr int kTriggerThicknessPx = 2; // the strip that notices the cursor
 
+// How far into the mip chain the icon atlas may be sampled, and how far inside
+// its cell each icon is read from. At mip 2 one texel spans four of the
+// original, and linear filtering reaches two texels - so eight source pixels,
+// which is what the inset has to cover for a cell edge never to be reached.
+constexpr float kIconMaxLod = 2.0f;
+constexpr int kIconCellInset = 8;
+
 constexpr float kCornerRadius = design::kCornerRadius;
 constexpr float kBottomMargin = design::kScreenMargin;
 constexpr float kBleed = design::kBleed;
@@ -507,6 +514,19 @@ bool DockWindow::CreateResources() {
     sampler.MaxLOD = D3D11_FLOAT32_MAX;
     LD_CHECK(device_->d3d()->CreateSamplerState(&sampler, &sampler_));
 
+    // The icon atlas is one texture holding sixty-four icons with no gutter
+    // between them, and a full mip chain generated over the lot. Sampling it
+    // freely means that at the size icons are actually drawn - a quarter of the
+    // cell - each one's edge is averaged together with its neighbour's, and
+    // since these icons mostly have dark edges the result is a dark seam
+    // between them.
+    //
+    // Two bounds fix it: never go deeper than the level the cell can support,
+    // and keep the sampled rectangle a few texels clear of the cell's edge.
+    D3D11_SAMPLER_DESC icons = sampler;
+    icons.MaxLOD = kIconMaxLod;
+    LD_CHECK(device_->d3d()->CreateSamplerState(&icons, &iconSampler_));
+
     // Premultiplied source-over. The icons are the only thing in the dock that
     // blends: the glass writes an opaque reconstruction into a cleared target,
     // and the icons land on top of it.
@@ -731,6 +751,7 @@ void DockWindow::ReleaseDeviceResources() {
     wallpaper_.Reset();
     target_.Reset();
     iconBlend_.Reset();
+    iconSampler_.Reset();
     sampler_.Reset();
     iconConstantBuffer_.Reset();
     constantBuffer_.Reset();
@@ -1484,8 +1505,11 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
     constants.viewport[1] = viewHeight;
     constants.viewport[2] = 1.0f / std::max(viewWidth, 1.0f);
     constants.viewport[3] = 1.0f / std::max(viewHeight, 1.0f);
-    constants.cell[0] = static_cast<float>(atlas_.cell()) / static_cast<float>(atlas_.width());
-    constants.cell[1] = static_cast<float>(atlas_.cell()) / static_cast<float>(atlas_.height());
+    // The readable part of a cell, inset so filtering cannot reach the next one.
+    constants.cell[0] = static_cast<float>(atlas_.cell() - 2 * kIconCellInset) /
+                        static_cast<float>(atlas_.width());
+    constants.cell[1] = static_cast<float>(atlas_.cell() - 2 * kIconCellInset) /
+                        static_cast<float>(atlas_.height());
 
     int instances = 0;
     for (const PlacedIcon& icon : layout_.icons()) {
@@ -1508,10 +1532,10 @@ void DockWindow::RenderIcons(float scale, float slideLogical) {
         constants.rect[instances][3] = half;
 
         constants.source[instances][0] =
-            static_cast<float>((slot % atlas_.columns()) * atlas_.cell()) /
+            static_cast<float>((slot % atlas_.columns()) * atlas_.cell() + kIconCellInset) /
             static_cast<float>(atlas_.width());
         constants.source[instances][1] =
-            static_cast<float>((slot / atlas_.columns()) * atlas_.cell()) /
+            static_cast<float>((slot / atlas_.columns()) * atlas_.cell() + kIconCellInset) /
             static_cast<float>(atlas_.height());
         constants.source[instances][2] = 1.0f;
         constants.source[instances][3] = 0.0f;
@@ -1639,6 +1663,10 @@ void DockWindow::DrawIconInstances(ID3D11VertexShader* vs, ID3D11PixelShader* ps
 
     ID3D11ShaderResourceView* resources[1] = {texture};
     ctx->PSSetShaderResources(0, 1, resources);
+    // Bound explicitly: the glass pass leaves its own sampler on the stage, and
+    // that one is allowed to walk the whole mip chain.
+    ID3D11SamplerState* samplers[1] = {iconSampler_.Get()};
+    ctx->PSSetSamplers(0, 1, samplers);
     ctx->OMSetBlendState(iconBlend_.Get(), nullptr, 0xFFFFFFFF);
     ctx->DrawInstanced(6, static_cast<UINT>(count), 0, 0);
 }
