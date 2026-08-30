@@ -9,6 +9,12 @@ namespace liquidock {
 // bin - on the right, with a hairline between them.
 enum class ItemGroup { Main, Utility };
 
+// What an entry is. A separator is a divider the user placed themselves - it
+// launches nothing, carries no icon, and exists purely to break a long row into
+// runs you can find things in. Distinct from the hairline between the two
+// groups, which is structural and comes from the design.
+enum class ItemKind { App, Separator };
+
 // One thing on the dock.
 //
 // `path` is whatever ShellExecute would accept: a file, a .lnk, a folder, a
@@ -17,6 +23,8 @@ enum class ItemGroup { Main, Utility };
 // opaque string is what lets all four kinds live in the same list and in the
 // same one-line-per-item config file.
 struct DockItem {
+    ItemKind kind = ItemKind::App;
+
     std::wstring path;
     std::wstring label; // shown in the hover label and the context menu
 

@@ -319,6 +319,12 @@ void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT me
             return; // cancelled; a newer load owns the queue now
         }
 
+        // A divider has no target to ask the shell about, and asking anyway
+        // means a failed shell call per separator on every reload.
+        if (items[index].kind == ItemKind::Separator) {
+            continue;
+        }
+
         IconBitmap icon;
         icon.slot = static_cast<int>(index);
         icon.size = size;

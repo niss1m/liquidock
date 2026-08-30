@@ -55,6 +55,8 @@ group | path | label
 ```
 
 `group` is `main` or `utility` — utility items sit to the right of the hairline. `label` is optional.
+`kind = separator` makes an entry a divider instead — it has no path and launches nothing.
+
 `path` is anything the shell can open: a program, a shortcut, a folder, a `shell:AppsFolder\...`
 moniker for a packaged app, or a `::{guid}` parsing name. Environment variables are expanded.
 
@@ -63,8 +65,14 @@ Downloads and the Recycle Bin.
 
 ## Settings
 
-*Preferences…* in the tray menu opens a custom-drawn panel with every setting on it. Changes apply
-to the running dock immediately and are written back to the settings file.
+*Preferences…* in the tray menu opens a custom-drawn panel, in four tabs. Changes apply to the
+running dock immediately and are written back to the settings file.
+
+**Items** is the dock's contents, with each entry's real icon, what it points at, and — on the row
+under the pointer — buttons to move it up, down, or off the dock. Moving an item past the group
+boundary puts it in that group rather than refusing. *Add app…* opens a file picker; *Add divider*
+drops a rule into the row, which is separate from the structural hairline between the two groups and
+can go anywhere. **Glass**, **Dock** and **Behaviour** hold the rest.
 
 That file — `%LOCALAPPDATA%\LiquiDock\settings.txt`, `key = value`, with a comment on every
 setting — stays a first-class way in, and *Edit settings file…* opens it. The dock watches it, so

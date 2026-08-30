@@ -19,22 +19,42 @@ constexpr wchar_t kWindowClass[] = L"LiquiDock.Settings";
 // wake the dock's own config watcher sixty times a second.
 constexpr UINT_PTR kSaveTimer = 1;
 constexpr UINT kSaveDelayMs = 400;
+// Posted by the icon loader thread as the list's icons come in.
+constexpr UINT kIconsMessage = WM_APP + 1;
 
 namespace layout {
-constexpr float kWidth = 1180.0f;
+constexpr float kWidth = 900.0f;
 constexpr float kPadding = 26.0f;
 constexpr float kTitleHeight = 62.0f;
+// The tab strip sits between the title and the first row.
+constexpr float kTabHeight = 38.0f;
+constexpr float kTabGap = 6.0f;
+constexpr float kTabPadX = 18.0f;
+constexpr float kTabsTop = 66.0f;
+constexpr float kContentTop = kTabsTop + kTabHeight + 22.0f;
 constexpr float kRowHeight = 54.0f;
 constexpr float kSectionHeight = 46.0f;
 constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
 constexpr float kValueWidth = 48.0f;
 constexpr float kFooterHeight = 34.0f;
-constexpr float kItemHeight = 34.0f;
-constexpr float kItemButton = 24.0f;
-constexpr int kColumns = 3;
+// Tall enough for a 32 px icon with air round it. The list is the one place
+// where recognising a thing at a glance matters more than fitting more in.
+constexpr float kItemHeight = 44.0f;
+constexpr float kItemIcon = 28.0f;
+constexpr float kItemButton = 28.0f;
+constexpr int kMaxColumns = 2;
+// The tallest the list is allowed to make the window. Forty pinned apps is
+// nothing unusual and would otherwise produce a panel taller than the screen -
+// the list scrolls, which is the whole reason it has a scroll offset.
+constexpr float kListMaxHeight = 620.0f;
+// The fixed row of add buttons above the list, and how wide each one is.
+constexpr float kActionRow = 56.0f;
+constexpr float kActionWidth = 124.0f;
 constexpr float kCorner = design::kCornerRadius;
 } // namespace layout
+
+const wchar_t* const kTabNames[] = {L"Items", L"Glass", L"Dock", L"Behaviour"};
 
 D2D1_COLOR_F Grey(float level, float alpha) {
     return D2D1::ColorF(level, level, level, alpha);
@@ -108,6 +128,11 @@ bool SettingsWindow::Create(GraphicsDevice& device, const Settings& settings,
 }
 
 void SettingsWindow::Destroy() {
+    // Before the window goes: the loader posts to it, and a post to a destroyed
+    // handle is at best wasted and at worst a message delivered to whatever is
+    // handed that handle value next.
+    iconLoader_.Stop();
+    itemIcons_.clear();
     if (hwnd_) {
         KillTimer(hwnd_, kSaveTimer);
         DestroyWindow(hwnd_);
@@ -121,17 +146,20 @@ void SettingsWindow::BuildRows() {
     rows_.clear();
     backdropChoice_ = settings_.backdrop == BackdropSource::Screen ? 1 : 0;
 
-    auto section = [this](const wchar_t* label, int column) {
+    auto section = [this](Tab tab, const wchar_t* label, int column) {
         Row row;
         row.kind = Row::Kind::Section;
+        row.tab = tab;
         row.label = label;
         row.column = column;
         rows_.push_back(std::move(row));
     };
-    auto slider = [this](const wchar_t* label, const wchar_t* hint, float* value, float low,
-                         float high, int decimals, int column, const wchar_t* suffix = nullptr) {
+    auto slider = [this](Tab tab, const wchar_t* label, const wchar_t* hint, float* value,
+                         float low, float high, int decimals, int column,
+                         const wchar_t* suffix = nullptr) {
         Row row;
         row.kind = Row::Kind::Slider;
+        row.tab = tab;
         row.label = label;
         row.hint = hint;
         row.number = value;
@@ -142,19 +170,22 @@ void SettingsWindow::BuildRows() {
         row.column = column;
         rows_.push_back(std::move(row));
     };
-    auto toggle = [this](const wchar_t* label, const wchar_t* hint, bool* flag, int column) {
+    auto toggle = [this](Tab tab, const wchar_t* label, const wchar_t* hint, bool* flag,
+                         int column) {
         Row row;
         row.kind = Row::Kind::Toggle;
+        row.tab = tab;
         row.label = label;
         row.hint = hint;
         row.flag = flag;
         row.column = column;
         rows_.push_back(std::move(row));
     };
-    auto choice = [this](const wchar_t* label, const wchar_t* hint, int* value,
+    auto choice = [this](Tab tab, const wchar_t* label, const wchar_t* hint, int* value,
                          std::vector<std::wstring> options, int column) {
         Row row;
         row.kind = Row::Kind::Choice;
+        row.tab = tab;
         row.label = label;
         row.hint = hint;
         row.choice = value;
@@ -163,96 +194,176 @@ void SettingsWindow::BuildRows() {
         rows_.push_back(std::move(row));
     };
 
-    section(L"Glass", 0);
-    choice(L"Backdrop", L"Screen mode hides it from screenshots",
-           &backdropChoice_, {L"Wallpaper", L"Screen"}, 0);
-    slider(L"Frost", L"How softened the desktop behind is", &settings_.frost, 0.0f,
-           1.0f, 2, 0);
-    slider(L"Refraction", L"How far the rim bends what is behind", &settings_.refraction, 0.0f,
-           1.0f, 2, 0);
-    slider(L"Depth", L"How thick the glass edge reads", &settings_.depth, 0.0f, 1.0f, 2, 0);
-    slider(L"Splay", L"How far inward the bending reaches", &settings_.splay, 0.0f,
-           1.0f, 2, 0);
-    slider(L"Dispersion", L"Colour fringing at the rim", &settings_.dispersion,
-           0.0f, 1.0f, 2, 0);
-    slider(L"Light angle", L"Where the highlight falls", &settings_.lightAngleDegrees, -180.0f,
-           180.0f, 0, 0, L"°");
-    slider(L"Light intensity", L"How hard the highlight hits", &settings_.lightIntensity, 0.0f,
-           1.0f, 2, 0);
-    slider(L"Tint", L"The white the glass is tinted with",
-           &settings_.tintAlpha, 0.0f, 0.4f, 2, 0);
-
-    section(L"Size", 1);
-    slider(L"Icon size", L"Everything else scales with it", &settings_.iconSize,
-           design::kMinIconSize, design::kMaxIconSize, 0, 1, L" px");
-
-    section(L"Magnification", 1);
-    toggle(L"Magnify under the cursor", L"The macOS swell", &settings_.magnification, 1);
-    slider(L"Maximum size", L"How big the hovered icon gets", &settings_.maxScale, 1.0f,
-           design::kMaxConfigurableScale, 2, 1, L"x");
-    slider(L"Reach", L"How far the swell carries",
-           &settings_.influencePx, 40.0f, 320.0f, 0, 1, L" px");
-    toggle(L"Glass follows the icons",
-           L"The bar swells around a raised icon", &settings_.iconBulge, 1);
-
-    section(L"Placement", 1);
-    toggle(L"Reserve screen space", L"Maximised windows stop above it",
-           &settings_.reserveSpace, 1);
-
-    section(L"Behaviour", 1);
-    toggle(L"Hide until needed", L"Comes back at the screen edge",
-           &settings_.autoHide, 1);
-    slider(L"Stay out for", L"Before sliding away again", &settings_.dwellSeconds, 0.5f, 15.0f, 1,
-           1, L" s");
-    slider(L"Slide time", L"How long the dock takes to arrive", &settings_.slideSeconds, 0.0f,
-           0.8f, 2, 1, L" s");
-
-    // The dock's contents. This is the whole reason the panel has a third
-    // column: editing what is *on* the dock by hand in a text file is the part
-    // nobody should have to do.
-    section(L"Items", 2);
+    // --- Items ------------------------------------------------------------
+    // First, and the page the window opens on. Editing what is *on* the dock is
+    // what people come here for; the glass is what they come here for once.
     const auto& items = items_.items();
     for (size_t i = 0; i < items.size(); ++i) {
         Row row;
         row.kind = Row::Kind::Item;
+        row.tab = Tab::Items;
         row.itemIndex = static_cast<int>(i);
-        row.column = 2;
+        row.column = 0;
         rows_.push_back(std::move(row));
     }
     Row add;
     add.kind = Row::Kind::AddItem;
+    add.tab = Tab::Items;
     add.label = L"Add app…";
-    add.column = 2;
+    add.column = 0;
     rows_.push_back(std::move(add));
+
+    Row rule;
+    rule.kind = Row::Kind::AddSeparator;
+    rule.tab = Tab::Items;
+    rule.label = L"Add divider";
+    rule.column = 0;
+    rows_.push_back(std::move(rule));
+
+    // --- Glass ------------------------------------------------------------
+    section(Tab::Glass, L"Material", 0);
+    choice(Tab::Glass, L"Backdrop", L"Screen mode hides it from screenshots", &backdropChoice_,
+           {L"Wallpaper", L"Screen"}, 0);
+    slider(Tab::Glass, L"Frost", L"How softened the desktop behind is", &settings_.frost, 0.0f,
+           1.0f, 2, 0);
+    slider(Tab::Glass, L"Refraction", L"How far the rim bends what is behind", &settings_.refraction,
+           0.0f, 1.0f, 2, 0);
+    slider(Tab::Glass, L"Depth", L"How hard the edge bends it", &settings_.depth, 0.0f, 1.0f, 2, 0);
+    slider(Tab::Glass, L"Splay", L"How far inward the bending reaches", &settings_.splay, 0.0f,
+           1.0f, 2, 0);
+    slider(Tab::Glass, L"Dispersion", L"Colour fringing at the rim", &settings_.dispersion, 0.0f,
+           1.0f, 2, 0);
+
+    section(Tab::Glass, L"Light", 1);
+    slider(Tab::Glass, L"Angle", L"Where the highlight falls", &settings_.lightAngleDegrees,
+           -180.0f, 180.0f, 0, 1, L"°");
+    slider(Tab::Glass, L"Intensity", L"How bright the rim reflects", &settings_.lightIntensity,
+           0.0f, 1.0f, 2, 1);
+    slider(Tab::Glass, L"Tint", L"The white the glass is tinted with", &settings_.tintAlpha, 0.0f,
+           0.4f, 2, 1);
+
+    // --- Dock -------------------------------------------------------------
+    section(Tab::Dock, L"Size", 0);
+    slider(Tab::Dock, L"Icon size", L"Everything else scales with it", &settings_.iconSize,
+           design::kMinIconSize, design::kMaxIconSize, 0, 0, L" px");
+
+    section(Tab::Dock, L"Magnification", 0);
+    toggle(Tab::Dock, L"Magnify under the cursor", L"The macOS swell", &settings_.magnification, 0);
+    slider(Tab::Dock, L"Maximum size", L"How big the hovered icon gets", &settings_.maxScale, 1.0f,
+           design::kMaxConfigurableScale, 2, 0, L"x");
+    slider(Tab::Dock, L"Reach", L"How far the swell carries", &settings_.influencePx, 40.0f, 320.0f,
+           0, 0, L" px");
+
+    section(Tab::Dock, L"Movement", 1);
+    toggle(Tab::Dock, L"Follow the cursor",
+           L"The row slides so the hovered icon stays put", &settings_.followCursor, 1);
+    toggle(Tab::Dock, L"Glass follows the icons", L"The bar swells around a raised icon",
+           &settings_.iconBulge, 1);
+
+    section(Tab::Dock, L"Placement", 1);
+    toggle(Tab::Dock, L"Reserve screen space", L"Maximised windows stop above it",
+           &settings_.reserveSpace, 1);
+
+    // --- Behaviour --------------------------------------------------------
+    section(Tab::Behaviour, L"Hiding", 0);
+    toggle(Tab::Behaviour, L"Hide until needed", L"Comes back at the screen edge",
+           &settings_.autoHide, 0);
+    toggle(Tab::Behaviour, L"Only when covered",
+           L"Stays out over an empty desktop", &settings_.hideWhenCovered, 0);
+    slider(Tab::Behaviour, L"Stay out for", L"Before sliding away again", &settings_.dwellSeconds,
+           0.5f, 15.0f, 1, 0, L" s");
+    slider(Tab::Behaviour, L"Slide time", L"How long the dock takes to arrive",
+           &settings_.slideSeconds, 0.0f, 0.8f, 2, 0, L" s");
+
+    section(Tab::Behaviour, L"Hover label", 1);
+    slider(Tab::Behaviour, L"Label size", L"The name shown above an icon",
+           &settings_.labelFontSize, 9.0f, design::label::kMaxFontSize, 1, 1, L" px");
+    toggle(Tab::Behaviour, L"Bold label", L"Heavier text on the pill", &settings_.labelBold, 1);
+}
+
+int SettingsWindow::ColumnsFor(Tab tab) const {
+    // The list gets the whole width: a row carries an icon, a name, what it
+    // points at and its buttons, and squeezing that into half a panel is what
+    // made the old items column a list of truncated names.
+    return (tab == Tab::Items) ? 1 : layout::kMaxColumns;
+}
+
+float SettingsWindow::MeasureTab(Tab tab) const {
+    float y[layout::kMaxColumns]{};
+    const int columns = ColumnsFor(tab);
+    for (const Row& row : rows_) {
+        if (row.tab != tab) {
+            continue;
+        }
+        // The add buttons share one fixed row above the list rather than
+        // sitting at the end of it, where forty pinned apps would put them a
+        // scroll away from the person who came here to add a forty-first.
+        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
+            continue;
+        }
+        const int column = std::clamp(row.column, 0, columns - 1);
+        if (row.kind == Row::Kind::Section) {
+            y[column] += layout::kSectionHeight;
+        } else if (row.kind == Row::Kind::Item) {
+            y[column] += layout::kItemHeight;
+        } else {
+            y[column] += layout::kRowHeight;
+        }
+    }
+    float tallest = *std::max_element(y, y + columns);
+    if (tab == Tab::Items) {
+        tallest = std::min(tallest, layout::kListMaxHeight) + layout::kActionRow;
+    }
+    return tallest;
 }
 
 void SettingsWindow::LayoutRows() {
+    const int columns = ColumnsFor(activeTab_);
     const float columnWidth =
-        (layout::kWidth - 2.0f * layout::kPadding - (layout::kColumns - 1) * layout::kColumnGap) /
-        layout::kColumns;
-    float y[layout::kColumns];
+        (layout::kWidth - 2.0f * layout::kPadding - (columns - 1) * layout::kColumnGap) /
+        static_cast<float>(columns);
+
+    float y[layout::kMaxColumns];
     for (float& value : y) {
-        value = layout::kTitleHeight;
+        value = layout::kContentTop;
     }
 
+    const bool listTab = (activeTab_ == Tab::Items);
+    const float listTop = layout::kContentTop + (listTab ? layout::kActionRow : 0.0f);
+    for (float& value : y) {
+        value = listTop;
+    }
+    float actionX = layout::kPadding;
+
     for (Row& row : rows_) {
-        const int column = std::clamp(row.column, 0, layout::kColumns - 1);
+        if (row.tab != activeTab_) {
+            row.bounds = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+            continue;
+        }
+        if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
+            row.bounds = D2D1::RectF(actionX, layout::kContentTop, actionX + layout::kActionWidth,
+                                     layout::kContentTop + layout::kItemHeight);
+            row.control = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+            actionX += layout::kActionWidth + 10.0f;
+            continue;
+        }
+
+        const int column = std::clamp(row.column, 0, columns - 1);
         const float left = layout::kPadding + column * (columnWidth + layout::kColumnGap);
+        const bool listRow = (row.kind == Row::Kind::Item);
         float height = layout::kRowHeight;
         if (row.kind == Row::Kind::Section) {
             height = layout::kSectionHeight;
-        } else if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+        } else if (listRow) {
             height = layout::kItemHeight;
         }
 
-        // Only the items column scrolls, and only its item rows move with it -
-        // its heading stays put, the way a list header does.
-        const float scroll =
-            (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) ? itemScroll_ : 0.0f;
+        // Only the list scrolls.
+        const float scroll = listRow ? itemScroll_ : 0.0f;
         row.bounds =
             D2D1::RectF(left, y[column] - scroll, left + columnWidth, y[column] + height - scroll);
 
-        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+        if (listRow) {
             // Three equal buttons hugging the right edge: up, down, remove.
             const float top = row.bounds.top + (layout::kItemHeight - layout::kItemButton) * 0.5f;
             row.control = D2D1::RectF(row.bounds.right - 3.0f * layout::kItemButton, top,
@@ -268,20 +379,50 @@ void SettingsWindow::LayoutRows() {
         y[column] += height;
     }
 
-    // The window is sized by the two fixed columns; the items column scrolls
-    // inside whatever height they produce rather than stretching the panel to
-    // however many apps someone has pinned.
-    const float fixed = std::max(y[0], y[1]);
-    height_ = static_cast<int>(
-        std::lround((fixed + layout::kFooterHeight) * (static_cast<float>(dpi_) / 96.0f)));
-    width_ = static_cast<int>(std::lround(layout::kWidth * (static_cast<float>(dpi_) / 96.0f)));
+    // Sized to the page being shown, and the window keeps its top-left corner
+    // when it changes, so the tab strip does not move out from under the pointer
+    // that just clicked it. Padding every page out to the tallest one instead
+    // would leave the three short pages with a third of the panel empty.
+    const float content = layout::kContentTop + MeasureTab(activeTab_);
+    const float scale = static_cast<float>(dpi_) / 96.0f;
+    height_ = static_cast<int>(std::lround((content + layout::kFooterHeight) * scale));
+    width_ = static_cast<int>(std::lround(layout::kWidth * scale));
 
-    itemsClip_ = D2D1::RectF(layout::kPadding + 2 * (columnWidth + layout::kColumnGap),
-                             layout::kTitleHeight + layout::kSectionHeight,
-                             layout::kWidth - layout::kPadding, fixed);
-    const float itemsContent = y[2] + itemScroll_ - itemsClip_.top;
-    itemScrollMax_ = std::max(0.0f, itemsContent - (itemsClip_.bottom - itemsClip_.top));
+    itemsClip_ = D2D1::RectF(layout::kPadding, listTop - 4.0f, layout::kWidth - layout::kPadding,
+                             content);
+    if (!listTab) {
+        itemScrollMax_ = 0.0f;
+        itemScroll_ = 0.0f;
+        return;
+    }
+    const float listContent = y[0] + itemScroll_ - listTop;
+    itemScrollMax_ = std::max(0.0f, listContent - (itemsClip_.bottom - itemsClip_.top));
     itemScroll_ = std::clamp(itemScroll_, 0.0f, itemScrollMax_);
+}
+
+void SettingsWindow::ApplyWindowSize() {
+    if (!hwnd_) {
+        return;
+    }
+    RECT current{};
+    GetWindowRect(hwnd_, &current);
+    // Top-left anchored: the strip stays exactly where it was clicked.
+    SetWindowPos(hwnd_, nullptr, current.left, current.top, width_, height_,
+                 SWP_NOACTIVATE | SWP_NOZORDER);
+    if (target_.width()) {
+        target_.Resize(static_cast<UINT>(width_), static_cast<UINT>(height_));
+        backBuffer_.Reset();
+    }
+}
+
+int SettingsWindow::TabAt(float x, float y) const {
+    for (int i = 0; i < kTabCount; ++i) {
+        const D2D1_RECT_F& box = tabBounds_[i];
+        if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 bool SettingsWindow::CreateDeviceResources() {
@@ -370,6 +511,10 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
         return;
     }
 
+    // After the device resources, because turning the pixels into D2D bitmaps
+    // needs the context that CreateDeviceResources builds.
+    StartIconLoad();
+
     visible_ = true;
     ShowWindow(hwnd_, SW_SHOW);
     SetForegroundWindow(hwnd_);
@@ -392,10 +537,10 @@ void SettingsWindow::Hide() {
 int SettingsWindow::RowAt(float x, float y) const {
     for (size_t i = 0; i < rows_.size(); ++i) {
         const Row& row = rows_[i];
-        if (row.kind == Row::Kind::Section) {
+        if (row.tab != activeTab_ || row.kind == Row::Kind::Section) {
             continue;
         }
-        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+        if (row.kind == Row::Kind::Item) {
             // Scrolled out of sight is not clickable, however much the row's
             // rectangle still says it is there.
             if (y < itemsClip_.top || y > itemsClip_.bottom) {
@@ -469,6 +614,16 @@ bool SettingsWindow::HandleItemClick(int index, float x) {
         CommitItems();
         return true;
     }
+    if (row.kind == Row::Kind::AddSeparator) {
+        DockItem divider;
+        divider.kind = ItemKind::Separator;
+        divider.label = L"Divider";
+        if (!items_.Add(std::move(divider))) {
+            return false;
+        }
+        CommitItems();
+        return true;
+    }
     if (row.kind != Row::Kind::Item) {
         return false;
     }
@@ -500,8 +655,45 @@ void SettingsWindow::CommitItems() {
     }
     BuildRows();
     LayoutRows();
+    StartIconLoad();
     hoverRow_ = -1;
     InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void SettingsWindow::StartIconLoad() {
+    itemIcons_.assign(items_.items().size(), nullptr);
+    if (!hwnd_ || items_.items().empty()) {
+        return;
+    }
+    // The same extractor the dock uses, at the size this list draws. Shell icon
+    // calls can block for tens of milliseconds each on a cold cache, and the
+    // preferences window is opened by a click - stalling it for a second while
+    // forty icons are fetched would be the most visible slowness in the program.
+    iconLoader_.Start(items_.items(), static_cast<int>(layout::kItemIcon), hwnd_, kIconsMessage);
+}
+
+void SettingsWindow::DrainIcons() {
+    std::vector<IconBitmap> loaded;
+    iconLoader_.Collect(loaded);
+    if (!d2d_) {
+        return;
+    }
+    for (const IconBitmap& icon : loaded) {
+        if (icon.slot < 0 || static_cast<size_t>(icon.slot) >= itemIcons_.size() ||
+            icon.pixels.empty()) {
+            continue;
+        }
+        const D2D1_BITMAP_PROPERTIES properties = D2D1::BitmapProperties(
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+        ComPtr<ID2D1Bitmap> bitmap;
+        const D2D1_SIZE_U size = D2D1::SizeU(static_cast<UINT32>(icon.size),
+                                             static_cast<UINT32>(icon.size));
+        if (SUCCEEDED(d2d_->CreateBitmap(size, icon.pixels.data(),
+                                         static_cast<UINT32>(icon.size) * 4, properties,
+                                         &bitmap))) {
+            itemIcons_[static_cast<size_t>(icon.slot)] = std::move(bitmap);
+        }
+    }
 }
 
 void SettingsWindow::CommitChange() {
@@ -629,17 +821,54 @@ void SettingsWindow::DrawCross(const D2D1_RECT_F& box, const D2D1_COLOR_F& colou
     d2d_->DrawLine(D2D1::Point2F(cx + r, cy - r), D2D1::Point2F(cx - r, cy + r), brush_.Get(), 1.6f);
 }
 
+void SettingsWindow::DrawTabs() {
+    float x = layout::kPadding;
+    for (int i = 0; i < kTabCount; ++i) {
+        const std::wstring name = kTabNames[i];
+        float textWidth = 60.0f;
+        ComPtr<IDWriteTextLayout> measured;
+        if (dwrite_ &&
+            SUCCEEDED(dwrite_->CreateTextLayout(name.c_str(), static_cast<UINT32>(name.size()),
+                                                labelFormat_.Get(), 400.0f, 40.0f, &measured))) {
+            DWRITE_TEXT_METRICS metrics{};
+            if (SUCCEEDED(measured->GetMetrics(&metrics))) {
+                textWidth = metrics.width;
+            }
+        }
+        const float width = textWidth + 2.0f * layout::kTabPadX;
+        tabBounds_[i] =
+            D2D1::RectF(x, layout::kTabsTop, x + width, layout::kTabsTop + layout::kTabHeight);
+        x += width + layout::kTabGap;
+
+        const bool active = (static_cast<Tab>(i) == activeTab_);
+        const bool under = pointerX_ >= tabBounds_[i].left && pointerX_ <= tabBounds_[i].right &&
+                           pointerY_ >= tabBounds_[i].top && pointerY_ <= tabBounds_[i].bottom;
+        if (active || under) {
+            brush_->SetColor(active ? Grey(1.0f, 0.12f) : Grey(1.0f, 0.06f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(tabBounds_[i], 8.0f, 8.0f), brush_.Get());
+        }
+        // The label alone carries the state as well as a box does, so the active
+        // tab is simply the one you can read.
+        labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        DrawText(name, labelFormat_.Get(),
+                 D2D1::RectF(tabBounds_[i].left, tabBounds_[i].top + 8.0f, tabBounds_[i].right,
+                             tabBounds_[i].bottom),
+                 active ? kTitle : (under ? kLabel : kSection));
+        labelFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    }
+}
+
 void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
     const auto& items = items_.items();
 
-    if (row.kind == Row::Kind::AddItem) {
+    if (row.kind == Row::Kind::AddItem || row.kind == Row::Kind::AddSeparator) {
         const D2D1_RECT_F pill =
-            D2D1::RectF(row.bounds.left, row.bounds.top + 4.0f, row.bounds.left + 104.0f,
-                        row.bounds.bottom - 4.0f);
+            D2D1::RectF(row.bounds.left, row.bounds.top + 7.0f, row.bounds.left + 124.0f,
+                        row.bounds.bottom - 7.0f);
         brush_->SetColor(hovered ? Grey(1.0f, 0.16f) : Grey(1.0f, 0.10f));
         d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 6.0f, 6.0f), brush_.Get());
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        DrawText(L"Add app…", valueFormat_.Get(),
+        DrawText(row.label, valueFormat_.Get(),
                  D2D1::RectF(pill.left, pill.top + 3.0f, pill.right, pill.bottom), kLabel);
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
         return;
@@ -660,10 +889,56 @@ void SettingsWindow::DrawItem(const Row& row, bool hovered, float pointerX) {
             brush_.Get());
     }
 
-    DrawText(item.label, labelFormat_.Get(),
-             D2D1::RectF(row.bounds.left, row.bounds.top + 7.0f, row.control.left - 10.0f,
-                         row.bounds.bottom),
-             item.group == ItemGroup::Utility ? kValue : kLabel);
+    const float mid = (row.bounds.top + row.bounds.bottom) * 0.5f;
+    const float textLeft = row.bounds.left + layout::kItemIcon + 12.0f;
+    const float textRight = row.control.left - 90.0f;
+
+    if (item.kind == ItemKind::Separator) {
+        // Drawn as what it is. A divider that appeared in the list as the word
+        // "Divider" and nothing else would be a row you have to read to
+        // identify, in a list whose whole job is being scannable.
+        brush_->SetColor(Grey(1.0f, 0.30f));
+        const float left = row.bounds.left + layout::kItemIcon * 0.5f;
+        d2d_->FillRectangle(D2D1::RectF(left, mid - 9.0f, left + 1.0f, mid + 9.0f), brush_.Get());
+        DrawText(L"Divider", labelFormat_.Get(),
+                 D2D1::RectF(textLeft, row.bounds.top + 12.0f, textRight, row.bounds.bottom),
+                 kValue);
+    } else {
+        ID2D1Bitmap* icon =
+            (index < itemIcons_.size()) ? itemIcons_[index].Get() : nullptr;
+        const D2D1_RECT_F box =
+            D2D1::RectF(row.bounds.left, mid - layout::kItemIcon * 0.5f,
+                        row.bounds.left + layout::kItemIcon, mid + layout::kItemIcon * 0.5f);
+        if (icon) {
+            d2d_->DrawBitmap(icon, box, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        } else {
+            // A placeholder rather than a gap, so a slow icon does not make the
+            // row look broken while it is still being fetched.
+            brush_->SetColor(Grey(1.0f, 0.08f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, 6.0f, 6.0f), brush_.Get());
+        }
+
+        DrawText(item.label, labelFormat_.Get(),
+                 D2D1::RectF(textLeft, row.bounds.top + 4.0f, textRight, row.bounds.top + 26.0f),
+                 kLabel);
+        // What it actually points at. The name alone stops being enough the
+        // moment someone has two entries for the same program.
+        DrawText(item.path, hintFormat_.Get(),
+                 D2D1::RectF(textLeft, row.bounds.top + 22.0f, textRight, row.bounds.bottom - 2.0f),
+                 kHint);
+    }
+
+    // Which run of the bar it sits in, and the only place that is visible.
+    if (item.group == ItemGroup::Utility) {
+        const D2D1_RECT_F pill = D2D1::RectF(row.control.left - 78.0f, mid - 9.0f,
+                                             row.control.left - 18.0f, mid + 9.0f);
+        brush_->SetColor(Grey(1.0f, 0.10f));
+        d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 9.0f, 9.0f), brush_.Get());
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        DrawText(L"utility", valueFormat_.Get(),
+                 D2D1::RectF(pill.left, pill.top + 1.0f, pill.right, pill.bottom), kValue);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
 
     // Only shown on hover: three sets of buttons against every row is noise, and
     // the row you are pointing at is the only one you can act on anyway.
@@ -730,18 +1005,23 @@ void SettingsWindow::Render() {
     d2d_->DrawRoundedRectangle(panel, brush_.Get(), 1.0f);
 
     DrawText(L"LiquiDock", titleFormat_.Get(),
-             D2D1::RectF(layout::kPadding, 22.0f, 400.0f, 56.0f), kTitle);
+             D2D1::RectF(layout::kPadding, 18.0f, 400.0f, 52.0f), kTitle);
     DrawText(L"Every change applies straight away", hintFormat_.Get(),
-             D2D1::RectF(layout::kPadding, 44.0f, 460.0f, 62.0f), kHint);
+             D2D1::RectF(layout::kPadding, 40.0f, 460.0f, 60.0f), kHint);
+
+    DrawTabs();
 
     bool clipped = false;
     for (size_t i = 0; i < rows_.size(); ++i) {
         const Row& row = rows_[i];
+        if (row.tab != activeTab_) {
+            continue;
+        }
         const bool hovered = (static_cast<int>(i) == hoverRow_);
 
         // The items list scrolls, so it is drawn inside a clip that stops it
-        // spilling over its heading or out of the bottom of the panel.
-        const bool wantsClip = (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem);
+        // spilling out of the bottom of the panel.
+        const bool wantsClip = (row.kind == Row::Kind::Item);
         if (wantsClip != clipped) {
             if (wantsClip) {
                 d2d_->PushAxisAlignedClip(itemsClip_, D2D1_ANTIALIAS_MODE_ALIASED);
@@ -751,7 +1031,8 @@ void SettingsWindow::Render() {
             clipped = wantsClip;
         }
 
-        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem) {
+        if (row.kind == Row::Kind::Item || row.kind == Row::Kind::AddItem ||
+            row.kind == Row::Kind::AddSeparator) {
             DrawItem(row, hovered, pointerX_);
             continue;
         }
@@ -883,6 +1164,9 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 return 0;
             }
             const int row = RowAt(pointerX_, pointerY_);
+            if (TabAt(pointerX_, pointerY_) >= 0) {
+                InvalidateRect(hwnd, nullptr, FALSE); // the strip highlights under the pointer
+            }
             if (row != hoverRow_) {
                 hoverRow_ = row;
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -901,10 +1185,25 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         case WM_LBUTTONDOWN: {
             const float x = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
             const float y = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
+
+            const int tab = TabAt(x, y);
+            if (tab >= 0) {
+                if (static_cast<Tab>(tab) != activeTab_) {
+                    activeTab_ = static_cast<Tab>(tab);
+                    itemScroll_ = 0.0f;
+                    hoverRow_ = -1;
+                    LayoutRows();
+                    ApplyWindowSize();
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
+
             const int row = RowAt(x, y);
             if (row >= 0) {
                 const Row::Kind kind = rows_[static_cast<size_t>(row)].kind;
-                if (kind == Row::Kind::Item || kind == Row::Kind::AddItem) {
+                if (kind == Row::Kind::Item || kind == Row::Kind::AddItem ||
+                    kind == Row::Kind::AddSeparator) {
                     HandleItemClick(row, x);
                     return 0;
                 }
@@ -952,6 +1251,11 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             if (LOWORD(wParam) == WA_INACTIVE) {
                 Hide();
             }
+            return 0;
+
+        case kIconsMessage:
+            DrainIcons();
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
         case WM_TIMER:

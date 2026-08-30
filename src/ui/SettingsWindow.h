@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/Settings.h"
+#include "model/IconLoader.h"
 #include "model/ItemStore.h"
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
@@ -28,6 +29,11 @@ namespace liquidock {
 // Every change applies to the running dock immediately. There is no OK button,
 // because the only way to judge a value like `frost` is to see it, and a
 // preview that needs confirming is not a preview.
+//
+// Organised into tabs rather than one wall of controls. Three columns of
+// everything at once is a screenshot of a settings file, not a design: it makes
+// the reader do the grouping, and it gives the dock's own contents - the thing
+// people actually come here to change - a narrow column at the edge.
 class SettingsWindow {
 public:
     // Called on every change, with the new settings, so the dock can apply them
@@ -57,10 +63,16 @@ private:
     // One line of the panel. A section header, or a setting bound directly to
     // the field in Settings that it edits - binding by pointer keeps the whole
     // table declarative, which is what makes it cheap to add a setting.
+    // Which page a row lives on. Items first: it is what the window is most
+    // often opened for.
+    enum class Tab { Items, Glass, Dock, Behaviour };
+    static constexpr int kTabCount = 4;
+
     struct Row {
-        enum class Kind { Section, Slider, Toggle, Choice, Item, AddItem };
+        enum class Kind { Section, Slider, Toggle, Choice, Item, AddItem, AddSeparator };
 
         Kind kind = Kind::Slider;
+        Tab tab = Tab::Glass;
         const wchar_t* label = nullptr;
         const wchar_t* hint = nullptr;
 
@@ -86,7 +98,22 @@ private:
     bool CreateDeviceResources();
     void BuildRows();
     void LayoutRows();
+    // The tallest column a tab produces, so the window can be sized to the
+    // largest of them once and not resize as pages are switched.
+    float MeasureTab(Tab tab) const;
+    int ColumnsFor(Tab tab) const;
+    // Resizes the window to the page being shown, keeping its top-left corner.
+    void ApplyWindowSize();
     void Render();
+    void DrawTabs();
+    // -1 when the point is over no tab.
+    int TabAt(float x, float y) const;
+
+    // Starts extracting the list's icons, and turns finished ones into D2D
+    // bitmaps. The list is the one place a name alone is not enough - half the
+    // point of a dock is that you recognise things by their icon.
+    void StartIconLoad();
+    void DrainIcons();
 
     // -1 when the point is over no row.
     int RowAt(float x, float y) const;
@@ -129,6 +156,11 @@ private:
 
     Settings settings_;
     ItemStore items_;
+    IconLoader iconLoader_;
+    // One per item, by index, and null until its icon arrives or if it has none.
+    std::vector<ComPtr<ID2D1Bitmap>> itemIcons_;
+    Tab activeTab_ = Tab::Items;
+    D2D1_RECT_F tabBounds_[kTabCount]{};
     ChangedCallback onChanged_;
     ItemsCallback onItemsChanged_;
     std::vector<Row> rows_;

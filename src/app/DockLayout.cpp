@@ -118,13 +118,26 @@ void DockLayout::SetItems(const std::vector<DockItem>& items) {
             separatorPlaced = true;
         }
 
+        // A separator the user placed. Same hairline as the group boundary's,
+        // but it comes from the list rather than from the design's structure.
+        if (items[index].kind == ItemKind::Separator) {
+            Element rule;
+            rule.itemIndex = -1;
+            rule.baseWidth = kSeparatorWidth;
+            rule.gapBefore = first ? 0.0f : kGroupGap;
+            elements_.push_back(rule);
+            first = false;
+            continue;
+        }
+
         Element element;
         element.itemIndex = static_cast<int>(index);
         element.baseWidth = kIconSize;
         if (first) {
             element.gapBefore = 0.0f;
-        } else if (separatorPlaced && elements_.back().itemIndex < 0) {
-            element.gapBefore = kGroupGap; // the other side of the hairline
+        } else if (!elements_.empty() && elements_.back().itemIndex < 0) {
+            // The far side of a rule, whether it is the group's or the user's.
+            element.gapBefore = kGroupGap;
         } else {
             element.gapBefore = kIconGap;
         }

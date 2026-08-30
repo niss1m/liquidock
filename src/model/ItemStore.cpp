@@ -143,9 +143,19 @@ bool ItemStore::ReadFile(const std::wstring& path) {
     DockItem current;
     bool building = false;
     auto flush = [this, &current, &building]() {
-        if (!building || current.path.empty()) {
+        // A separator has no path by definition, so the emptiness test that
+        // discards a half-written block has to let it through.
+        if (!building || (current.path.empty() && current.kind != ItemKind::Separator)) {
             building = false;
             current = DockItem{};
+            return;
+        }
+        if (current.kind == ItemKind::Separator) {
+            if (static_cast<int>(items_.size()) < design::kMaxItems) {
+                items_.push_back(std::move(current));
+            }
+            current = DockItem{};
+            building = false;
             return;
         }
         if (current.label.empty()) {
@@ -204,7 +214,9 @@ bool ItemStore::ReadFile(const std::wstring& path) {
         const std::wstring key = Trim(text.substr(0, equals));
         const std::wstring value = Trim(text.substr(equals + 1));
 
-        if (key == L"group") {
+        if (key == L"kind") {
+            current.kind = (value == L"separator") ? ItemKind::Separator : ItemKind::App;
+        } else if (key == L"group") {
             current.group = (_wcsicmp(value.c_str(), L"utility") == 0) ? ItemGroup::Utility
                                                                        : ItemGroup::Main;
         } else if (key == L"path") {
@@ -310,12 +322,18 @@ int ItemStore::Move(size_t index, int direction) {
     if (target < 0 || target >= static_cast<ptrdiff_t>(items_.size())) {
         return -1;
     }
-    // Groups are contiguous and the hairline sits between them, so refusing to
-    // swap across a group boundary is what keeps the two runs meaningful.
-    if (items_[static_cast<size_t>(target)].group != items_[index].group) {
-        return -1;
+    // Crossing the group boundary moves the item into that group rather than
+    // refusing. Refusing left the preferences window with no way at all to put
+    // an app in the utility run - the boundary read as a wall you could see and
+    // not pass, which is the worst kind.
+    DockItem& moving = items_[index];
+    DockItem& other = items_[static_cast<size_t>(target)];
+    if (other.group != moving.group) {
+        moving.group = other.group;
+        Save();
+        return static_cast<int>(index);
     }
-    std::swap(items_[index], items_[static_cast<size_t>(target)]);
+    std::swap(moving, other);
     Save();
     return static_cast<int>(target);
 }
