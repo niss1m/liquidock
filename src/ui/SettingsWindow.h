@@ -93,6 +93,12 @@ private:
         std::vector<std::wstring> options;
 
         int column = 0;
+        // Where this row's animations have got to. `anim` is the toggle's knob,
+        // 0 at the left and 1 at the right; `hover` fades the card. Both start
+        // at -1 meaning "not yet drawn", so the first frame snaps to the truth
+        // instead of sliding in from nowhere when the window opens.
+        float anim = -1.0f;
+        float hover = 0.0f;
         int itemIndex = -1; // for Kind::Item
         D2D1_RECT_F bounds{};  // the whole row, for hit testing and hover
         D2D1_RECT_F control{}; // the interactive part on the right
@@ -111,6 +117,13 @@ private:
     // Resizes the window to the page being shown, keeping its top-left corner.
     void ApplyWindowSize();
     void Render();
+    // The explanation for whatever the pointer is on, drawn last so nothing
+    // clips it, and following the cursor rather than living under the label.
+    void DrawTooltip();
+    float MeasureText(IDWriteTextFormat* format, const std::wstring& text) const;
+    // Advances the row animations. Returns true while anything is still
+    // moving, which is what keeps the redraw timer armed.
+    bool AdvanceAnimation();
     void DrawTabs();
     // -1 when the point is over no tab.
     int TabAt(float x, float y) const;
@@ -138,8 +151,8 @@ private:
     // The rounded card a setting sits on. For a slider it is also the track,
     // which is why the whole row responds to a click.
     D2D1_RECT_F PillRect(const Row& row) const;
-    void DrawSlider(const Row& row, bool hovered);
-    void DrawToggle(const Row& row, bool hovered);
+    void DrawSlider(const Row& row, float hover);
+    void DrawToggle(const Row& row, float hover);
     void DrawChoice(const Row& row, float pointerX);
     void DrawItem(const Row& row, bool hovered, float pointerX);
     // The open editor under an item row. Returns the field rectangles in the
@@ -193,6 +206,13 @@ private:
     // bind to as an int without lying about its type.
     int backdropChoice_ = 0;
 
+    // How long the pointer has been on the row it is on. A tooltip that
+     // appears the instant the pointer touches a row flashes all the way down
+     // the list as you sweep past; a short dwell is what stops that.
+    LARGE_INTEGER hoverSince_{};
+    float tooltipAlpha_ = 0.0f;
+    LARGE_INTEGER lastFrame_{};
+    LARGE_INTEGER frequency_{};
     UINT dpi_ = 96;
     int hoverRow_ = -1;
     // The items column scrolls on its own; the rest of the panel is fixed.

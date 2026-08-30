@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "core/Check.h"
 #include "core/DesignTokens.h"
@@ -18,6 +19,12 @@ constexpr wchar_t kWindowClass[] = L"LiquiDock.Settings";
 // change per mouse report, and writing the file sixty times a second would also
 // wake the dock's own config watcher sixty times a second.
 constexpr UINT_PTR kSaveTimer = 1;
+// Drives the row animations. A timer rather than a message that reposts itself:
+// posted messages outrank hardware input in GetMessage's order, so an animation
+// pumped that way starves the clicks it exists to respond to. WM_TIMER is the
+// lowest priority there is and cannot.
+constexpr UINT_PTR kAnimTimer = 2;
+constexpr UINT kAnimIntervalMs = 16;
 constexpr UINT kSaveDelayMs = 400;
 // Posted by the icon loader thread as the list's icons come in.
 constexpr UINT kIconsMessage = WM_APP + 1;
@@ -36,8 +43,13 @@ constexpr float kContentTop = kTabsTop + kTabHeight + 22.0f;
 // rounded track, and for a slider that track *is* the control. Measured off the
 // reference: a 651x70 pill with a radius of 12 and a 12 px gap, which is a
 // radius of 0.17 of the height and a gap of 0.17 again.
-constexpr float kRowHeight = 62.0f;   // pitch, gap included
-constexpr float kPillHeight = 52.0f;
+// The explanation moved to a tooltip, so a card holds one line instead of two
+// and gets its height back. It was stacked under the label, where the slider's
+// own fill boundary ran straight through it - a description cut in half by the
+// control it describes reads as a rendering fault, and it was one of the few
+// things on the page you could not fix by adjusting anything.
+constexpr float kRowHeight = 54.0f;   // pitch, gap included
+constexpr float kPillHeight = 44.0f;
 constexpr float kPillRadius = 9.0f;
 constexpr float kPillPadX = 16.0f;
 // The knob: a bright bar half the track's height, three pixels wide, kept a
@@ -45,6 +57,31 @@ constexpr float kPillPadX = 16.0f;
 constexpr float kKnobWidth = 3.0f;
 constexpr float kKnobHeight = 26.0f;
 constexpr float kKnobInset = kPillRadius + 5.0f;
+
+// The switch. Measured off the reference and held as ratios of the circle,
+// which is the only measurement that matters: ring 0.14 of the diameter, bar
+// 0.16 thick and 1.2 long, a gap of 0.12 between them.
+constexpr float kSwitchCircle = 20.0f;
+constexpr float kSwitchRing = 2.8f;
+constexpr float kSwitchBar = 3.2f;
+constexpr float kSwitchBarLength = 24.0f;
+constexpr float kSwitchGap = 2.5f;
+constexpr float kSwitchWidth = kSwitchCircle + kSwitchGap + kSwitchBarLength;
+
+// Long enough to be seen, short enough that it never delays the setting it is
+// reporting. The value itself changes on the click; this is only the drawing
+// catching up.
+constexpr float kToggleSeconds = 0.17f;
+constexpr float kHoverSeconds = 0.11f;
+// Long enough that sweeping the list does not strobe, short enough that
+// stopping to ask feels answered rather than waited for.
+constexpr float kTooltipDelay = 0.28f;
+constexpr float kTooltipFade = 0.12f;
+constexpr float kTooltipPadX = 11.0f;
+constexpr float kTooltipHeight = 28.0f;
+// Clear of the pointer, below and to the right, the way every tooltip is.
+constexpr float kTooltipOffsetX = 16.0f;
+constexpr float kTooltipOffsetY = 20.0f;
 constexpr float kSectionHeight = 46.0f;
 constexpr float kColumnGap = 26.0f;
 constexpr float kControlWidth = 120.0f;
@@ -89,12 +126,24 @@ D2D1_COLOR_F Grey(float level, float alpha) {
     return D2D1::ColorF(level, level, level, alpha);
 }
 
-// The panel is opaque. The dock is glass because you are meant to look past it;
-// preferences are meant to be read. Even three percent of translucency ghosts
-// white text from the window behind straight through the labels - which is a
-// 35% swing in brightness against a panel this dark, and looks like a bug.
-const D2D1_COLOR_F kPanel = D2D1::ColorF(0.086f, 0.086f, 0.098f, 1.0f);
-const D2D1_COLOR_F kPanelEdge = Grey(1.0f, 0.10f);
+D2D1_COLOR_F Mix(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b, float t) {
+    return D2D1::ColorF(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t,
+                        a.a + (b.a - a.a) * t);
+}
+
+// Smoothstep. Zero slope at both ends, so nothing starts or stops abruptly.
+float Smooth(float t) {
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Black, and opaque. The dock is glass because you are meant to look past it;
+// preferences are meant to be read, and every other surface in the window is
+// defined as a percentage of white - so a black ground is the one that makes
+// those percentages mean what they say. Even three percent of translucency
+// ghosts white text from the window behind straight through the labels, which
+// against a ground this dark is a 35% swing in brightness and looks like a bug.
+const D2D1_COLOR_F kPanel = D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f);
+const D2D1_COLOR_F kPanelEdge = Grey(1.0f, 0.14f);
 const D2D1_COLOR_F kTitle = Grey(1.0f, 0.95f);
 const D2D1_COLOR_F kSection = Grey(1.0f, 0.42f);
 const D2D1_COLOR_F kLabel = Grey(1.0f, 0.88f);
@@ -184,6 +233,16 @@ void SettingsWindow::Destroy() {
 }
 
 void SettingsWindow::BuildRows() {
+    // Carried across the rebuild by label, so a rebuild - which happens for
+    // reasons that have nothing to do with these rows, like an item being
+    // added - does not make every switch on the page animate from scratch.
+    std::vector<std::pair<const wchar_t*, float>> carried;
+    for (const Row& row : rows_) {
+        if (row.kind == Row::Kind::Toggle && row.label) {
+            carried.emplace_back(row.label, row.anim);
+        }
+    }
+
     rows_.clear();
     backdropChoice_ = settings_.backdrop == BackdropSource::Screen ? 1 : 0;
 
@@ -323,6 +382,18 @@ void SettingsWindow::BuildRows() {
     slider(Tab::Behaviour, L"Label size", L"The name shown above an icon",
            &settings_.labelFontSize, 9.0f, design::label::kMaxFontSize, 1, 1, L" px");
     toggle(Tab::Behaviour, L"Bold label", L"Heavier text on the pill", &settings_.labelBold, 1);
+
+    for (Row& row : rows_) {
+        if (row.kind != Row::Kind::Toggle || !row.label) {
+            continue;
+        }
+        for (const auto& [label, value] : carried) {
+            if (wcscmp(label, row.label) == 0) {
+                row.anim = value;
+                break;
+            }
+        }
+    }
 }
 
 int SettingsWindow::ColumnsFor(Tab tab) const {
@@ -1026,17 +1097,84 @@ void SettingsWindow::DrawText(const std::wstring& text, IDWriteTextFormat* forma
                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
 }
 
+bool SettingsWindow::AdvanceAnimation() {
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    if (frequency_.QuadPart == 0) {
+        QueryPerformanceFrequency(&frequency_);
+    }
+    float delta = 0.0f;
+    if (lastFrame_.QuadPart != 0 && frequency_.QuadPart != 0) {
+        delta = static_cast<float>(now.QuadPart - lastFrame_.QuadPart) /
+                static_cast<float>(frequency_.QuadPart);
+    }
+    lastFrame_ = now;
+    // A window that has been sitting idle must not have its animations jump the
+    // whole way on the first frame after it wakes.
+    delta = std::clamp(delta, 0.0f, 0.05f);
+
+    bool moving = false;
+    auto approach = [&](float& value, float target, float seconds) {
+        if (value < 0.0f) {
+            value = target; // first sight of this row: no journey to make
+            return;
+        }
+        if (std::fabs(value - target) < 0.001f) {
+            value = target;
+            return;
+        }
+        const float step = (seconds > 0.0f) ? (delta / seconds) : 1.0f;
+        value = (value < target) ? std::min(target, value + step) : std::max(target, value - step);
+        moving = true;
+    };
+
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        Row& row = rows_[i];
+        if (row.tab != activeTab_) {
+            continue;
+        }
+        if (row.kind == Row::Kind::Toggle && row.flag) {
+            approach(row.anim, *row.flag ? 1.0f : 0.0f, layout::kToggleSeconds);
+        }
+        approach(row.hover, (static_cast<int>(i) == hoverRow_) ? 1.0f : 0.0f,
+                 layout::kHoverSeconds);
+    }
+
+    // The tooltip waits out its dwell, then fades in and follows the pointer.
+    // It is kept alive by the pointer moving as much as by it resting, so the
+    // redraw has to stay armed while it is up.
+    float dwelled = 0.0f;
+    if (hoverSince_.QuadPart != 0 && frequency_.QuadPart != 0) {
+        dwelled = static_cast<float>(now.QuadPart - hoverSince_.QuadPart) /
+                  static_cast<float>(frequency_.QuadPart);
+    }
+    const bool wantsTooltip =
+        hoverRow_ >= 0 && static_cast<size_t>(hoverRow_) < rows_.size() &&
+        rows_[static_cast<size_t>(hoverRow_)].hint != nullptr && dwelled >= layout::kTooltipDelay;
+    const float before = tooltipAlpha_;
+    approach(tooltipAlpha_, wantsTooltip ? 1.0f : 0.0f, layout::kTooltipFade);
+    if (tooltipAlpha_ != before) {
+        moving = true;
+    }
+    // Still counting down to it: keep the clock running or the dwell would only
+    // ever complete on some other row's animation happening to redraw us.
+    if (!wantsTooltip && hoverRow_ >= 0 && dwelled < layout::kTooltipDelay) {
+        moving = true;
+    }
+    return moving;
+}
+
 D2D1_RECT_F SettingsWindow::PillRect(const Row& row) const {
     return D2D1::RectF(row.bounds.left, row.bounds.top, row.bounds.right,
                        row.bounds.top + layout::kPillHeight);
 }
 
-void SettingsWindow::DrawSlider(const Row& row, bool hovered) {
+void SettingsWindow::DrawSlider(const Row& row, float hover) {
     const D2D1_RECT_F pill = PillRect(row);
     const D2D1_ROUNDED_RECT card =
         D2D1::RoundedRect(pill, layout::kPillRadius, layout::kPillRadius);
 
-    brush_->SetColor(hovered ? kTrackHover : kTrack);
+    brush_->SetColor(Mix(kTrack, kTrackHover, hover));
     d2d_->FillRoundedRectangle(card, brush_.Get());
 
     const float span = std::max(row.maximum - row.minimum, 1e-5f);
@@ -1052,7 +1190,7 @@ void SettingsWindow::DrawSlider(const Row& row, bool hovered) {
                                               D2D1::IdentityMatrix(), 1.0f, nullptr,
                                               D2D1_LAYER_OPTIONS_NONE),
                         nullptr);
-        brush_->SetColor(hovered ? kFillHover : kFill);
+        brush_->SetColor(Mix(kFill, kFillHover, hover));
         d2d_->FillRoundedRectangle(
             D2D1::RoundedRect(D2D1::RectF(pill.left, pill.top, knobX + layout::kKnobInset,
                                           pill.bottom),
@@ -1075,31 +1213,60 @@ void SettingsWindow::DrawSlider(const Row& row, bool hovered) {
         brush_.Get());
 }
 
-void SettingsWindow::DrawToggle(const Row& row, bool hovered) {
-    brush_->SetColor(hovered ? kTrackHover : kTrack);
+void SettingsWindow::DrawToggle(const Row& row, float hover) {
+    brush_->SetColor(Mix(kTrack, kTrackHover, hover));
     d2d_->FillRoundedRectangle(
         D2D1::RoundedRect(PillRect(row), layout::kPillRadius, layout::kPillRadius), brush_.Get());
 
     const float centreY = (row.control.top + row.control.bottom) * 0.5f;
-    const float height = 22.0f;
-    const float width = 40.0f;
-    // Right-aligned in the control slot so toggles line up with slider knobs.
     const float right = row.control.right;
-    const D2D1_RECT_F pill =
-        D2D1::RectF(right - width, centreY - height * 0.5f, right, centreY + height * 0.5f);
+    const float left = right - layout::kSwitchWidth;
 
-    brush_->SetColor(*row.flag ? kOn : kTrack);
-    d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, height * 0.5f, height * 0.5f), brush_.Get());
+    // Eased, so it leaves and arrives slowly and is quickest in the middle. A
+    // linear slide over this distance reads as a jump with a delay in it.
+    const float t = Smooth(std::clamp(row.anim, 0.0f, 1.0f));
+    const float radius = layout::kSwitchCircle * 0.5f;
+    const float cx = left + radius + t * (layout::kSwitchWidth - layout::kSwitchCircle);
 
-    const float knobRadius = height * 0.5f - 3.0f;
-    const float knobX = *row.flag ? (pill.right - knobRadius - 3.0f) : (pill.left + knobRadius + 3.0f);
-    brush_->SetColor(Grey(1.0f, hovered ? 1.0f : 0.92f));
-    d2d_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(knobX, centreY), knobRadius, knobRadius),
-                      brush_.Get());
+    // The bar lives on whichever side the circle is not. Rather than flipping
+    // it at the halfway point - which would be a visible pop in the middle of
+    // the very transition this is meant to smooth - both sides are drawn and
+    // crossfaded, so one hands over to the other under the moving circle.
+    const float barHalf = layout::kSwitchBar * 0.5f;
+    const float barRadius = barHalf;
+    auto bar = [&](float x0, float x1, float alpha) {
+        if (alpha <= 0.01f || x1 - x0 < layout::kSwitchBar) {
+            return;
+        }
+        brush_->SetColor(Grey(1.0f, 0.30f * alpha));
+        d2d_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(x0, centreY - barHalf, x1, centreY + barHalf), barRadius,
+                              barRadius),
+            brush_.Get());
+    };
+    bar(left, cx - radius - layout::kSwitchGap, t);              // behind it, on the way to on
+    bar(cx + radius + layout::kSwitchGap, right, 1.0f - t);      // ahead of it, on the way to off
+
+    // The circle is a ring that fills in. Stroking and then filling by the same
+    // amount the knob has travelled turns hollow into solid without needing a
+    // hole punched in a geometry, and the two happen together, which is what
+    // makes the state read at a glance rather than only from the position.
+    const D2D1_ELLIPSE circle = D2D1::Ellipse(D2D1::Point2F(cx, centreY), radius - layout::kSwitchRing * 0.5f,
+                                              radius - layout::kSwitchRing * 0.5f);
+    brush_->SetColor(Grey(1.0f, 0.30f * t));
+    d2d_->FillEllipse(circle, brush_.Get());
+    brush_->SetColor(Grey(1.0f, 0.62f + 0.38f * t));
+    d2d_->DrawEllipse(circle, brush_.Get(), layout::kSwitchRing);
+    // The last of the fill goes on top of the ring, so a switch that is fully
+    // on is one disc rather than a disc with a seam around it.
+    if (t > 0.0f) {
+        brush_->SetColor(Grey(1.0f, t));
+        d2d_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, centreY), radius, radius), brush_.Get());
+    }
 }
 
 void SettingsWindow::DrawChoice(const Row& row, float pointerX) {
-    brush_->SetColor(pointerX >= 0.0f ? kTrackHover : kTrack);
+    brush_->SetColor(Mix(kTrack, kTrackHover, row.hover));
     d2d_->FillRoundedRectangle(
         D2D1::RoundedRect(PillRect(row), layout::kPillRadius, layout::kPillRadius), brush_.Get());
 
@@ -1156,6 +1323,67 @@ void SettingsWindow::DrawCross(const D2D1_RECT_F& box, const D2D1_COLOR_F& colou
     brush_->SetColor(colour);
     d2d_->DrawLine(D2D1::Point2F(cx - r, cy - r), D2D1::Point2F(cx + r, cy + r), brush_.Get(), 1.6f);
     d2d_->DrawLine(D2D1::Point2F(cx + r, cy - r), D2D1::Point2F(cx - r, cy + r), brush_.Get(), 1.6f);
+}
+
+float SettingsWindow::MeasureText(IDWriteTextFormat* format, const std::wstring& text) const {
+    ComPtr<IDWriteTextLayout> layout;
+    if (!dwrite_ || text.empty() ||
+        FAILED(dwrite_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), format,
+                                         4000.0f, 100.0f, &layout))) {
+        return 0.0f;
+    }
+    DWRITE_TEXT_METRICS metrics{};
+    if (FAILED(layout->GetMetrics(&metrics))) {
+        return 0.0f;
+    }
+    return metrics.widthIncludingTrailingWhitespace;
+}
+
+void SettingsWindow::DrawTooltip() {
+    if (tooltipAlpha_ <= 0.01f || hoverRow_ < 0 ||
+        static_cast<size_t>(hoverRow_) >= rows_.size()) {
+        return;
+    }
+    const wchar_t* hint = rows_[static_cast<size_t>(hoverRow_)].hint;
+    if (!hint) {
+        return;
+    }
+
+    const std::wstring text = hint;
+    const float width = MeasureText(labelFormat_.Get(), text) + 2.0f * layout::kTooltipPadX;
+    const float panelWidth = layout::kWidth;
+    const float panelHeight = static_cast<float>(height_) / (static_cast<float>(dpi_) / 96.0f);
+
+    float left = pointerX_ + layout::kTooltipOffsetX;
+    float top = pointerY_ + layout::kTooltipOffsetY;
+    // Flipped rather than clamped at the edges: a tooltip pinned to the frame
+    // stops pointing at anything, and the cursor ends up sitting on top of it.
+    if (left + width > panelWidth - 8.0f) {
+        left = pointerX_ - layout::kTooltipOffsetX - width;
+    }
+    if (top + layout::kTooltipHeight > panelHeight - 8.0f) {
+        top = pointerY_ - layout::kTooltipOffsetY - layout::kTooltipHeight;
+    }
+    left = std::clamp(left, 8.0f, std::max(8.0f, panelWidth - width - 8.0f));
+
+    const D2D1_RECT_F pill = D2D1::RectF(left, top, left + width, top + layout::kTooltipHeight);
+    const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(pill, 7.0f, 7.0f);
+
+    // Lifted off the ground rather than sunk into it. Everything else on this
+    // page is a percentage of white over black, so a *darker* tooltip would be
+    // invisible; this one is brighter than the cards it floats over, with a
+    // hairline to hold its shape against them.
+    brush_->SetColor(Grey(0.15f, 0.98f * tooltipAlpha_));
+    d2d_->FillRoundedRectangle(rounded, brush_.Get());
+    brush_->SetColor(Grey(1.0f, 0.16f * tooltipAlpha_));
+    d2d_->DrawRoundedRectangle(rounded, brush_.Get(), 1.0f);
+
+    labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    DrawText(text, labelFormat_.Get(),
+             D2D1::RectF(pill.left + layout::kTooltipPadX, pill.top,
+                         pill.right - layout::kTooltipPadX, pill.bottom),
+             Grey(1.0f, 0.92f * tooltipAlpha_));
+    labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 }
 
 void SettingsWindow::DrawTabs() {
@@ -1475,6 +1703,13 @@ void SettingsWindow::Render() {
         return;
     }
 
+    const bool moving = AdvanceAnimation();
+    if (moving) {
+        SetTimer(hwnd_, kAnimTimer, kAnimIntervalMs, nullptr);
+    } else {
+        KillTimer(hwnd_, kAnimTimer);
+    }
+
     const float scale = static_cast<float>(dpi_) / 96.0f;
     d2d_->SetTarget(backBuffer_.Get());
     d2d_->BeginDraw();
@@ -1536,8 +1771,8 @@ void SettingsWindow::Render() {
         // a slider it is the track, so it has to be under the label rather than
         // beside it.
         switch (row.kind) {
-            case Row::Kind::Slider: DrawSlider(row, hovered); break;
-            case Row::Kind::Toggle: DrawToggle(row, hovered); break;
+            case Row::Kind::Slider: DrawSlider(row, row.hover); break;
+            case Row::Kind::Toggle: DrawToggle(row, row.hover); break;
             case Row::Kind::Choice: DrawChoice(row, hovered ? pointerX_ : -1.0f); break;
             default: break;
         }
@@ -1550,19 +1785,11 @@ void SettingsWindow::Render() {
                                     ? (pill.right - layout::kValueGutter)
                                     : (row.control.left - 14.0f);
 
-        if (row.hint) {
-            DrawText(row.label, labelFormat_.Get(),
-                     D2D1::RectF(textLeft, pill.top + 8.0f, textRight, pill.top + 30.0f), kLabel);
-            DrawText(row.hint, hintFormat_.Get(),
-                     D2D1::RectF(textLeft, pill.top + 27.0f, textRight, pill.bottom - 4.0f), kHint);
-        } else {
-            // No explanation to stack under it, so the label takes the card's
-            // middle instead of its top.
-            labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            DrawText(row.label, labelFormat_.Get(),
-                     D2D1::RectF(textLeft, pill.top, textRight, pill.bottom), kLabel);
-            labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-        }
+        // One line, centred. What the setting is *for* is a tooltip now.
+        labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        DrawText(row.label, labelFormat_.Get(),
+                 D2D1::RectF(textLeft, pill.top, textRight, pill.bottom), kLabel);
+        labelFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 
         if (row.kind == Row::Kind::Slider) {
             DrawText(FormatValue(*row.number, row.decimals, row.suffix), valueFormat_.Get(),
@@ -1599,6 +1826,8 @@ void SettingsWindow::Render() {
         }
         DrawDetailBar();
     }
+
+    DrawTooltip();
 
     DrawText(activeTab_ == Tab::Items
                  ? L"Esc to close  ·  Ctrl+Z undoes the last change to the list"
@@ -1710,9 +1939,12 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             }
             if (row != hoverRow_) {
                 hoverRow_ = row;
+                QueryPerformanceCounter(&hoverSince_);
                 InvalidateRect(hwnd, nullptr, FALSE);
-            } else if (row >= 0 && rows_[static_cast<size_t>(row)].kind == Row::Kind::Choice) {
-                InvalidateRect(hwnd, nullptr, FALSE); // segment hover follows the pointer
+            } else {
+                // A tooltip that is up is pinned to the pointer, so every move
+                // is a redraw; below that it costs one while the dwell runs.
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
         }
@@ -1720,6 +1952,7 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         case WM_MOUSELEAVE:
             mouseTracking_ = false;
             hoverRow_ = -1;
+            hoverSince_.QuadPart = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
@@ -1931,6 +2164,10 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_TIMER:
+            if (wParam == kAnimTimer) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (wParam == kSaveTimer) {
                 KillTimer(hwnd, kSaveTimer);
                 settings_.Save();
