@@ -11,6 +11,7 @@
 #include "core/Settings.h"
 #include "model/AppCatalog.h"
 #include "model/IconLoader.h"
+#include "model/IconSearch.h"
 #include "model/ItemStore.h"
 #include "model/SystemItems.h"
 #include "gfx/CompositionTarget.h"
@@ -95,6 +96,7 @@ private:
             Item,          // one icon in the dock's own grid
             SystemTile,    // one of the built-in Windows entries
             Suggestion,    // one installed app not on the dock yet
+            IconResult,    // one icon found on macOSicons.com
             AddItem, AddSeparator, AddSelf
         };
 
@@ -191,6 +193,20 @@ private:
     // are fetched once, when the window opens.
     void StartSystemLoad();
     void DrainSystemIcons();
+
+    // Choosing an icon from macOSicons.com. While this is open the picker under
+    // the rule shows found icons instead of the two grids, because it is the
+    // same question - what should go here - asked of a different list.
+    void BeginIconSearch(int itemIndex);
+    void EndIconSearch();
+    // Sends whatever is in the search box. Called from the debounce timer, not
+    // from the keystroke: a request per letter would be thirty requests to spell
+    // "photoshop" and a rate limit to show for it.
+    void RunIconSearch();
+    void DrainIconResults();
+    bool searching_icons() const { return iconSearchFor_ >= 0; }
+    // The two buttons offered when there is no key yet.
+    D2D1_RECT_F KeyButton(int index) const;
     // Both suggestion grids turn finished pixels into D2D bitmaps the same way.
     void DrainIconsInto(IconLoader& loader, std::vector<ComPtr<ID2D1Bitmap>>& into);
     // What a Windows tile is showing.
@@ -276,6 +292,10 @@ private:
     // icon has two states has anything to put in it, and a row that is blank
     // for everything else is a row that teaches people to skip the panel.
     bool EditorHasFullIcon() const;
+    // The Icon row's second button, which opens the online search. Beside
+    // Choose… rather than instead of it: a file on this machine and a file on
+    // somebody else's are both reasonable places for an icon to come from.
+    D2D1_RECT_F EditorSearchButton(const D2D1_RECT_F& panel) const;
     // The open editor's height, which depends on how many rows it is showing.
     float EditorHeight() const;
     void EditorRects(const D2D1_RECT_F& panel, D2D1_RECT_F* fields,
@@ -339,6 +359,24 @@ private:
     IconLoader systemLoader_;
     std::vector<ComPtr<ID2D1Bitmap>> systemIcons_;
     std::vector<int> systemFiltered_;
+
+    // The online icon search, its results, and the loader that turns the
+    // downloaded PNGs into thumbnails - the same loader the other two grids
+    // use, because by the time a result has been fetched it is exactly what
+    // every other icon here is: a file on disk.
+    IconSearch iconSearch_;
+    std::vector<IconHit> iconHits_;
+    IconLoader iconResultLoader_;
+    std::vector<ComPtr<ID2D1Bitmap>> iconResultIcons_;
+    // Which item is being given an icon, or -1 when the picker is showing the
+    // ordinary two grids.
+    int iconSearchFor_ = -1;
+    // What was last actually sent, so a debounce that fires on unchanged text
+    // does not spend a request saying the same thing twice.
+    std::wstring iconSent_;
+    std::wstring iconError_;
+    bool iconBusy_ = false;
+    D2D1_RECT_F keyButtons_[2]{};
     std::wstring search_;
     bool searchFocused_ = false;
     D2D1_RECT_F searchRect_{};

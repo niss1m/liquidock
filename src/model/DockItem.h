@@ -59,6 +59,15 @@ struct DockItem {
     // exactly the case people care about most: a themed icon set.
     std::wstring iconPath;
 
+    // Who made the icon, when it came from somewhere that asks to be credited.
+    //
+    // macOSicons.com's terms ask that the site and the icon's author both be
+    // named wherever one of their icons is used, so the name is carried with the
+    // entry rather than discarded at the moment of choosing - which is the only
+    // point at which it was still known. Free text, and empty for an icon that
+    // came off the machine.
+    std::wstring iconCredit;
+
     // The second state's image, for an entry whose icon is live. Only the
     // Recycle Bin has one today: `iconPath` is the empty bin and this is the
     // full one, so a themed set can supply both and the icon still answers the

@@ -39,6 +39,8 @@ const wchar_t kFileHeader[] =
     L"#     icon    = an image file      optional; png, jpg, bmp, ico, gif, tiff\n"
     L"#     iconfull= an image file      optional; the second icon for an entry\n"
     L"#                                  whose icon changes, ie the full bin\n"
+    L"#     icon-credit = who made it    optional; written when the icon came\n"
+    L"#                                  from macOSicons.com\n"
     L"#\n"
     L"# Environment variables are expanded. Blank lines and # lines are ignored.\n"
     L"# The old `group | path | label` one-liners are still read; the group they\n"
@@ -271,6 +273,8 @@ bool ItemStore::ReadFile(const std::wstring& path) {
             current.iconPath = value;
         } else if (key == L"iconfull") {
             current.iconAltPath = value;
+        } else if (key == L"icon-credit") {
+            current.iconCredit = value;
         } else if (key == L"system") {
             current.systemId = value;
         } else if (key == L"show") {
@@ -370,6 +374,9 @@ bool ItemStore::Save() const {
         }
         if (!item.iconAltPath.empty()) {
             fwprintf(file, L"iconfull= %s\n", item.iconAltPath.c_str());
+        }
+        if (!item.iconCredit.empty()) {
+            fwprintf(file, L"icon-credit = %s\n", item.iconCredit.c_str());
         }
         if (item.runState != RunState::Normal) {
             fwprintf(file, L"show    = %s\n",

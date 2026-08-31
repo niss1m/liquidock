@@ -73,6 +73,7 @@ add_executable(liquidock WIN32
     src/glass/FrostChain.cpp
     src/model/AppCatalog.cpp
     src/model/IconLoader.cpp
+    src/model/IconSearch.cpp
     src/model/ItemStore.cpp
     src/model/ProfileStore.cpp
     src/model/SystemItems.cpp
@@ -123,6 +124,7 @@ target_link_libraries(liquidock PRIVATE
     dxguid
     shcore
     shell32
+    winhttp
     ole32
     oleaut32
     uuid

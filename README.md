@@ -120,12 +120,43 @@ goes through the shell's own confirmation.
 *Show Desktop* and *Lock* are commands rather than places, so they have no path at all — the block
 is just `system = show-desktop` and a label.
 
+### Finding an icon online
+
+Open an item in the **Items** tab and the Icon row has two buttons: *Choose…* for a file on this
+machine, and *Find online* for [macOSicons.com](https://macosicons.com), which is where the Big Sur
+icon sets people actually use come from. The picker under the rule becomes a grid of results,
+seeded with the entry's own name — so opening it on *Notion* has already searched for Notion. Click
+one and it is the entry's icon.
+
+The PNG is downloaded once into `%LOCALAPPDATA%\LiquiDock\icons\`, and that file *is* the icon:
+an entry's icon is a path to an image, so the cached download is the final artefact and picking it
+copies nothing. Searching again finds it already there.
+
+**It needs a key, and the key is yours.** macOSicons issues one free per account at
+[macosicons.com/developers](https://macosicons.com/developers), and their terms forbid sharing one —
+so there is none to ship, and one embedded in a source-available repository would not be a secret
+anyway. *Paste the key* takes it off the clipboard and writes it to
+`%LOCALAPPDATA%\LiquiDock\macosicons.key`. It lives in a file of its own rather than in
+`settings.txt`, which is what keeps it out of a shared config token and out of a saved profile by
+construction rather than by remembering to exclude it.
+
+**Their terms, which are not ours to waive:** icons must credit macOSicons.com and whoever made
+them, and *commercial use is not permitted on the free tier*. LiquiDock stores the author with the
+entry — `icon-credit` in `items.txt`, shown in the item editor and on the detail line — so the
+first half is handled. The second half is a decision, not a feature: if you ship a build that
+leans on this, take it up with macOSicons first.
+
+This is the only place LiquiDock touches the network. It happens while you are typing in that one
+search box and at no other time — nothing at startup, nothing polled, no socket opened by a dock
+that never opens the panel.
+
 | Key | Means |
 |---|---|
 | `kind = separator` | A divider. No path, launches nothing, and it is the **only** thing that puts a rule on the bar. |
 | `kind = settings` | The dock's own entry. Clicking it opens these preferences. |
 | `system = <name>` | One of the built-in Windows entries, above. |
 | `iconfull = <image>` | The second icon for an entry whose icon has two states — today only the full Recycle Bin. |
+| `icon-credit = <who>` | Who made the icon. Written when it came from macOSicons.com, and shown wherever the entry is described. |
 | `multiple = on` | Clicking starts another copy instead of switching to the open one. |
 | `show = minimized \| maximized` | How the window comes up. |
 | `admin = on` | Launch elevated, through the shell's `runas` verb — so it prompts through UAC rather than the dock running elevated and handing its token to everything it launches. |
@@ -140,8 +171,8 @@ Downloads and the Recycle Bin.
 
 Any item's icon can be replaced with an image — png, jpg, bmp, ico, gif, tiff, or the icon out of an
 .exe, .dll or .ico. *Change icon…* on the dock's own right-click menu is the short way; the item
-editor in the **Items** tab is the long one, and it is where the second icon of a two-state entry
-lives.
+editor in the **Items** tab is the long one, and it is where *Find online* and the second icon of a
+two-state entry live.
 
 ## Settings
 
@@ -292,3 +323,11 @@ sell it. On 2030-08-29 this version converts to Apache 2.0.
 
 Official signed builds are sold on the Microsoft Store and Steam — they add auto-updates, cloud
 settings sync, and support the development.
+
+### Credits
+
+Icons found through *Find online* come from [macOSicons.com](https://macosicons.com), made by the
+people named beside them. LiquiDock ships none of them and stores none of them for you: the search
+uses a key you supply and the results are downloaded to your own machine. Their terms ask that the
+site and the icon's author both be credited wherever one is used, and note that **commercial use is
+not permitted on the free tier** — see *Finding an icon online* above.

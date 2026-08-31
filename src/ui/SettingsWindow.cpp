@@ -41,6 +41,15 @@ constexpr UINT kSuggestionIconsMessage = WM_APP + 3;
 // from the installed-app one so that a catalog of three hundred apps finishing
 // does not cancel a table of thirteen entries halfway through.
 constexpr UINT kSystemIconsMessage = WM_APP + 4;
+// Posted when the online icon search has an answer - once with the names, once
+// again when their images are on disk - and as those images become thumbnails.
+constexpr UINT kIconResultsMessage = WM_APP + 5;
+constexpr UINT kIconResultIconsMessage = WM_APP + 6;
+// Typing does not send a request; this does, a beat after the typing stops. A
+// request per keystroke is nine of them to spell "photoshop", and a rate limit
+// to show for it.
+constexpr UINT_PTR kIconSearchTimer = 3;
+constexpr UINT kIconSearchDelayMs = 350;
 
 namespace layout {
 constexpr float kWidth = 900.0f;
@@ -143,6 +152,8 @@ const char kDiscordPath[] =
 constexpr float kDiscordBox = 24.0f;
 const wchar_t kGitHubUrl[] = L"https://github.com/niss1m/liquidock";
 const wchar_t kDiscordUrl[] = L"https://discord.gg/Xxe3zs3sNZ";
+// Where a key comes from. Sent to the browser, never fetched by the dock.
+const wchar_t kIconKeyUrl[] = L"https://macosicons.com/developers";
 
 // The picker. A square for saturation and value, a rail for hue under it, and
 // one row of presets - which is the shape every colour picker worth using has,
@@ -180,6 +191,10 @@ constexpr float kItemIcon = 24.0f;
 // Added to a row while its editor is open.
 constexpr float kEditorRow = 34.0f;
 constexpr float kEditorHeight = 7.0f * kEditorRow + 16.0f;
+// The line under the editor's rows naming whoever made the icon. Only there
+// when there is somebody to name, so the panel is no taller for the entries
+// that took their icon off this machine.
+constexpr float kEditorCredit = 20.0f;
 constexpr float kEditorLabel = 104.0f;
 constexpr float kEditorButton = 92.0f;
 // The line under the list that says what the hovered row actually is.
@@ -206,6 +221,13 @@ constexpr float kRuleCaptionGap = 8.0f;
 // repeating it would say that twice.
 constexpr float kSubCaption = 24.0f;
 constexpr float kSubGap = 12.0f;
+// The block shown in place of the results while there is no key: a line saying
+// what is needed, and the two buttons that get it.
+constexpr float kKeyPanel = 108.0f;
+// One line, for "searching", "nothing found" and anything the server refused
+// us with.
+constexpr float kNoticeLine = 34.0f;
+constexpr float kKeyButtonWidth = 132.0f;
 constexpr float kSearchWidth = 220.0f;
 constexpr float kSearchHeight = 26.0f;
 // The fixed row of add buttons above the list, and how wide each one is.
@@ -423,10 +445,13 @@ void SettingsWindow::Destroy() {
     iconLoader_.Stop();
     suggestionLoader_.Stop();
     systemLoader_.Stop();
+    iconSearch_.Stop();
+    iconResultLoader_.Stop();
     catalog_.Stop();
     itemIcons_.clear();
     suggestionIcons_.clear();
     systemIcons_.clear();
+    iconResultIcons_.clear();
     if (hwnd_) {
         KillTimer(hwnd_, kSaveTimer);
         DestroyWindow(hwnd_);
@@ -531,6 +556,22 @@ void SettingsWindow::BuildRows() {
         rows_.push_back(std::move(row));
     }
     ApplyFilter();
+    if (searching_icons()) {
+        // The picker becomes one grid of found icons. The other two are asking
+        // "what should go on the dock"; this is asking "what should this one
+        // look like", and showing both at once would be two questions with one
+        // answer between them.
+        for (size_t i = 0; i < iconHits_.size(); ++i) {
+            Row row;
+            row.kind = Row::Kind::IconResult;
+            row.tab = Tab::Items;
+            row.itemIndex = static_cast<int>(i);
+            row.column = 0;
+            rows_.push_back(std::move(row));
+        }
+        systemFiltered_.clear();
+        filtered_.clear();
+    }
     // The Windows entries first, because they are a short, fixed list of things
     // people come looking for by name - and putting them after three hundred
     // installed apps is the same as not offering them.
@@ -740,7 +781,7 @@ float SettingsWindow::MeasureTab(Tab tab) const {
         }
         if (tab == Tab::Items &&
             (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion ||
-             row.kind == Row::Kind::SystemTile)) {
+             row.kind == Row::Kind::SystemTile || row.kind == Row::Kind::IconResult)) {
             continue; // counted as grids, below
         }
         const int column = std::clamp(row.column, 0, columns - 1);
@@ -765,6 +806,22 @@ float SettingsWindow::MeasureTab(Tab tab) const {
         }
         y[0] += layout::kGridGap + layout::kRuleCaptionGap + layout::kSearchHeight +
                 layout::kGridRuleGap;
+        if (searching_icons()) {
+            // One grid, or the one line that stands in for it.
+            if (!IconSearch::HasKey()) {
+                y[0] += layout::kKeyPanel;
+            } else if (iconHits_.empty()) {
+                y[0] += layout::kNoticeLine;
+            } else {
+                y[0] += lines(iconHits_.size()) * line;
+                if (!iconError_.empty()) {
+                    y[0] += layout::kNoticeLine;
+                }
+            }
+            float tallestIcons = *std::max_element(y, y + columns);
+            return std::min(tallestIcons, layout::kListMaxHeight) + layout::kActionRow +
+                   layout::kDetailBar;
+        }
         // The Windows grid and its caption, both of which disappear entirely
         // when the search has filtered them away. This has to agree with
         // LayoutGrids exactly, or the window is sized for a page it is not
@@ -824,7 +881,7 @@ void SettingsWindow::LayoutRows() {
             continue;
         }
         if (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion ||
-            row.kind == Row::Kind::SystemTile) {
+            row.kind == Row::Kind::SystemTile || row.kind == Row::Kind::IconResult) {
             continue; // the grids are placed together, below
         }
 
@@ -1045,10 +1102,20 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
             return IDC_HAND;
         }
     }
-    if (activeTab_ == Tab::Items && (!suggestions_.empty() || !systemEntries_.empty()) &&
+    if (activeTab_ == Tab::Items &&
+        (searching_icons() || !suggestions_.empty() || !systemEntries_.empty()) &&
         x >= searchRect_.left && x <= searchRect_.right && y >= searchRect_.top - 4.0f &&
         y <= searchRect_.bottom + 4.0f) {
         return IDC_IBEAM;
+    }
+    if (searching_icons()) {
+        for (int i = 0; i < 2; ++i) {
+            const D2D1_RECT_F& button = keyButtons_[i];
+            if (button.right > button.left && x >= button.left && x <= button.right &&
+                y >= button.top && y <= button.bottom) {
+                return IDC_HAND;
+            }
+        }
     }
     if (activeTab_ == Tab::Items && expandedItem_ >= 0 && x >= editorPanel_.left &&
         x <= editorPanel_.right && y >= editorPanel_.top && y <= editorPanel_.bottom) {
@@ -1081,6 +1148,7 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
         case Row::Kind::AddSelf:
         case Row::Kind::Suggestion:
         case Row::Kind::SystemTile:
+        case Row::Kind::IconResult:
         case Row::Kind::Colour:
         case Row::Kind::Action:
             return IDC_HAND;
@@ -1181,6 +1249,31 @@ float SettingsWindow::LayoutGrids(float top, float width) {
                               headerTop + layout::kSearchHeight);
     y += layout::kGridGap + layout::kRuleCaptionGap + layout::kSearchHeight +
          layout::kGridRuleGap;
+
+    if (searching_icons()) {
+        keyButtons_[0] = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+        keyButtons_[1] = keyButtons_[0];
+        if (!IconSearch::HasKey()) {
+            // The explanation sits where the grid would, and the two buttons
+            // under it. Laid out here rather than at draw time so the click
+            // test and the drawing read the same rectangles.
+            const float buttonTop = y - itemScroll_ + 40.0f;
+            float x = layout::kPadding;
+            for (D2D1_RECT_F& button : keyButtons_) {
+                button = D2D1::RectF(x, buttonTop, x + layout::kKeyButtonWidth,
+                                     buttonTop + layout::kActionHeight);
+                x += layout::kKeyButtonWidth + 10.0f;
+            }
+            return y + layout::kKeyPanel;
+        }
+        if (iconHits_.empty()) {
+            return y + layout::kNoticeLine;
+        }
+        if (!iconError_.empty()) {
+            y += layout::kNoticeLine;
+        }
+        return place(Row::Kind::IconResult, y);
+    }
 
     // Two grids under one rule, each with a small caption of its own. The rule
     // separates what the dock holds from what it could; the captions say which
@@ -1333,6 +1426,10 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     // Re-read from disk on the way in. The file is editable while the dock is
     // running, so opening the window over a stale copy would silently revert
     // whatever was typed there.
+    // A search left open from the last time the window was up belongs to an
+    // item index that has just been re-read from disk and may be somebody else.
+    EndIconSearch();
+
     settings_.Load();
     items_.Load();
 
@@ -1454,7 +1551,7 @@ int SettingsWindow::RowAt(float x, float y) const {
             continue;
         }
         if (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion ||
-            row.kind == Row::Kind::SystemTile) {
+            row.kind == Row::Kind::SystemTile || row.kind == Row::Kind::IconResult) {
             // Scrolled out of sight is not clickable, however much the row's
             // rectangle still says it is there.
             if (y < itemsClip_.top || y > itemsClip_.bottom) {
@@ -1688,6 +1785,17 @@ bool SettingsWindow::HandleEditorClick(const D2D1_RECT_F& panel, int itemIndex, 
         return false;
     }
 
+    const D2D1_RECT_F online = EditorSearchButton(panel);
+    if (online.right > online.left && x >= online.left && x <= online.right && y >= online.top &&
+        y <= online.bottom) {
+        if (iconSearchFor_ == itemIndex) {
+            EndIconSearch();
+        } else {
+            BeginIconSearch(itemIndex);
+        }
+        return true;
+    }
+
     for (int i = 0; i < static_cast<int>(Field::Count); ++i) {
         const D2D1_RECT_F& button = buttons[i];
         if (x >= button.left && x <= button.right && y >= button.top && y <= button.bottom &&
@@ -1706,6 +1814,11 @@ bool SettingsWindow::HandleEditorClick(const D2D1_RECT_F& panel, int itemIndex, 
                 }
             } else if (i == static_cast<int>(Field::Icon) ||
                        i == static_cast<int>(Field::IconFull)) {
+                // Choosing a file by hand clears the credit: whatever the new
+                // image is, it is not the one that was being credited.
+                if (i == static_cast<int>(Field::Icon)) {
+                    item.iconCredit.clear();
+                }
                 std::wstring chosen;
                 if (!ItemStore::PickImage(hwnd_, &chosen)) {
                     return false;
@@ -1831,6 +1944,131 @@ void SettingsWindow::DrainSuggestionIcons() {
 
 void SettingsWindow::DrainSystemIcons() {
     DrainIconsInto(systemLoader_, systemIcons_);
+}
+
+void SettingsWindow::BeginIconSearch(int itemIndex) {
+    const auto& items = items_.items();
+    if (itemIndex < 0 || static_cast<size_t>(itemIndex) >= items.size()) {
+        return;
+    }
+    CommitEdit();
+    iconSearchFor_ = itemIndex;
+    iconHits_.clear();
+    iconResultIcons_.clear();
+    iconError_.clear();
+    iconSent_.clear();
+    iconBusy_ = false;
+    // Seeded with the entry's own name and sent straight away: the icon you
+    // want for Notion is almost always the one you get by typing Notion, and
+    // making somebody type it when the dock already knows it is a waste of the
+    // click that got here.
+    search_ = items[static_cast<size_t>(itemIndex)].label;
+    searchFocused_ = true;
+    expandedItem_ = itemIndex;
+    itemScroll_ = 0.0f;
+    hoverRow_ = -1;
+    RunIconSearch();
+    BuildRows();
+    LayoutRows();
+    ApplyWindowSize();
+
+    // And scrolled to what was just opened. A dock of fifty icons fills the
+    // list on its own, so the picker underneath it starts below the fold - and
+    // a panel you have to go looking for is one that did not open. The editor
+    // goes to the top, because the thing being changed and the things to change
+    // it to both want to be on screen at once.
+    if (itemScrollMax_ > 0.0f && editorPanel_.bottom > editorPanel_.top) {
+        itemScroll_ =
+            std::clamp(editorPanel_.top - itemsClip_.top - 8.0f, 0.0f, itemScrollMax_);
+        LayoutRows();
+    }
+}
+
+void SettingsWindow::EndIconSearch() {
+    if (iconSearchFor_ < 0) {
+        return;
+    }
+    // Stopped rather than left running: a search nobody is looking at is a
+    // request nobody asked for, and the panel it would fill is gone.
+    iconSearch_.Stop();
+    iconResultLoader_.Stop();
+    if (hwnd_) {
+        KillTimer(hwnd_, kIconSearchTimer);
+    }
+    iconSearchFor_ = -1;
+    iconHits_.clear();
+    iconResultIcons_.clear();
+    iconError_.clear();
+    iconSent_.clear();
+    iconBusy_ = false;
+    search_.clear();
+    searchFocused_ = false;
+    itemScroll_ = 0.0f;
+    hoverRow_ = -1;
+    BuildRows();
+    LayoutRows();
+    ApplyWindowSize();
+}
+
+void SettingsWindow::RunIconSearch() {
+    if (iconSearchFor_ < 0 || !hwnd_ || !IconSearch::HasKey()) {
+        return;
+    }
+    if (search_.empty()) {
+        iconSearch_.Stop();
+        iconHits_.clear();
+        iconResultIcons_.clear();
+        iconSent_.clear();
+        iconBusy_ = false;
+        return;
+    }
+    if (search_ == iconSent_) {
+        return; // the debounce landed on text that has already been asked
+    }
+    iconSent_ = search_;
+    iconError_.clear();
+    iconBusy_ = true;
+    iconResultLoader_.Stop();
+    iconResultIcons_.clear();
+    iconSearch_.Start(search_, hwnd_, kIconResultsMessage);
+}
+
+void SettingsWindow::DrainIconResults() {
+    iconHits_ = iconSearch_.Take();
+    iconError_ = iconSearch_.error();
+    iconResultIcons_.assign(iconHits_.size(), nullptr);
+
+    // Two notifications arrive per search: the names, and then the files. Only
+    // the second has anything to make a thumbnail out of, and it says so by
+    // having filled in where the images landed.
+    bool downloaded = false;
+    std::vector<DockItem> wanted;
+    wanted.reserve(iconHits_.size());
+    for (const IconHit& hit : iconHits_) {
+        DockItem item;
+        item.iconPath = hit.file;
+        wanted.push_back(std::move(item));
+        downloaded = downloaded || !hit.file.empty();
+    }
+    if (downloaded) {
+        iconBusy_ = false;
+        const float pixels = layout::kTileIcon * static_cast<float>(dpi_) / 96.0f;
+        iconResultLoader_.Start(std::move(wanted), static_cast<int>(std::lround(pixels)), hwnd_,
+                                kIconResultIconsMessage);
+    } else if (!iconError_.empty() || iconHits_.empty()) {
+        iconBusy_ = false;
+    }
+
+    BuildRows();
+    LayoutRows();
+    ApplyWindowSize();
+}
+
+D2D1_RECT_F SettingsWindow::KeyButton(int index) const {
+    if (index < 0 || index > 1) {
+        return D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    return keyButtons_[index];
 }
 
 void SettingsWindow::StartIconLoad() {
@@ -2007,7 +2245,8 @@ bool SettingsWindow::AdvanceAnimation() {
         (rows_[static_cast<size_t>(hoverRow_)].hint != nullptr ||
          rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::Item ||
          rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::Suggestion ||
-         rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::SystemTile);
+         rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::SystemTile ||
+         rows_[static_cast<size_t>(hoverRow_)].kind == Row::Kind::IconResult);
     // Primed means one has already been earned, so the next row does not have to
     // earn it again. It survives crossing the gap between two cards and expires
     // shortly after the pointer settles on something with nothing to say.
@@ -2683,6 +2922,15 @@ void SettingsWindow::DrawTooltip() {
                    : items[index].label + L"   ·   " + items[index].path;
     } else if (hovered.kind == Row::Kind::Suggestion) {
         text = SuggestionLabel(hovered.itemIndex) + L"   ·   click to add";
+    } else if (hovered.kind == Row::Kind::IconResult) {
+        const size_t index = static_cast<size_t>(hovered.itemIndex);
+        if (index >= iconHits_.size()) {
+            return;
+        }
+        text = iconHits_[index].appName;
+        if (!iconHits_[index].credit.empty()) {
+            text += L"   ·   by " + iconHits_[index].credit;
+        }
     } else if (hovered.kind == Row::Kind::SystemTile) {
         const SystemEntry* entry = SystemEntryFor(hovered.itemIndex);
         if (!entry) {
@@ -3000,7 +3248,8 @@ void SettingsWindow::DrawTile(const Row& row, bool hovered) {
     // Two grids of things you could add and one of things you have. The only
     // difference between the first two is which list the icon comes out of.
     const bool system = (row.kind == Row::Kind::SystemTile);
-    const bool suggestion = system || (row.kind == Row::Kind::Suggestion);
+    const bool result = (row.kind == Row::Kind::IconResult);
+    const bool suggestion = system || result || (row.kind == Row::Kind::Suggestion);
     const size_t index = static_cast<size_t>(row.itemIndex);
     const auto& items = items_.items();
     if (!suggestion && index >= items.size()) {
@@ -3039,7 +3288,10 @@ void SettingsWindow::DrawTile(const Row& row, bool hovered) {
         return;
     }
 
-    const auto& icons = system ? systemIcons_ : (suggestion ? suggestionIcons_ : itemIcons_);
+    const auto& icons = result      ? iconResultIcons_
+                        : system    ? systemIcons_
+                        : suggestion ? suggestionIcons_
+                                     : itemIcons_;
     ID2D1Bitmap* icon = (index < icons.size()) ? icons[index].Get() : nullptr;
     if (icon) {
         // Suggestions are dimmed until pointed at: they are not on the dock, and
@@ -3205,7 +3457,13 @@ bool SettingsWindow::EditorHasFullIcon() const {
 
 float SettingsWindow::EditorHeight() const {
     const int rows = static_cast<int>(Field::Count) - (EditorHasFullIcon() ? 0 : 1);
-    return static_cast<float>(rows) * layout::kEditorRow + 16.0f;
+    float height = static_cast<float>(rows) * layout::kEditorRow + 16.0f;
+    const auto& items = items_.items();
+    if (expandedItem_ >= 0 && static_cast<size_t>(expandedItem_) < items.size() &&
+        !items[static_cast<size_t>(expandedItem_)].iconCredit.empty()) {
+        height += layout::kEditorCredit;
+    }
+    return height;
 }
 
 void SettingsWindow::EditorRects(const D2D1_RECT_F& panel, D2D1_RECT_F* fields,
@@ -3227,7 +3485,12 @@ void SettingsWindow::EditorRects(const D2D1_RECT_F& panel, D2D1_RECT_F* fields,
                                 i == static_cast<int>(Field::Icon) ||
                                 i == static_cast<int>(Field::IconFull) ||
                                 i == static_cast<int>(Field::WorkingDir));
-        const float fieldRight = hasButton ? (right - layout::kEditorButton - 8.0f) : right;
+        float fieldRight = hasButton ? (right - layout::kEditorButton - 8.0f) : right;
+        // The icon row carries two: one for a file on this machine and one for
+        // the online search, so the field stops short of both.
+        if (i == static_cast<int>(Field::Icon)) {
+            fieldRight -= layout::kEditorButton + 8.0f;
+        }
         fields[i] = D2D1::RectF(left + layout::kEditorLabel, y + 4.0f, fieldRight,
                                 y + layout::kEditorRow - 4.0f);
         buttons[i] = hasButton ? D2D1::RectF(right - layout::kEditorButton, y + 4.0f, right,
@@ -3235,6 +3498,18 @@ void SettingsWindow::EditorRects(const D2D1_RECT_F& panel, D2D1_RECT_F* fields,
                                : D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
         y += layout::kEditorRow;
     }
+}
+
+D2D1_RECT_F SettingsWindow::EditorSearchButton(const D2D1_RECT_F& panel) const {
+    D2D1_RECT_F fields[static_cast<int>(Field::Count)];
+    D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
+    EditorRects(panel, fields, buttons);
+    const D2D1_RECT_F& choose = buttons[static_cast<int>(Field::Icon)];
+    if (choose.right <= choose.left) {
+        return D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    return D2D1::RectF(choose.left - layout::kEditorButton - 8.0f, choose.top, choose.left - 8.0f,
+                       choose.bottom);
 }
 
 void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
@@ -3332,6 +3607,30 @@ void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
                      kLabel);
             valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
         }
+
+        if (i == static_cast<int>(Field::Icon)) {
+            const D2D1_RECT_F online = EditorSearchButton(panel);
+            const bool under = pointerX_ >= online.left && pointerX_ <= online.right &&
+                               pointerY_ >= online.top && pointerY_ <= online.bottom;
+            const bool open = (iconSearchFor_ == itemIndex);
+            brush_->SetColor(open ? kOn : (under ? Grey(1.0f, 0.18f) : Grey(1.0f, 0.10f)));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(online, 5.0f, 5.0f), brush_.Get());
+            valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            DrawText(open ? L"Searching" : L"Find online", valueFormat_.Get(),
+                     D2D1::RectF(online.left, online.top, online.right, online.bottom),
+                     open ? kPanel : kLabel);
+            valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+        }
+    }
+
+    // Where the icon came from, when it came from somewhere that asks to be
+    // named. Under the rows rather than in one of them: it is not a field, it
+    // is the condition on which the icon above it may be used.
+    if (!item.iconCredit.empty()) {
+        DrawText(L"Icon by " + item.iconCredit, hintFormat_.Get(),
+                 D2D1::RectF(panel.left + 14.0f, panel.bottom - layout::kEditorCredit - 2.0f,
+                             panel.right - 14.0f, panel.bottom - 2.0f),
+                 kHint);
     }
 }
 
@@ -3347,8 +3646,8 @@ void SettingsWindow::DrawSearch() {
                                          searchRect_.right, searchRect_.bottom);
     if (search_.empty()) {
         hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        DrawText(L"Search Windows and apps", hintFormat_.Get(), text,
-                 Grey(1.0f, searchFocused_ ? 0.35f : 0.28f));
+        DrawText(searching_icons() ? L"Search macOSicons.com" : L"Search Windows and apps",
+                 hintFormat_.Get(), text, Grey(1.0f, searchFocused_ ? 0.35f : 0.28f));
         hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     } else {
         valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -3405,6 +3704,17 @@ void SettingsWindow::DrawDetailBar() {
                 }
                 if (!item.workingDirectory.empty()) {
                     detail += L"   · in " + item.workingDirectory;
+                }
+                if (!item.iconCredit.empty()) {
+                    detail += L"   ·   icon by " + item.iconCredit;
+                }
+            }
+        } else if (row.kind == Row::Kind::IconResult) {
+            const size_t index = static_cast<size_t>(row.itemIndex);
+            if (index < iconHits_.size()) {
+                detail = iconHits_[index].appName;
+                if (!iconHits_[index].credit.empty()) {
+                    detail += L"   ·   by " + iconHits_[index].credit + L" on macOSicons.com";
                 }
             }
         } else if (row.kind == Row::Kind::SystemTile) {
@@ -3505,7 +3815,7 @@ void SettingsWindow::Render() {
         // spilling out of the bottom of the panel.
         const bool wantsClip =
             (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion ||
-             row.kind == Row::Kind::SystemTile);
+             row.kind == Row::Kind::SystemTile || row.kind == Row::Kind::IconResult);
         if (wantsClip != clipped) {
             if (wantsClip) {
                 d2d_->PushAxisAlignedClip(itemsClip_, D2D1_ANTIALIAS_MODE_ALIASED);
@@ -3516,7 +3826,7 @@ void SettingsWindow::Render() {
         }
 
         if (row.kind == Row::Kind::Item || row.kind == Row::Kind::Suggestion ||
-            row.kind == Row::Kind::SystemTile) {
+            row.kind == Row::Kind::SystemTile || row.kind == Row::Kind::IconResult) {
             DrawTile(row, hovered);
             continue;
         }
@@ -3589,7 +3899,8 @@ void SettingsWindow::Render() {
         d2d_->PushAxisAlignedClip(itemsClip_, D2D1_ANTIALIAS_MODE_ALIASED);
 
         // The rule between what is on the dock and what could be.
-        const bool anythingToAdd = !suggestions_.empty() || !systemEntries_.empty();
+        const bool anythingToAdd =
+            searching_icons() || !suggestions_.empty() || !systemEntries_.empty();
         if (anythingToAdd && gridRuleY_ > itemsClip_.top - layout::kSearchHeight &&
             gridRuleY_ < itemsClip_.bottom) {
             brush_->SetColor(Grey(1.0f, 0.10f));
@@ -3601,15 +3912,71 @@ void SettingsWindow::Render() {
             // at eleven and a half, the typed text at twelve and a half. Three
             // sizes, one line: hanging them all from the same top left each of
             // them sitting a different distance below it.
+            std::wstring caption = L"Add to the dock — click anything below";
+            if (searching_icons() && static_cast<size_t>(iconSearchFor_) < items_.items().size()) {
+                caption = L"An icon for “" +
+                          items_.items()[static_cast<size_t>(iconSearchFor_)].label +
+                          L"” — click one to use it";
+            }
             hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            DrawText(L"Add to the dock — click anything below", hintFormat_.Get(),
+            DrawText(caption, hintFormat_.Get(),
                      D2D1::RectF(layout::kPadding, searchRect_.top, searchRect_.left - 12.0f,
                                  searchRect_.bottom),
                      kHint);
             hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
             DrawSearch();
         }
-        if (anythingToAdd) {
+        if (searching_icons()) {
+            // The same arithmetic LayoutGrids uses to find the top of the
+            // picker's body, rather than a member remembering it: two copies of
+            // a number are two chances for them to disagree.
+            const float bodyTop = gridRuleY_ + layout::kRuleCaptionGap + layout::kSearchHeight +
+                                  layout::kGridRuleGap;
+            const auto line = [this](const std::wstring& text, float top) {
+                hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                DrawText(text, hintFormat_.Get(),
+                         D2D1::RectF(layout::kPadding, top, layout::kWidth - layout::kPadding,
+                                     top + layout::kNoticeLine),
+                         kHint);
+                hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            };
+
+            if (!IconSearch::HasKey()) {
+                line(L"Searching needs a macOSicons.com key, which is free and takes a minute. "
+                     L"It is kept on this machine and never travels with a shared config.",
+                     bodyTop);
+                static const wchar_t* const kNames[] = {L"Get a key", L"Paste the key"};
+                for (int i = 0; i < 2; ++i) {
+                    const D2D1_RECT_F& box = keyButtons_[i];
+                    if (box.right <= box.left) {
+                        continue;
+                    }
+                    const D2D1_RECT_F pill = D2D1::RectF(box.left + 0.5f, box.top + 0.5f,
+                                                         box.right - 0.5f, box.bottom - 0.5f);
+                    const float radius = (pill.bottom - pill.top) * 0.5f;
+                    const bool under = pointerX_ >= box.left && pointerX_ <= box.right &&
+                                       pointerY_ >= box.top && pointerY_ <= box.bottom;
+                    if (under) {
+                        brush_->SetColor(Grey(1.0f, 0.07f));
+                        d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, radius, radius),
+                                                   brush_.Get());
+                    }
+                    brush_->SetColor(under ? Grey(1.0f, 0.38f) : Grey(1.0f, 0.17f));
+                    d2d_->DrawRoundedRectangle(D2D1::RoundedRect(pill, radius, radius),
+                                               brush_.Get(), 1.0f);
+                    valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                    DrawText(kNames[i], valueFormat_.Get(), pill, under ? kLabel : kValue);
+                    valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+                }
+            } else if (!iconError_.empty()) {
+                line(iconError_, bodyTop);
+            } else if (iconHits_.empty()) {
+                line(iconBusy_        ? std::wstring(L"Searching macOSicons.com…")
+                     : search_.empty() ? std::wstring(L"Type to search macOSicons.com.")
+                                       : L"Nothing on macOSicons.com matches “" + search_ + L"”.",
+                     bodyTop);
+            }
+        } else if (anythingToAdd) {
             // One caption per grid, under the single rule. The rule is the
             // distinction that matters - what the dock holds against what it
             // could - and drawing a second one would claim these two lists are
@@ -3924,6 +4291,47 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 return 0;
             }
 
+            // The key buttons are a panel too, and the same rule applies: a
+            // test that lives inside "found a row" never runs for them.
+            if (searching_icons() && !IconSearch::HasKey()) {
+                for (int i = 0; i < 2; ++i) {
+                    const D2D1_RECT_F& box = keyButtons_[i];
+                    if (box.right <= box.left || x < box.left || x > box.right || y < box.top ||
+                        y > box.bottom) {
+                        continue;
+                    }
+                    if (i == 0) {
+                        ShellExecuteW(nullptr, L"open", layout::kIconKeyUrl, nullptr, nullptr,
+                                      SW_SHOWNORMAL);
+                    } else {
+                        // From the clipboard rather than typed: a key is forty
+                        // characters of noise, and a field to mistype it into
+                        // is a field to mistype it into.
+                        const std::wstring pasted = ClipboardText();
+                        std::wstring key;
+                        for (const wchar_t ch : pasted) {
+                            if (ch > 0x20) {
+                                key.push_back(ch);
+                            }
+                        }
+                        if (key.empty()) {
+                            Announce(L"Nothing on the clipboard to use as a key");
+                        } else if (IconSearch::SaveKey(key)) {
+                            Announce(L"Key saved; searching");
+                            iconSent_.clear();
+                            RunIconSearch();
+                        } else {
+                            Announce(L"Could not write the key file");
+                        }
+                    }
+                    BuildRows();
+                    LayoutRows();
+                    ApplyWindowSize();
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+
             // The open picker is a panel, not a row, so it has to be tested
             // before RowAt - which finds nothing over it.
             if (openColour_ >= 0 && static_cast<size_t>(openColour_) < rows_.size()) {
@@ -3947,6 +4355,31 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 if (kind == Row::Kind::AddItem || kind == Row::Kind::AddSeparator ||
                     kind == Row::Kind::AddSelf) {
                     HandleItemClick(row, x);
+                    return 0;
+                }
+                if (kind == Row::Kind::IconResult) {
+                    const Row tile = rows_[static_cast<size_t>(row)];
+                    const size_t hit = static_cast<size_t>(tile.itemIndex);
+                    const size_t owner = static_cast<size_t>(iconSearchFor_);
+                    if (hit < iconHits_.size() && !iconHits_[hit].file.empty() &&
+                        owner < items_.items().size()) {
+                        // The download *is* the pick: the file is already on
+                        // disk in the icon cache, and an entry's icon is a path
+                        // to a file, so there is no second copy to make.
+                        DockItem item = items_.items()[owner];
+                        item.iconPath = iconHits_[hit].file;
+                        item.iconCredit = (iconHits_[hit].credit.empty()
+                                               ? std::wstring(L"an author")
+                                               : iconHits_[hit].credit) +
+                                          L" · macOSicons.com";
+                        items_.Replace(owner, std::move(item));
+                        const int keepOpen = iconSearchFor_;
+                        EndIconSearch();
+                        // The editor stays up, because the thing you just
+                        // changed is in it and the change is worth seeing.
+                        expandedItem_ = keepOpen;
+                        CommitItems();
+                    }
                     return 0;
                 }
                 if (kind == Row::Kind::SystemTile) {
@@ -4156,6 +4589,15 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     // it again, because there is nowhere else for the gesture
                     // to go and a row that cannot be closed is a trap.
                     expandedItem_ = (expandedItem_ == pressed) ? -1 : pressed;
+                    // A search belongs to the editor that opened it. Moving to
+                    // another entry, or closing this one, ends it rather than
+                    // leaving a grid of icons pointed at nothing.
+                    if (searching_icons() && iconSearchFor_ != expandedItem_) {
+                        const int keep = expandedItem_;
+                        EndIconSearch();
+                        expandedItem_ = keep;
+                    }
+                    BuildRows();
                     LayoutRows();
                     ApplyWindowSize();
                     InvalidateRect(hwnd, nullptr, FALSE);
@@ -4222,6 +4664,10 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 // only thing that says which entry a click meant.
                 itemScroll_ = 0.0f;
                 hoverRow_ = -1;
+                if (searching_icons()) {
+                    // A beat after the typing stops, not on the keystroke.
+                    SetTimer(hwnd, kIconSearchTimer, kIconSearchDelayMs, nullptr);
+                }
                 BuildRows();
                 LayoutRows();
                 ApplyWindowSize();
@@ -4326,6 +4772,25 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     return 0;
                 }
             }
+            if (wParam == VK_ESCAPE && searching_icons()) {
+                // Escape leaves the nearer thing: the text first, then the
+                // search, and only then the window.
+                if (!search_.empty()) {
+                    search_.clear();
+                    iconSent_.clear();
+                    iconHits_.clear();
+                    iconResultIcons_.clear();
+                    iconSearch_.Stop();
+                    iconBusy_ = false;
+                    BuildRows();
+                    LayoutRows();
+                    ApplyWindowSize();
+                } else {
+                    EndIconSearch();
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (wParam == VK_ESCAPE && searchFocused_) {
                 // Clears the search first and leaves the field second. Escape
                 // closing the window out from under a half-typed filter is the
@@ -4419,8 +4884,24 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
+        case kIconResultsMessage:
+            DrainIconResults();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+
+        case kIconResultIconsMessage:
+            DrainIconsInto(iconResultLoader_, iconResultIcons_);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+
         case WM_TIMER:
             if (wParam == kAnimTimer) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (wParam == kIconSearchTimer) {
+                KillTimer(hwnd, kIconSearchTimer);
+                RunIconSearch();
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
