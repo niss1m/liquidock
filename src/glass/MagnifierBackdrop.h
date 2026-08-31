@@ -91,6 +91,11 @@ private:
     int pixelWidth_ = 0;
     int pixelHeight_ = 0;
     bool gotPixels_ = false;
+    // A sampled checksum of the last frame handed over. Update returns true
+    // only when this moves, so a still screen costs a read and nothing else -
+    // no texture upload, no frost rebuild, no present.
+    uint64_t signature_ = 0;
+    bool haveSignature_ = false;
 
     ComPtr<ID3D11Texture2D> texture_;
     ComPtr<ID3D11ShaderResourceView> srv_;

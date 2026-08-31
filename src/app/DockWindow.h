@@ -169,6 +169,12 @@ private:
     // The preferred live source: it can leave the dock out of what it reads, so
     // the dock does not have to hide from everything else to get a backdrop.
     std::unique_ptr<MagnifierBackdrop> magnifier_;
+    // Consecutive heartbeats that found nothing moving, for deciding when to
+    // slow down.
+    int liveStill_ = 0;
+    bool liveFast_ = true;
+    bool liveRunning_ = false;
+    void UpdateLiveTimer();
     // Whichever of the two is running, or null on the wallpaper.
     Backdrop* live();
     const Backdrop* live() const;

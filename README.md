@@ -166,6 +166,14 @@ shares. Filtering by name costs nothing of the sort. Duplication is still there 
 machines where the magnifier is unavailable, and on those the old trade-off applies — the log says
 which one is running.
 
+The one thing duplication gave for free was a change notification, and the magnifier has none: it
+answers when asked and never volunteers. So live mode runs a heartbeat while the dock is on screen,
+reading the strip at thirty hertz and comparing a sampled checksum of it. Only a strip that actually
+changed costs an upload, a frost rebuild and a frame; a still screen settles back to nothing being
+drawn, and after a second without a change the heartbeat itself drops to six a second until
+something moves. Tucked away it stops entirely — there is nothing to refract and nobody to refract
+it for.
+
 `follow-cursor` is **off** by default. On, the row slides sideways as it swells so the icon under
 the pointer stays exactly under it, which is what macOS does — and is also why the whole bar appears
 to drift left and right as you move along it. Off, the bar holds its centre and grows evenly to both

@@ -151,6 +151,7 @@ void MagnifierBackdrop::SetRegion(const RECT& region) {
     }
     region_ = region;
     regionMoved_ = true;
+    haveSignature_ = false;
 }
 
 void MagnifierBackdrop::SetActive(bool active) {
@@ -159,6 +160,7 @@ void MagnifierBackdrop::SetActive(bool active) {
 
 void MagnifierBackdrop::Invalidate() {
     regionMoved_ = true;
+    haveSignature_ = false;
 }
 
 bool MagnifierBackdrop::EnsureTexture(int width, int height) {
@@ -267,6 +269,25 @@ bool MagnifierBackdrop::Update(HMONITOR monitor) {
     if (!gotPixels_ || pixelWidth_ <= 0 || pixelHeight_ <= 0) {
         return false;
     }
+
+    // Every seventh pixel, which is enough to notice a cursor moving over the
+    // strip and cheap enough to run at thirty hertz: a hundred and fifty
+    // thousand reads against the one and a half million a full compare would
+    // do, and a stride that is coprime with the row length so the samples do
+    // not line up into a column.
+    uint64_t signature = 1469598103934665603ull;
+    {
+        const uint32_t* words = reinterpret_cast<const uint32_t*>(pixels_.data());
+        const size_t count = pixels_.size() / sizeof(uint32_t);
+        for (size_t i = 0; i < count; i += 7) {
+            signature = (signature ^ words[i]) * 1099511628211ull;
+        }
+    }
+    if (haveSignature_ && signature == signature_ && !regionMoved_) {
+        return false; // the screen behind has not moved
+    }
+    signature_ = signature;
+    haveSignature_ = true;
 
     if (!EnsureTexture(pixelWidth_, pixelHeight_)) {
         failed_ = true;

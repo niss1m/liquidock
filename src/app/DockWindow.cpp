@@ -71,6 +71,24 @@ constexpr UINT_PTR kStatsTimer = 7;
 // Coverage scans are debounced: switching apps can fire several events in a row
 // and one scan afterwards answers for all of them.
 constexpr UINT_PTR kCoverTimer = 9;
+
+// The live backdrop's heartbeat.
+//
+// Duplication told the dock when the screen changed; the magnifier has no such
+// signal, so the dock has to ask. It asks at thirty hertz while something
+// behind it is actually moving and backs off to six when it is not, which is
+// still quick enough to catch a window appearing. Reading costs a copy of the
+// strip; only a *changed* strip costs an upload, a frost rebuild and a frame,
+// so a still screen settles back to nothing being drawn.
+//
+// It runs only while the dock is on screen. Tucked away there is nothing to
+// refract and nobody to refract it for.
+// 10 is the hover watchdog.
+constexpr UINT_PTR kLiveTimer = 11;
+constexpr UINT kLiveBusyMs = 33;
+constexpr UINT kLiveIdleMs = 160;
+// How long without a change before backing off.
+constexpr int kLiveIdleAfter = 30;
 // The watchdog that catches a missed WM_MOUSELEAVE. Five times a second is
 // plenty for something that should never happen, and a timer is the right
 // mechanism precisely because WM_TIMER is the *lowest* priority message there
@@ -275,6 +293,8 @@ void DockWindow::Reveal() {
     trigger_.SetEnabled(false);
     if (live()) {
         live()->SetActive(true);
+        liveStill_ = 0;
+        UpdateLiveTimer();
     }
     QueryPerformanceCounter(&lastFrameTime_);
 
@@ -470,6 +490,7 @@ float DockWindow::AdvanceReveal(float deltaSeconds) {
             // Nothing behind a hidden dock is worth capturing.
             if (live()) {
                 live()->SetActive(false);
+                UpdateLiveTimer();
             }
         }
     }
@@ -841,6 +862,29 @@ Backdrop& DockWindow::ActiveBackdrop() {
     return wallpaper_;
 }
 
+void DockWindow::UpdateLiveTimer() {
+    if (!hwnd_) {
+        return;
+    }
+    // Only while there is a live source and the dock is actually out. Hidden,
+    // there is nothing to refract and nobody to refract it for.
+    const bool wanted = magnifier_ && !magnifier_->failed() &&
+                        revealState_ != RevealState::Hidden;
+    if (!wanted) {
+        KillTimer(hwnd_, kLiveTimer);
+        liveStill_ = 0;
+        liveFast_ = true;
+        liveRunning_ = false;
+        return;
+    }
+    const bool fast = (liveStill_ < kLiveIdleAfter);
+    if (fast != liveFast_ || !liveRunning_) {
+        liveFast_ = fast;
+        liveRunning_ = true;
+        SetTimer(hwnd_, kLiveTimer, fast ? kLiveBusyMs : kLiveIdleMs, nullptr);
+    }
+}
+
 Backdrop* DockWindow::live() {
     if (magnifier_) {
         return magnifier_.get();
@@ -864,6 +908,7 @@ void DockWindow::ApplyBackdropSource() {
     if (!wantLive) {
         magnifier_.reset();
         capture_.reset();
+        UpdateLiveTimer();
         // Put the dock back in the user's screenshots the moment capture stops.
         SetWindowDisplayAffinity(hwnd_, WDA_NONE);
         LogInfo("Backdrop source: wallpaper");
@@ -882,6 +927,8 @@ void DockWindow::ApplyBackdropSource() {
         if (magnifier->Initialize(*device_, std::move(excluded)) && !magnifier->failed()) {
             magnifier_ = std::move(magnifier);
             magnifier_->SetActive(revealState_ != RevealState::Hidden);
+            liveStill_ = 0;
+            UpdateLiveTimer();
             LogInfo("Backdrop source: live screen, dock still visible to screenshots");
             frostDirty_ = true;
             return;
@@ -2210,6 +2257,22 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 }
             } else if (wParam == kHoverWatchTimer) {
                 RequestRedraw();
+            } else if (wParam == kLiveTimer) {
+                // Ask the magnifier what is behind the dock now. Update only
+                // answers true when the strip actually changed, so a still
+                // screen ends here rather than in a frame.
+                if (magnifier_ && !magnifier_->failed()) {
+                    if (magnifier_->Update(TargetMonitor())) {
+                        liveStill_ = 0;
+                        frostDirty_ = true;
+                        RequestRedraw();
+                    } else {
+                        ++liveStill_;
+                    }
+                    UpdateLiveTimer();
+                } else {
+                    KillTimer(hwnd_, kLiveTimer);
+                }
             } else if (wParam == kCoverTimer) {
                 KillTimer(hwnd_, kCoverTimer);
                 CoverChanged();
