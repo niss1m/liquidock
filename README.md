@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/niss1m/liquidock/releases/latest">Download</a> ·
   <a href="https://discord.gg/Xxe3zs3sNZ">Discord</a> ·
   <a href="LICENSE">License</a>
 </p>
@@ -17,6 +18,20 @@
 <p align="center">
   <img src="resources/preview.png" width="729" alt="The dock over a photograph, its glass refracting the wallpaper behind it">
 </p>
+
+## Download
+
+[**Latest release**](https://github.com/niss1m/liquidock/releases/latest) — one executable, no
+installer. Unzip it anywhere and run it; it puts its settings in `%LOCALAPPDATA%\LiquiDock` and
+touches nothing else. Quit from the tray icon.
+
+Windows 10 version 2004 or later, 64-bit.
+
+**Windows will warn you the first time.** The build is not code-signed yet, so SmartScreen shows
+*Windows protected your PC* — click **More info**, then **Run anyway**. That warning is about the
+absence of a certificate, not about the file; certificates cost money per year and this is the
+milestone that has not been paid for. Everything the executable does is in this repository, and you
+can build it yourself in two commands if you would rather not take the warning's word for it.
 
 ## What makes it different
 
@@ -60,7 +75,7 @@ Early. See the milestones below for where things stand.
 | M2 | Item model, icons, layout, launching, magnification | done |
 | M3 | Multi-monitor, appbar, running indicators, live-capture backdrop | done |
 | M4 | Settings UI | done |
-| M5 | Portable / Microsoft Store / Steam packaging, code signing | |
+| M5 | Portable / Microsoft Store / Steam packaging, code signing | portable zip out; signing and the stores to come |
 
 ## Items
 

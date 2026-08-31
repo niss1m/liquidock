@@ -370,6 +370,10 @@ private:
     ComPtr<ID2D1PathGeometry> discordMark_;
     // Where the headline ends, which is where the links start.
     float linksLeft_ = 0.0f;
+    // How lit each mark is, 0 resting and 1 under the pointer. Faded rather
+    // than switched, because they sit beside the headline and a mark that snaps
+    // to full brightness reads as a glitch in the title.
+    float linkHover_[2] = {0.0f, 0.0f};
 
     ComPtr<IDWriteFactory> dwrite_;
     ComPtr<IDWriteTextFormat> titleFormat_;

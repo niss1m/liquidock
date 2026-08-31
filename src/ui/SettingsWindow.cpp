@@ -2562,6 +2562,23 @@ bool SettingsWindow::AdvanceAnimation() {
     const float delta = frameDelta_;
 
     bool moving = false;
+
+    // The two marks beside the headline, lit while the pointer is on one.
+    {
+        const int under = LinkAt(pointerX_, pointerY_);
+        for (int i = 0; i < 2; ++i) {
+            const float target = (i == under) ? 1.0f : 0.0f;
+            const float step = delta / layout::kHoverSeconds;
+            if (linkHover_[i] < target) {
+                linkHover_[i] = std::min(target, linkHover_[i] + step);
+                moving = true;
+            } else if (linkHover_[i] > target) {
+                linkHover_[i] = std::max(target, linkHover_[i] - step);
+                moving = true;
+            }
+        }
+    }
+
     // Sets a travel going when the target changes, and carries it forward when
     // it has not. The first sight of a control snaps rather than sliding, so a
     // window that has just opened is not full of things arriving.
@@ -3444,7 +3461,6 @@ void SettingsWindow::DrawLinks() {
     }
     ID2D1PathGeometry* marks[2] = {gitHubMark_.Get(), discordMark_.Get()};
     const float boxes[2] = {layout::kGitHubBox, layout::kDiscordBox};
-    const int under = LinkAt(pointerX_, pointerY_);
 
     D2D1_MATRIX_3X2_F panel{};
     d2d_->GetTransform(&panel);
@@ -3459,7 +3475,9 @@ void SettingsWindow::DrawLinks() {
         const float k = layout::kLinkSize / boxes[i];
         d2d_->SetTransform(D2D1::Matrix3x2F::Scale(k, k) *
                            D2D1::Matrix3x2F::Translation(box.left, box.top) * panel);
-        brush_->SetColor(Grey(1.0f, (i == under) ? 0.95f : 0.42f));
+        // All the way up under the pointer, so there is no doubt it answered.
+        const float lit = std::clamp(linkHover_[i], 0.0f, 1.0f);
+        brush_->SetColor(Grey(1.0f, 0.38f + 0.62f * lit));
         d2d_->FillGeometry(marks[i], brush_.Get());
     }
     d2d_->SetTransform(panel);
@@ -4522,7 +4540,12 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             ScreenToClient(hwnd, &point);
             const float x = static_cast<float>(point.x) / scale;
             const float y = static_cast<float>(point.y) / scale;
-            if (WindowButtonAt(x, y) >= 0) {
+            // The two marks live in the header, and the header is the window's
+            // drag handle. Without naming them here they were part of it: no
+            // WM_MOUSEMOVE to light them, no WM_LBUTTONDOWN to follow them, and
+            // pressing one started dragging the window instead. Which is why
+            // they looked like decoration - they were.
+            if (WindowButtonAt(x, y) >= 0 || LinkAt(x, y) >= 0) {
                 return HTCLIENT;
             }
             if (y < layout::kTitleHeight) {
