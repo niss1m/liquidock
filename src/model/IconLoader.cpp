@@ -1,6 +1,7 @@
 #include "model/IconLoader.h"
 
 #include <objbase.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl_core.h>
 #include <wincodec.h>
@@ -11,6 +12,7 @@
 
 #include "core/Log.h"
 #include "model/ItemStore.h"
+#include "model/SystemItems.h"
 
 namespace liquidock {
 namespace {
@@ -295,6 +297,53 @@ bool LoadIconImage(const std::wstring& path, int size, std::vector<uint32_t>& ou
     return true;
 }
 
+// One of the shell's own icons, by name rather than by asking a path what it
+// looks like.
+//
+// This is what makes a live icon possible at all. Asking the shell for the
+// Recycle Bin's icon returns whatever it has cached against that parsing name,
+// which is the whole reason the bin appears to stay empty; naming the full one
+// and the empty one as the two distinct stock icons they are leaves nothing to
+// cache. It is also the only way to put an icon on Show Desktop and Lock, which
+// have no path to ask about.
+//
+// The location is taken rather than the handle - SHGSI_ICONLOCATION gives back
+// the file and index the shell would have used - so the icon can be extracted
+// at the size the atlas wants instead of at whatever the system icon metric
+// happens to be, which on a high-DPI dock is a visibly soft thirty-two pixels.
+bool LoadStockIcon(int stock, int size, std::vector<uint32_t>& out) {
+    if (stock < 0) {
+        return false;
+    }
+    SHSTOCKICONINFO info{};
+    info.cbSize = sizeof(info);
+    if (FAILED(SHGetStockIconInfo(static_cast<SHSTOCKICONID>(stock), SHGSI_ICONLOCATION,
+                                  &info))) {
+        return false;
+    }
+
+    HICON handle = nullptr;
+    if (FAILED(SHDefExtractIconW(info.szPath, info.iIcon, 0, &handle, nullptr,
+                                 static_cast<UINT>(size))) ||
+        !handle) {
+        return false;
+    }
+
+    ICONINFO parts{};
+    bool copied = false;
+    if (GetIconInfo(handle, &parts)) {
+        copied = parts.hbmColor && CopyBitmap(parts.hbmColor, size, out);
+        if (parts.hbmColor) {
+            DeleteObject(parts.hbmColor);
+        }
+        if (parts.hbmMask) {
+            DeleteObject(parts.hbmMask);
+        }
+    }
+    DestroyIcon(handle);
+    return copied;
+}
+
 bool ExtractIcon(const std::wstring& path, int size, std::vector<uint32_t>& out) {
     ComPtr<IShellItemImageFactory> factory;
     // Parsing names cover every kind of entry the config file accepts - files,
@@ -326,20 +375,22 @@ IconLoader::~IconLoader() {
     Stop();
 }
 
-void IconLoader::Start(std::vector<DockItem> items, int size, HWND notify, UINT message) {
+void IconLoader::Start(std::vector<DockItem> items, int size, HWND notify, UINT message,
+                       std::vector<int> slots) {
     Stop();
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         ready_.clear();
     }
-    worker_ = std::thread([this, items = std::move(items), size, notify, message]() mutable {
+    worker_ = std::thread([this, items = std::move(items), size, notify, message,
+                           slots = std::move(slots)]() mutable {
         // Shell extensions are overwhelmingly apartment-threaded, and several
         // of them will refuse to load at all on an MTA thread.
         const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         if (FAILED(hr)) {
             return;
         }
-        Run(std::move(items), size, notify, message);
+        Run(std::move(items), size, notify, message, std::move(slots));
         CoUninitialize();
     });
 }
@@ -364,7 +415,8 @@ void IconLoader::Collect(std::vector<IconBitmap>& out) {
     ready_.clear();
 }
 
-void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT message) {
+void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT message,
+                     std::vector<int> slots) {
     const unsigned generation = generation_.load(std::memory_order_relaxed);
 
     for (size_t index = 0; index < items.size(); ++index) {
@@ -379,7 +431,7 @@ void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT me
         }
 
         IconBitmap icon;
-        icon.slot = static_cast<int>(index);
+        icon.slot = (index < slots.size()) ? slots[index] : static_cast<int>(index);
         icon.size = size;
 
         // The dock's own entry has no path to ask about, so it falls back to
@@ -403,8 +455,23 @@ void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT me
         // pointing at an executable, a .ico or a .dll is just as reasonable a
         // thing to want - and it is what an imported Nexus dock actually
         // contains - so the shell gets a turn before giving up on the override.
+        // A built-in Windows entry may have an icon that depends on the state
+        // of the machine rather than on anything in the config file. Asking now
+        // is what makes it live: this runs again whenever the shell says the
+        // thing behind it moved.
+        const SystemEntry* system = FindSystemEntry(items[index].systemId);
+        const int stateIcon = system ? SystemStateIcon(*system) : -1;
+
+        // Which override applies. A live entry has two, and the second one only
+        // wins when it is actually set: someone who chose a single image meant
+        // it for the entry, not for half of it.
+        std::wstring custom = items[index].iconPath;
+        if (stateIcon == SIID_RECYCLERFULL && !items[index].iconAltPath.empty()) {
+            custom = items[index].iconAltPath;
+        }
+        custom = ItemStore::ExpandPath(custom);
+
         bool loaded = false;
-        const std::wstring custom = ItemStore::ExpandPath(items[index].iconPath);
         if (!custom.empty()) {
             loaded = LoadIconImage(custom, size, icon.pixels) ||
                      ExtractIcon(custom, size, icon.pixels);
@@ -413,7 +480,21 @@ void IconLoader::Run(std::vector<DockItem> items, int size, HWND notify, UINT me
                         index);
             }
         }
-        if (!loaded && !ExtractIcon(expanded, size, icon.pixels)) {
+        // The state icon comes *before* the shell's answer for the path, which
+        // is the entire trick: the shell caches one icon per parsing name, so
+        // asking it about the bin returns whichever state it saw first.
+        if (!loaded && stateIcon >= 0) {
+            loaded = LoadStockIcon(stateIcon, size, icon.pixels);
+        }
+        if (!loaded && !expanded.empty()) {
+            loaded = ExtractIcon(expanded, size, icon.pixels);
+        }
+        // And last, the entry's own stock icon, which is all Show Desktop and
+        // Lock have - there is no file behind either of them to ask.
+        if (!loaded && system) {
+            loaded = LoadStockIcon(system->stockIcon, size, icon.pixels);
+        }
+        if (!loaded) {
             LogWarn("No icon for dock item {}; drawing a placeholder", index);
             DrawPlaceholder(size, icon.pixels);
         }

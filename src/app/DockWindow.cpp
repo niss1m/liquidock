@@ -2,6 +2,7 @@
 #include "app/DockWindow.h"
 
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl_core.h>
 #include <shellscalingapi.h>
 #include <windowsx.h>
@@ -18,6 +19,7 @@
 #include "core/DesignTokens.h"
 #include "core/Log.h"
 #include "gfx/TextureDump.h"
+#include "model/SystemItems.h"
 
 namespace liquidock {
 namespace {
@@ -62,6 +64,10 @@ constexpr UINT kAppBarMessage = WM_APP + 5;
 constexpr UINT kShowSettingsMessage = WM_APP + 7;
 // Posted by the cover watch when a window may have moved over or off the dock.
 constexpr UINT kCoverMessage = WM_APP + 8;
+// Posted by the shell when something a live icon depends on has moved: a file
+// deleted, the bin emptied. It says nothing useful about *what* changed, and
+// nothing here needs to know - the icon is re-read either way.
+constexpr UINT kShellChangeMessage = WM_APP + 9;
 // --simulate-device-loss, posted once at startup.
 constexpr UINT kSimulateDeviceLossMessage = WM_APP + 6;
 constexpr UINT_PTR kSimulateLossTimer = 8; // 6 is the label timer
@@ -93,6 +99,11 @@ constexpr int kLiveIdleAfter = 30;
 // plenty for something that should never happen, and a timer is the right
 // mechanism precisely because WM_TIMER is the *lowest* priority message there
 // is - it can wait behind anything, and it can starve nothing.
+// Emptying the bin raises one notification per file. This collapses a burst of
+// them into a single re-read, which is the difference between one icon
+// extraction and four hundred.
+constexpr UINT_PTR kLiveIconTimer = 12;
+constexpr UINT kLiveIconDebounceMs = 250;
 constexpr UINT_PTR kHoverWatchTimer = 10;
 constexpr UINT kHoverWatchMs = 200;
 // How often to re-ask "is anything in the way" while the dock is parked out
@@ -109,6 +120,9 @@ enum ItemMenuCommand : UINT {
     kCommandEditFile = 5,
     kCommandQuit = 6,
     kCommandUndo = 7,
+    kCommandIcon = 8,
+    kCommandResetIcon = 9,
+    kCommandEmptyBin = 10,
 };
 
 constexpr int kTriggerThicknessPx = 2; // the strip that notices the cursor
@@ -596,6 +610,9 @@ void DockWindow::Destroy() {
     // Before the window goes: both the icon loader and the capture thread post
     // to this HWND, so they have to be stopped while the handle is still valid.
     iconLoader_.Stop();
+    liveIcons_.Stop();
+    StopWatchingLiveItems(liveWatch_);
+    liveWatch_ = 0;
     capture_.reset();
     running_.Shutdown();
     settingsWindow_.reset();
@@ -612,6 +629,7 @@ void DockWindow::Destroy() {
         KillTimer(hwnd_, kDeviceRetryTimer);
         KillTimer(hwnd_, kSimulateLossTimer);
         KillTimer(hwnd_, kStatsTimer);
+        KillTimer(hwnd_, kLiveIconTimer);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
@@ -631,11 +649,93 @@ void DockWindow::StartIconLoad() {
         snapshot.push_back(item);
     }
     iconLoader_.Start(std::move(snapshot), atlasCell_, hwnd_, kIconMessage);
+    // Here rather than in ReloadItems, because startup and a rebuilt device
+    // both reload the icons without going through it - and a dock that came up
+    // holding the bin would otherwise have no way to hear about it.
+    UpdateLiveWatch();
+}
+
+void DockWindow::RefreshLiveIcons() {
+    std::vector<DockItem> wanted;
+    std::vector<int> slots;
+    for (size_t i = 0; i < store_.items().size(); ++i) {
+        const DockItem& item = store_.items()[i];
+        const SystemEntry* entry = FindSystemEntry(item.systemId);
+        if (entry && entry->live) {
+            wanted.push_back(item);
+            slots.push_back(static_cast<int>(i));
+        }
+    }
+    if (wanted.empty()) {
+        return;
+    }
+    LogDebug("Something a live icon depends on moved; re-reading {} of them", wanted.size());
+    // The same message the main loader posts, so the drain path is one path.
+    liveIcons_.Start(std::move(wanted), atlasCell_, hwnd_, kIconMessage, std::move(slots));
+}
+
+void DockWindow::UpdateLiveWatch() {
+    bool wanted = false;
+    for (const DockItem& item : store_.items()) {
+        const SystemEntry* entry = FindSystemEntry(item.systemId);
+        if (entry && entry->live) {
+            wanted = true;
+            break;
+        }
+    }
+    if (wanted == (liveWatch_ != 0)) {
+        return;
+    }
+    if (!wanted) {
+        StopWatchingLiveItems(liveWatch_);
+        liveWatch_ = 0;
+        KillTimer(hwnd_, kLiveIconTimer);
+        return;
+    }
+    // Registered only while something on the dock actually depends on it. A
+    // dock with no bin on it has no business being woken every time a file is
+    // deleted anywhere on the machine.
+    liveWatch_ = WatchLiveItems(hwnd_, kShellChangeMessage);
+}
+
+bool DockWindow::ChangeItemIcon(int itemIndex, bool clear) {
+    if (itemIndex < 0 || itemIndex >= static_cast<int>(store_.items().size())) {
+        return false;
+    }
+    DockItem item = store_.items()[static_cast<size_t>(itemIndex)];
+    if (item.kind == ItemKind::Separator) {
+        return false; // a rule has no icon to point anywhere
+    }
+
+    if (clear) {
+        if (item.iconPath.empty() && item.iconAltPath.empty()) {
+            return false;
+        }
+        item.iconPath.clear();
+        item.iconAltPath.clear();
+        return store_.Replace(static_cast<size_t>(itemIndex), std::move(item));
+    }
+
+    // The dwell timer must not slide the dock away while a modal dialog it
+    // opened is on screen.
+    menuOpen_ = true;
+    KillTimer(hwnd_, kHideTimer);
+    std::wstring chosen;
+    const bool picked = ItemStore::PickImage(hwnd_, &chosen);
+    menuOpen_ = false;
+    StartHideCountdown();
+    if (!picked) {
+        return false;
+    }
+    item.iconPath = std::move(chosen);
+    return store_.Replace(static_cast<size_t>(itemIndex), std::move(item));
 }
 
 void DockWindow::DrainLoadedIcons() {
     loadedIcons_.clear();
     iconLoader_.Collect(loadedIcons_);
+    // Both loaders post the same message, and either may have something ready.
+    liveIcons_.Collect(loadedIcons_);
     if (loadedIcons_.empty()) {
         return;
     }
@@ -1031,6 +1131,28 @@ void DockWindow::Launch(int itemIndex) {
         PostMessage(hwnd_, kShowSettingsMessage, 0, 0);
         return;
     }
+    // Two of the built-in Windows entries are commands rather than places, so
+    // there is nothing for the shell to open and nothing that could already be
+    // running. Everything else about the click is the same, bounce included.
+    const SystemEntry* system = FindSystemEntry(item.systemId);
+    if (system && system->action != SystemAction::Open) {
+        const SystemAction action = system->action;
+        LogInfo("Running the system command on item {}", itemIndex);
+        layout_.Bounce(itemIndex);
+        StartHideCountdown();
+        RequestRedraw();
+        // Off the UI thread for the same reason ShellExecuteEx is: Show Desktop
+        // talks to Explorer, and Explorer is entitled to take its time.
+        std::thread([action] {
+            if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
+                return;
+            }
+            RunSystemAction(action);
+            CoUninitialize();
+        }).detach();
+        return;
+    }
+
     // Already open, and not asked to start another: switch to it. This is the
     // whole difference between a dock and a folder of shortcuts, and it was
     // missing - every click started a fresh copy, which for a browser means a
@@ -1106,10 +1228,24 @@ void DockWindow::ShowDockMenu(int itemIndex, POINT screen) {
     // simply absent when the click landed on the bar - rather than a fixed menu
     // with half its entries greyed out, which tells the user nothing.
     if (onItem) {
-        items.push_back({0, store_.items()[static_cast<size_t>(itemIndex)].label, false, false,
-                         true});
+        const DockItem& item = store_.items()[static_cast<size_t>(itemIndex)];
+        items.push_back({0, item.label, false, false, true});
         items.push_back({0, L"", false, true, false});
-        items.push_back({kCommandOpen, L"Open", true, false, false});
+        if (item.kind != ItemKind::Separator) {
+            items.push_back({kCommandOpen, L"Open", true, false, false});
+            // Emptying the bin from the thing that shows you it is full is the
+            // obvious gesture, and it is the only command here that belongs to
+            // one particular entry rather than to items in general.
+            if (item.systemId == L"recycle-bin") {
+                items.push_back({kCommandEmptyBin, L"Empty Recycle Bin", true, false, false});
+            }
+            // Here rather than only in preferences: an icon is the thing you are
+            // looking at when you decide you want a different one.
+            items.push_back({kCommandIcon, L"Change icon…", true, false, false});
+            if (!item.iconPath.empty() || !item.iconAltPath.empty()) {
+                items.push_back({kCommandResetIcon, L"Use the original icon", true, false, false});
+            }
+        }
         items.push_back({kCommandRemove, L"Remove from Dock", true, false, false});
         items.push_back({0, L"", false, true, false});
     }
@@ -1147,6 +1283,27 @@ void DockWindow::ShowDockMenu(int itemIndex, POINT screen) {
         case kCommandAdd:
             AddItemViaDialog();
             break;
+        case kCommandIcon:
+        case kCommandResetIcon:
+            if (ChangeItemIcon(itemIndex, command == kCommandResetIcon)) {
+                ReloadItems();
+            }
+            break;
+        case kCommandEmptyBin: {
+            // The shell's own confirmation and progress, which is the only right
+            // way to ask: this deletes the user's files, and a dock inventing its
+            // own dialog for that would be inventing a worse one.
+            menuOpen_ = true;
+            KillTimer(hwnd_, kHideTimer);
+            SHEmptyRecycleBinW(hwnd_, nullptr, 0);
+            menuOpen_ = false;
+            StartHideCountdown();
+            // The notification will arrive on its own, but only after the shell
+            // has finished; asking now means the icon is right by the time the
+            // progress dialog has gone.
+            SetTimer(hwnd_, kLiveIconTimer, kLiveIconDebounceMs, nullptr);
+            break;
+        }
         case kCommandUndo:
             if (store_.Undo()) {
                 ReloadItems();
@@ -2234,6 +2391,21 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SetTimer(hwnd_, kCoverTimer, kCoverDebounceMs, nullptr);
             return 0;
 
+        case kShellChangeMessage: {
+            // The notification arrives in shared memory that has to be locked to
+            // be read and released either way, or the shell leaks it. Nothing
+            // here reads it: whatever moved, the answer is to look again.
+            LONG event = 0;
+            PIDLIST_ABSOLUTE* changed = nullptr;
+            if (HANDLE lock = SHChangeNotification_Lock(reinterpret_cast<HANDLE>(wParam),
+                                                        static_cast<DWORD>(lParam), &changed,
+                                                        &event)) {
+                SHChangeNotification_Unlock(lock);
+            }
+            SetTimer(hwnd_, kLiveIconTimer, kLiveIconDebounceMs, nullptr);
+            return 0;
+        }
+
         case kCaptureMessage:
             // The screen behind the dock changed. The frost is a blur of it, so
             // it is stale; the glass samples the capture texture directly and
@@ -2273,6 +2445,9 @@ LRESULT DockWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 } else {
                     KillTimer(hwnd_, kLiveTimer);
                 }
+            } else if (wParam == kLiveIconTimer) {
+                KillTimer(hwnd_, kLiveIconTimer);
+                RefreshLiveIcons();
             } else if (wParam == kCoverTimer) {
                 KillTimer(hwnd_, kCoverTimer);
                 CoverChanged();

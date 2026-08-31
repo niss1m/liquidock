@@ -12,6 +12,7 @@
 #include "model/AppCatalog.h"
 #include "model/IconLoader.h"
 #include "model/ItemStore.h"
+#include "model/SystemItems.h"
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
 
@@ -92,6 +93,7 @@ private:
             Profile,       // one saved config, with its own actions
             Action,        // a ghost button that does one thing
             Item,          // one icon in the dock's own grid
+            SystemTile,    // one of the built-in Windows entries
             Suggestion,    // one installed app not on the dock yet
             AddItem, AddSeparator, AddSelf
         };
@@ -184,6 +186,15 @@ private:
     // The installed-app list, and the icons for whichever of them are shown.
     void StartCatalogLoad();
     void DrainSuggestionIcons();
+    // The built-in Windows entries. There is no list to read - the table is
+    // known at compile time - so only their icons have to be fetched, and they
+    // are fetched once, when the window opens.
+    void StartSystemLoad();
+    void DrainSystemIcons();
+    // Both suggestion grids turn finished pixels into D2D bitmaps the same way.
+    void DrainIconsInto(IconLoader& loader, std::vector<ComPtr<ID2D1Bitmap>>& into);
+    // What a Windows tile is showing.
+    const SystemEntry* SystemEntryFor(int index) const;
     // Lays the two grids out. Returns the y the content ends at.
     float LayoutGrids(float top, float width);
     // How many tiles fit across. Layout and measurement have to agree on this.
@@ -260,7 +271,13 @@ private:
     void DrawItem(const Row& row, bool hovered, float pointerX);
     // The open editor under an item row. Returns the field rectangles in the
     // order the enum below gives them, so drawing and hit testing cannot drift.
-    enum class Field { Name, Path, Arguments, WorkingDir, Icon, Show, Admin, Count };
+    enum class Field { Name, Path, Arguments, WorkingDir, Icon, IconFull, Show, Admin, Count };
+    // Whether the open editor shows the second icon row. Only an entry whose
+    // icon has two states has anything to put in it, and a row that is blank
+    // for everything else is a row that teaches people to skip the panel.
+    bool EditorHasFullIcon() const;
+    // The open editor's height, which depends on how many rows it is showing.
+    float EditorHeight() const;
     void EditorRects(const D2D1_RECT_F& panel, D2D1_RECT_F* fields,
                      D2D1_RECT_F* buttons) const;
     void DrawEditor(const D2D1_RECT_F& panel, int itemIndex);
@@ -315,6 +332,13 @@ private:
     IconLoader suggestionLoader_;
     std::vector<ComPtr<ID2D1Bitmap>> suggestionIcons_;
     std::vector<int> filtered_;
+    // The Windows entries, their icons, and which of them the search lets
+    // through. Held as a copy of the table so the ones already on the dock can
+    // be dropped from it without the table knowing.
+    std::vector<SystemEntry> systemEntries_;
+    IconLoader systemLoader_;
+    std::vector<ComPtr<ID2D1Bitmap>> systemIcons_;
+    std::vector<int> systemFiltered_;
     std::wstring search_;
     bool searchFocused_ = false;
     D2D1_RECT_F searchRect_{};
@@ -349,8 +373,12 @@ private:
     float tabTo_ = 0.0f;
     float tabElapsed_ = -1.0f;
     D2D1_RECT_F buttonBounds_[2]{};
-    // Where the rule between the two grids sits, in the panel's own space.
+    // Where the rule between the dock and everything it could hold sits, in
+    // the panel's own space, and where each of the two sub-captions under it
+    // begins. All three move with the scroll.
     float gridRuleY_ = 0.0f;
+    float systemCaptionY_ = 0.0f;
+    float appCaptionY_ = 0.0f;
     // Where the open item's editor sits, between the two grids. Empty when
     // nothing is selected.
     D2D1_RECT_F editorPanel_{};

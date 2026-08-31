@@ -64,10 +64,11 @@ Early. See the milestones below for where things stand.
 
 ## Items
 
-Right-click the dock for *Add app…*, *Preferences…*, and — on an icon — *Open* and *Remove from
-Dock*. The **Items** tab has the whole dock as a grid of icons: hover one for its name and path,
-click it to edit, drag it to reorder, and click the cross in its corner to remove it. Under a rule
-below that grid is everything installed that is not on the dock yet, searchable, one click to add.
+Right-click the dock for *Add app…*, *Preferences…*, and — on an icon — *Open*, *Change icon…* and
+*Remove from Dock*. The **Items** tab has the whole dock as a grid of icons: hover one for its name
+and path, click it to edit, drag it to reorder, and click the cross in its corner to remove it.
+Under a rule below that grid is everything you could add, searchable, one click each: **Windows**
+first, then **Installed apps**.
 
 The list is stored in `%LOCALAPPDATA%\LiquiDock\items.txt` as blocks, and editing it by hand still
 works:
@@ -83,10 +84,48 @@ icon    = C:\Icons\firefox.png
 moniker for a packaged app, or a `::{guid}` parsing name. Environment variables are expanded.
 `label` and `icon` are optional — without an icon the shell is asked for one.
 
+### Windows entries
+
+A dock is a launcher, and the shell has plenty worth launching that no Start menu entry points at.
+Thirteen of them are offered under **Windows** in the picker: the Recycle Bin, This PC, File
+Explorer, Downloads, Documents, Pictures, Network, Calculator, Settings, Control Panel, Task
+Manager, Show Desktop and Lock. Each is checked before it is listed, so an entry that this machine
+does not have is never offered rather than offered and broken.
+
+They are ordinary items once added — rename them, reorder them, point them at your own icon — and
+they are written by name, not by GUID:
+
+```
+[item]
+system  = recycle-bin
+path    = ::{645FF040-5081-101B-9F08-00AA002F954E}
+label   = Recycle Bin
+icon    = C:\Icons\trash-empty.png
+iconfull= C:\Icons\trash-full.png
+```
+
+The name is what the entry means and the path is only how that is reached today, so the path is
+re-read from the name on load and written alongside it — a file this build writes still opens in one
+that has never heard of `system`. An entry added before the names existed is recognised by its path
+and adopts one, which is how a Recycle Bin seeded by an older build starts telling you whether it is
+full.
+
+**The Recycle Bin's icon is live.** It is the empty bin or the full one depending on what is in it,
+and it changes while you are looking at it — the shell reports the change and the dock re-reads that
+one icon, so nothing is polled and nothing else is redrawn. `icon` is the empty state and `iconfull`
+the full one, so a themed set can supply both; set only `icon` and it is used for both, which is
+what setting one of them meant. Right-clicking it on the dock also offers *Empty Recycle Bin*, which
+goes through the shell's own confirmation.
+
+*Show Desktop* and *Lock* are commands rather than places, so they have no path at all — the block
+is just `system = show-desktop` and a label.
+
 | Key | Means |
 |---|---|
 | `kind = separator` | A divider. No path, launches nothing, and it is the **only** thing that puts a rule on the bar. |
 | `kind = settings` | The dock's own entry. Clicking it opens these preferences. |
+| `system = <name>` | One of the built-in Windows entries, above. |
+| `iconfull = <image>` | The second icon for an entry whose icon has two states — today only the full Recycle Bin. |
 | `multiple = on` | Clicking starts another copy instead of switching to the open one. |
 | `show = minimized \| maximized` | How the window comes up. |
 | `admin = on` | Launch elevated, through the shell's `runas` verb — so it prompts through UAC rather than the dock running elevated and handing its token to everything it launches. |
@@ -98,6 +137,11 @@ on the dock is an entry in the list now, and nothing else is.
 
 On a first run there is no file, so the list is seeded from whatever is pinned to your taskbar, plus
 Downloads and the Recycle Bin.
+
+Any item's icon can be replaced with an image — png, jpg, bmp, ico, gif, tiff, or the icon out of an
+.exe, .dll or .ico. *Change icon…* on the dock's own right-click menu is the short way; the item
+editor in the **Items** tab is the long one, and it is where the second icon of a two-state entry
+lives.
 
 ## Settings
 

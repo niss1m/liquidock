@@ -43,11 +43,28 @@ struct DockItem {
     // Adobe suite among them - fail in odd ways when started from elsewhere.
     std::wstring workingDirectory;
 
+    // Which of the built-in Windows entries this is - `recycle-bin`,
+    // `show-desktop` - or empty for everything else.
+    //
+    // The identity is kept separately from the path because the path is not one:
+    // two of these entries have no path at all, and the rest point at a GUID
+    // that says nothing to anyone reading the config file. It is also what lets
+    // the dock know that an entry's icon is *live*, which is not a property any
+    // amount of staring at a parsing name would reveal.
+    std::wstring systemId;
+
     // An image file to use instead of the icon the shell would give. Any format
     // WIC can decode, which in practice is png, jpeg, bmp, tiff, gif and ico.
     // Empty means "ask the shell", which is right for most things and wrong for
     // exactly the case people care about most: a themed icon set.
     std::wstring iconPath;
+
+    // The second state's image, for an entry whose icon is live. Only the
+    // Recycle Bin has one today: `iconPath` is the empty bin and this is the
+    // full one, so a themed set can supply both and the icon still answers the
+    // question it is there to answer. Empty means the first icon is used for
+    // both states, which is what someone who set only one of them meant.
+    std::wstring iconAltPath;
 
     // Whether clicking again starts another copy. Off is what a dock is for:
     // the icon is the app, and clicking the app you are already running means

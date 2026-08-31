@@ -75,6 +75,7 @@ add_executable(liquidock WIN32
     src/model/IconLoader.cpp
     src/model/ItemStore.cpp
     src/model/ProfileStore.cpp
+    src/model/SystemItems.cpp
     src/model/RunningState.cpp
     src/ui/GlassMenu.cpp
     src/ui/PathIcon.cpp

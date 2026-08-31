@@ -149,6 +149,16 @@ private:
     void ReloadItems();
     void StartIconLoad();
     void DrainLoadedIcons();
+    // Re-reads only the icons that depend on the state of the machine - which
+    // today means the Recycle Bin, full or empty. A separate load from the main
+    // one so it cannot cancel a dock still filling in at startup.
+    void RefreshLiveIcons();
+    // Registers for the shell's change notifications when the dock holds an
+    // entry that needs them, and gives the registration back when it does not.
+    void UpdateLiveWatch();
+    // Points one item at a different image, or back at whatever the shell would
+    // have said. False if it was not something with an icon to change.
+    bool ChangeItemIcon(int itemIndex, bool clear);
     void Launch(int itemIndex);
     // Brings an already-running window forward. False if there was nothing to
     // bring, or if Windows refused.
@@ -243,6 +253,12 @@ private:
     ItemStore store_;
     DockLayout layout_;
     IconLoader iconLoader_;
+    // The one that re-reads a live icon on its own. It has its own thread so
+    // that starting it never bumps the main loader's generation, which would
+    // throw away every icon still in flight.
+    IconLoader liveIcons_;
+    // The shell's change registration, or 0 when nothing on the dock needs one.
+    ULONG liveWatch_ = 0;
     IconAtlas atlas_;
     // The divider image, when the settings name one. Empty means the built-in
     // rule is drawn instead.

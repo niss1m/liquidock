@@ -47,7 +47,13 @@ public:
     // Starts extracting `paths` at `size` pixels square. `notify` is posted
     // WM_APP-style each time results are ready to collect. Cancels and replaces
     // any load already in flight.
-    void Start(std::vector<DockItem> items, int size, HWND notify, UINT message);
+    //
+    // `slots` says which atlas cell each item belongs in, and is only needed
+    // when the list is a *subset* of the dock - re-reading the one icon that
+    // changed, rather than all of them. Left empty, an item's position in the
+    // list is its slot, which is what a whole-dock load wants.
+    void Start(std::vector<DockItem> items, int size, HWND notify, UINT message,
+               std::vector<int> slots = {});
 
     // Signals the worker to stop and waits for it. Safe to call twice.
     void Stop();
@@ -56,7 +62,8 @@ public:
     void Collect(std::vector<IconBitmap>& out);
 
 private:
-    void Run(std::vector<DockItem> items, int size, HWND notify, UINT message);
+    void Run(std::vector<DockItem> items, int size, HWND notify, UINT message,
+             std::vector<int> slots);
 
     std::thread worker_;
     std::mutex mutex_;

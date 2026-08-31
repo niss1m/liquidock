@@ -11,6 +11,7 @@
 #include "core/ConfigPaths.h"
 #include "core/DesignTokens.h"
 #include "core/Log.h"
+#include "model/SystemItems.h"
 
 namespace liquidock {
 namespace {
@@ -27,6 +28,8 @@ const wchar_t kFileHeader[] =
     L"#     [item]\n"
     L"#     kind    = separator         a divider; it launches nothing and needs\n"
     L"#                                  no path\n"
+    L"#     system  = recycle-bin        one of the built-in Windows entries; the\n"
+    L"#                                  path is filled in from the name\n"
     L"#     path    = what to launch     a program, shortcut, folder, document, a\n"
     L"#                                  shell:AppsFolder\\... moniker for a Store app,\n"
     L"#                                  or a ::{guid} parsing name\n"
@@ -34,6 +37,8 @@ const wchar_t kFileHeader[] =
     L"#     args    = arguments          optional\n"
     L"#     workdir = starting folder    optional\n"
     L"#     icon    = an image file      optional; png, jpg, bmp, ico, gif, tiff\n"
+    L"#     iconfull= an image file      optional; the second icon for an entry\n"
+    L"#                                  whose icon changes, ie the full bin\n"
     L"#\n"
     L"# Environment variables are expanded. Blank lines and # lines are ignored.\n"
     L"# The old `group | path | label` one-liners are still read; the group they\n"
@@ -139,6 +144,35 @@ bool ItemStore::ReadFile(const std::wstring& path) {
             current = DockItem{};
             return;
         }
+        // The table is the authority on where a built-in Windows entry
+        // points, so the path comes from the name rather than from the file.
+        // That is what lets `system = recycle-bin` go on meaning the recycle
+        // bin if the way to reach it ever changes, and it is why two of these
+        // entries can be written with no path at all.
+        const bool declared = !current.systemId.empty();
+        if (!declared && current.kind == ItemKind::App) {
+            // An entry added before these had names. Recognising it now is what
+            // gives a Recycle Bin seeded by an older build the icon that knows
+            // whether it is full, and it stops the picker offering a second
+            // copy of something already on the dock.
+            if (const SystemEntry* guessed = FindSystemEntryByPath(current.path)) {
+                current.systemId = guessed->id;
+            }
+        }
+        if (const SystemEntry* known = FindSystemEntry(current.systemId)) {
+            // A block that *named* the entry gets the table's path, because the
+            // name is what it meant and the path is only how that is reached
+            // today. A block that merely turned out to be one keeps the path it
+            // was written with: it may differ only in spelling, and rewriting
+            // somebody's config file over a spelling is not this function's
+            // business.
+            if (declared) {
+                current.path = known->path;
+            }
+            if (current.label.empty()) {
+                current.label = known->label;
+            }
+        }
         // An entry with no path launches nothing, so a divider is the only
         // thing it can sensibly be. This has to come *before* the test that
         // discards a half-written block, or the block is gone before anything
@@ -147,11 +181,14 @@ bool ItemStore::ReadFile(const std::wstring& path) {
         //
         // Only when nothing else has claimed it, though. The dock's own entry
         // has no path either, and healing it into a divider turned it into one
-        // on the next save - which is to say it vanished.
-        if (current.path.empty() && current.kind == ItemKind::App) {
+        // on the next save - which is to say it vanished. Show Desktop and Lock
+        // have no path either, for the same reason and with the same outcome.
+        if (current.path.empty() && current.kind == ItemKind::App &&
+            current.systemId.empty()) {
             current.kind = ItemKind::Separator;
         }
-        if (current.kind == ItemKind::Separator || current.kind == ItemKind::Settings) {
+        if (current.kind == ItemKind::Separator || current.kind == ItemKind::Settings ||
+            !current.systemId.empty()) {
             if (static_cast<int>(items_.size()) < design::kMaxItems) {
                 items_.push_back(std::move(current));
             }
@@ -232,6 +269,10 @@ bool ItemStore::ReadFile(const std::wstring& path) {
             current.workingDirectory = value;
         } else if (key == L"icon") {
             current.iconPath = value;
+        } else if (key == L"iconfull") {
+            current.iconAltPath = value;
+        } else if (key == L"system") {
+            current.systemId = value;
         } else if (key == L"show") {
             if (_wcsicmp(value.c_str(), L"minimized") == 0) {
                 current.runState = RunState::Minimized;
@@ -305,7 +346,16 @@ bool ItemStore::Save() const {
             fwprintf(file, L"\n");
             continue;
         }
-        fwprintf(file, L"path    = %s\n", item.path.c_str());
+        if (!item.systemId.empty()) {
+            fwprintf(file, L"system  = %s\n", item.systemId.c_str());
+        }
+        // Written alongside the name, not instead of it: a file this build
+        // wrote has to keep working in an older one, which knows the path and
+        // has never heard of the name. Two of the entries have no path, and a
+        // key with nothing after it only invites someone to fill it in.
+        if (!item.path.empty()) {
+            fwprintf(file, L"path    = %s\n", item.path.c_str());
+        }
         fwprintf(file, L"label   = %s\n", item.label.c_str());
         // Only written when set, so the common entry stays four short lines
         // rather than seven with three of them empty.
@@ -317,6 +367,9 @@ bool ItemStore::Save() const {
         }
         if (!item.iconPath.empty()) {
             fwprintf(file, L"icon    = %s\n", item.iconPath.c_str());
+        }
+        if (!item.iconAltPath.empty()) {
+            fwprintf(file, L"iconfull= %s\n", item.iconAltPath.c_str());
         }
         if (item.runState != RunState::Normal) {
             fwprintf(file, L"show    = %s\n",
@@ -592,10 +645,11 @@ void ItemStore::SeedDefaults() {
     downloads.label = L"Downloads";
     items_.push_back(std::move(downloads));
 
-    DockItem bin;
-    bin.path = L"::{645FF040-5081-101B-9F08-00AA002F954E}";
-    bin.label = L"Recycle Bin";
-    items_.push_back(std::move(bin));
+    // Through the table rather than by hand, so a freshly seeded dock gets the
+    // bin that fills and empties rather than a picture of one.
+    if (const SystemEntry* bin = FindSystemEntry(L"recycle-bin")) {
+        items_.push_back(MakeSystemItem(*bin));
+    }
 }
 
 } // namespace liquidock
