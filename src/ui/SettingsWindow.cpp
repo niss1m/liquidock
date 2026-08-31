@@ -1480,7 +1480,13 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     // whatever was typed there.
     // A search left open from the last time the window was up belongs to an
     // item index that has just been re-read from disk and may be somebody else.
+    // The query survives - it is what was being looked for, not where it was
+    // being put - but the results do not: they are D2D bitmaps, and the device
+    // behind them may not be the one that drew them.
     EndIconSearch();
+    iconHits_.clear();
+    iconResultIcons_.clear();
+    iconSent_.clear();
 
     settings_.Load();
     items_.Load();
@@ -1955,6 +1961,11 @@ D2D1_RECT_F SettingsWindow::FocusedFieldBox() const {
 }
 
 void SettingsWindow::SearchChanged() {
+    if (searching_icons()) {
+        // Remembered from here, which is the one path every edit to the box
+        // goes through - typing, deleting, pasting and cutting alike.
+        iconQuery_ = search_.text();
+    }
     // The grid is rebuilt rather than hidden row by row: the tiles have to
     // close up after a filter, and their positions are the only thing that says
     // which entry a click meant.
@@ -2327,16 +2338,35 @@ void SettingsWindow::BeginIconSearch(int itemIndex) {
     iconError_.clear();
     iconSent_.clear();
     iconBusy_ = false;
-    // Seeded with the entry's own name and sent straight away: the icon you
-    // want for Notion is almost always the one you get by typing Notion, and
-    // making somebody type it when the dock already knows it is a waste of the
-    // click that got here.
-    search_.Set(items[static_cast<size_t>(itemIndex)].label);
-    search_.SelectAll();
+    // Seeded with the entry's own name, because the icon you want for Notion is
+    // almost always the one you get by typing Notion - but only while nobody
+    // has typed anything better. A query you went to the trouble of writing is
+    // yours, and throwing it away every time you pick an icon and come back for
+    // another is the panel deciding it knows the search better than you do.
+    const std::wstring& label = items[static_cast<size_t>(itemIndex)].label;
+    const bool mine = !iconQuery_.empty() && iconQuery_ != iconSeeded_;
+    if (mine) {
+        search_.Set(iconQuery_);
+        iconSeeded_.clear();
+    } else {
+        search_.Set(label);
+        // Selected, so the first thing typed replaces it. Only for a name the
+        // panel chose: selecting somebody's own query would put it one
+        // keystroke from gone.
+        search_.SelectAll();
+        iconSeeded_ = label;
+        iconQuery_ = label;
+    }
     searchFocused_ = true;
     expandedItem_ = itemIndex;
     itemScroll_ = 0.0f;
     hoverRow_ = -1;
+    // Nothing kept worth showing - the last go found nothing, or was refused -
+    // so let it ask again rather than reopening on an empty grid that claims
+    // there is nothing to find.
+    if (iconHits_.empty()) {
+        iconSent_.clear();
+    }
     RunIconSearch();
     BuildRows();
     LayoutRows();
@@ -2355,11 +2385,11 @@ void SettingsWindow::EndIconSearch() {
         KillTimer(hwnd_, kIconSearchTimer);
     }
     iconSearchFor_ = -1;
-    iconHits_.clear();
-    iconResultIcons_.clear();
     iconError_.clear();
-    iconSent_.clear();
     iconBusy_ = false;
+    // The results stay, and so does what was sent for them. Picking an icon and
+    // going straight back for a second one is the ordinary thing to do, and it
+    // should show the same grid rather than asking the server for it again.
     search_.Clear();
     searchFocused_ = false;
     itemScroll_ = 0.0f;
@@ -5155,6 +5185,10 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 // search, and only then the window.
                 if (!search_.empty()) {
                     search_.Clear();
+                    // Cleared on purpose, so there is nothing to come back to
+                    // and the next entry gets its name seeded again.
+                    iconQuery_.clear();
+                    iconSeeded_.clear();
                     iconSent_.clear();
                     iconHits_.clear();
                     iconResultIcons_.clear();

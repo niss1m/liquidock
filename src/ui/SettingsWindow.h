@@ -415,6 +415,13 @@ private:
     // What was last actually sent, so a debounce that fires on unchanged text
     // does not spend a request saying the same thing twice.
     std::wstring iconSent_;
+    // What was last typed into the browser, kept across closing it. Coming back
+    // to carry on looking should carry on from where you were, not from the
+    // name of the thing you were dressing.
+    std::wstring iconQuery_;
+    // The name the query was seeded with, when it was seeded rather than typed.
+    // Empty once somebody has edited it, which is what tells the two apart.
+    std::wstring iconSeeded_;
     std::wstring iconError_;
     bool iconBusy_ = false;
     D2D1_RECT_F keyButtons_[2]{};
