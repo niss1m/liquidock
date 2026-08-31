@@ -215,6 +215,9 @@ private:
     float LayoutGrids(float top, float width);
     // How many tiles fit across. Layout and measurement have to agree on this.
     int GridColumns() const;
+    // The icon browser's tiles are bigger and carry their names, so they pack
+    // differently from the dock's own grid.
+    int ResultColumns() const;
     const wchar_t* EditorCursorFor(float x, float y) const;
     void DrawTile(const Row& row, bool hovered);
     void DrawTileBadge(const Row& row, bool hovered, bool suggestion);
@@ -377,6 +380,10 @@ private:
     std::wstring iconError_;
     bool iconBusy_ = false;
     D2D1_RECT_F keyButtons_[2]{};
+    // The way out of the browser, where the add buttons sit the rest of the
+    // time. The browser takes the whole page, so the editor's own button is not
+    // on screen to press a second time.
+    D2D1_RECT_F backButton_{};
     std::wstring search_;
     bool searchFocused_ = false;
     D2D1_RECT_F searchRect_{};

@@ -224,6 +224,14 @@ constexpr float kSubGap = 12.0f;
 // The block shown in place of the results while there is no key: a line saying
 // what is needed, and the two buttons that get it.
 constexpr float kKeyPanel = 108.0f;
+// The browser's own grid. Bigger than the dock's, and with room under each icon
+// for its name, because this is a page for looking at icons rather than a strip
+// for recognising ones you already chose.
+constexpr float kResultTile = 96.0f;
+constexpr float kResultIcon = 60.0f;
+constexpr float kResultLabel = 16.0f;
+// Its search field, which is the point of the page and gets the room to say so.
+constexpr float kSearchWide = 300.0f;
 // One line, for "searching", "nothing found" and anything the server refused
 // us with.
 constexpr float kNoticeLine = 34.0f;
@@ -547,20 +555,12 @@ void SettingsWindow::BuildRows() {
     // First, and the page the window opens on. Editing what is *on* the dock is
     // what people come here for; the glass is what they come here for once.
     const auto& items = items_.items();
-    for (size_t i = 0; i < items.size(); ++i) {
-        Row row;
-        row.kind = Row::Kind::Item;
-        row.tab = Tab::Items;
-        row.itemIndex = static_cast<int>(i);
-        row.column = 0;
-        rows_.push_back(std::move(row));
-    }
-    ApplyFilter();
     if (searching_icons()) {
-        // The picker becomes one grid of found icons. The other two are asking
-        // "what should go on the dock"; this is asking "what should this one
-        // look like", and showing both at once would be two questions with one
-        // answer between them.
+        // The browser takes the page. Looking for an icon is a different job
+        // from arranging the dock, and squeezing it into a strip under fifty
+        // icons and an open editor made it something you had to go and find -
+        // which, for the one thing on this page that is a search, is the wrong
+        // way round entirely.
         for (size_t i = 0; i < iconHits_.size(); ++i) {
             Row row;
             row.kind = Row::Kind::IconResult;
@@ -571,6 +571,16 @@ void SettingsWindow::BuildRows() {
         }
         systemFiltered_.clear();
         filtered_.clear();
+    } else {
+        for (size_t i = 0; i < items.size(); ++i) {
+            Row row;
+            row.kind = Row::Kind::Item;
+            row.tab = Tab::Items;
+            row.itemIndex = static_cast<int>(i);
+            row.column = 0;
+            rows_.push_back(std::move(row));
+        }
+        ApplyFilter();
     }
     // The Windows entries first, because they are a short, fixed list of things
     // people come looking for by name - and putting them after three hundred
@@ -591,26 +601,28 @@ void SettingsWindow::BuildRows() {
         row.column = 0;
         rows_.push_back(std::move(row));
     }
-    Row add;
-    add.kind = Row::Kind::AddItem;
-    add.tab = Tab::Items;
-    add.label = L"Add app…";
-    add.column = 0;
-    rows_.push_back(std::move(add));
+    if (!searching_icons()) {
+        Row add;
+        add.kind = Row::Kind::AddItem;
+        add.tab = Tab::Items;
+        add.label = L"Add app…";
+        add.column = 0;
+        rows_.push_back(std::move(add));
 
-    Row rule;
-    rule.kind = Row::Kind::AddSeparator;
-    rule.tab = Tab::Items;
-    rule.label = L"Add divider";
-    rule.column = 0;
-    rows_.push_back(std::move(rule));
+        Row rule;
+        rule.kind = Row::Kind::AddSeparator;
+        rule.tab = Tab::Items;
+        rule.label = L"Add divider";
+        rule.column = 0;
+        rows_.push_back(std::move(rule));
 
-    Row self;
-    self.kind = Row::Kind::AddSelf;
-    self.tab = Tab::Items;
-    self.label = L"Add LiquiDock";
-    self.column = 0;
-    rows_.push_back(std::move(self));
+        Row self;
+        self.kind = Row::Kind::AddSelf;
+        self.tab = Tab::Items;
+        self.label = L"Add LiquiDock";
+        self.column = 0;
+        rows_.push_back(std::move(self));
+    }
 
     // --- Glass ------------------------------------------------------------
     section(Tab::Glass, L"Material", 0);
@@ -794,6 +806,24 @@ float SettingsWindow::MeasureTab(Tab tab) const {
             }
         }
     }
+    if (tab == Tab::Items && searching_icons()) {
+        // The browser's own page: a header, and then icons all the way down.
+        float body = layout::kRuleCaptionGap + layout::kSearchHeight + layout::kGridRuleGap;
+        if (!IconSearch::HasKey()) {
+            body += layout::kKeyPanel;
+        } else if (iconHits_.empty()) {
+            body += layout::kNoticeLine;
+        } else {
+            const int perLine = ResultColumns();
+            const size_t rows = (iconHits_.size() + perLine - 1) / perLine;
+            body += static_cast<float>(rows) * (layout::kResultTile + layout::kTileGap);
+            if (!iconError_.empty()) {
+                body += layout::kNoticeLine;
+            }
+        }
+        return std::min(body, layout::kListMaxHeight) + layout::kActionRow +
+               layout::kDetailBar;
+    }
     if (tab == Tab::Items) {
         const int perLine = GridColumns();
         const float line = layout::kTile + layout::kTileGap;
@@ -806,22 +836,6 @@ float SettingsWindow::MeasureTab(Tab tab) const {
         }
         y[0] += layout::kGridGap + layout::kRuleCaptionGap + layout::kSearchHeight +
                 layout::kGridRuleGap;
-        if (searching_icons()) {
-            // One grid, or the one line that stands in for it.
-            if (!IconSearch::HasKey()) {
-                y[0] += layout::kKeyPanel;
-            } else if (iconHits_.empty()) {
-                y[0] += layout::kNoticeLine;
-            } else {
-                y[0] += lines(iconHits_.size()) * line;
-                if (!iconError_.empty()) {
-                    y[0] += layout::kNoticeLine;
-                }
-            }
-            float tallestIcons = *std::max_element(y, y + columns);
-            return std::min(tallestIcons, layout::kListMaxHeight) + layout::kActionRow +
-                   layout::kDetailBar;
-        }
         // The Windows grid and its caption, both of which disappear entirely
         // when the search has filtered them away. This has to agree with
         // LayoutGrids exactly, or the window is sized for a page it is not
@@ -866,6 +880,15 @@ void SettingsWindow::LayoutRows() {
         value = listTop;
     }
     float actionX = layout::kPadding;
+
+    // The browser's page has no add buttons on it, so the band above the list
+    // carries the way back instead.
+    backButton_ = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+    if (listTab && searching_icons()) {
+        backButton_ = D2D1::RectF(layout::kPadding, layout::kContentTop,
+                                  layout::kPadding + layout::kActionWidth + 30.0f,
+                                  layout::kContentTop + layout::kActionHeight);
+    }
 
     for (Row& row : rows_) {
         if (row.tab != activeTab_) {
@@ -1108,6 +1131,10 @@ const wchar_t* SettingsWindow::CursorFor(float x, float y) const {
         y <= searchRect_.bottom + 4.0f) {
         return IDC_IBEAM;
     }
+    if (backButton_.right > backButton_.left && x >= backButton_.left &&
+        x <= backButton_.right && y >= backButton_.top && y <= backButton_.bottom) {
+        return IDC_HAND;
+    }
     if (searching_icons()) {
         for (int i = 0; i < 2; ++i) {
             const D2D1_RECT_F& button = keyButtons_[i];
@@ -1200,12 +1227,21 @@ int SettingsWindow::GridColumns() const {
                                         (layout::kTile + layout::kTileGap)));
 }
 
-float SettingsWindow::LayoutGrids(float top, float width) {
-    const int columns = GridColumns();
-    const float used = columns * layout::kTile + (columns - 1) * layout::kTileGap;
-    const float left = layout::kPadding + (width - used) * 0.5f;
+int SettingsWindow::ResultColumns() const {
+    const float width = layout::kWidth - 2.0f * layout::kPadding;
+    return std::max(1, static_cast<int>((width + layout::kTileGap) /
+                                        (layout::kResultTile + layout::kTileGap)));
+}
 
-    auto place = [&](Row::Kind kind, float startY) {
+float SettingsWindow::LayoutGrids(float top, float width) {
+    // The tile size is a parameter because the browser's are bigger: the dock's
+    // grid is for recognising icons you already chose, and this one is for
+    // reading ones you have not.
+    auto place = [&](Row::Kind kind, float startY, float tile) {
+        const int columns = std::max(
+            1, static_cast<int>((width + layout::kTileGap) / (tile + layout::kTileGap)));
+        const float used = columns * tile + (columns - 1) * layout::kTileGap;
+        const float left = layout::kPadding + (width - used) * 0.5f;
         int index = 0;
         for (Row& row : rows_) {
             if (row.tab != Tab::Items || row.kind != kind) {
@@ -1213,17 +1249,48 @@ float SettingsWindow::LayoutGrids(float top, float width) {
             }
             const int column = index % columns;
             const int line = index / columns;
-            const float x = left + column * (layout::kTile + layout::kTileGap);
-            const float y = startY + line * (layout::kTile + layout::kTileGap) - itemScroll_;
-            row.bounds = D2D1::RectF(x, y, x + layout::kTile, y + layout::kTile);
+            const float x = left + column * (tile + layout::kTileGap);
+            const float y = startY + line * (tile + layout::kTileGap) - itemScroll_;
+            row.bounds = D2D1::RectF(x, y, x + tile, y + tile);
             row.control = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
             ++index;
         }
         const int lines = (index + columns - 1) / columns;
-        return startY + lines * (layout::kTile + layout::kTileGap);
+        return startY + lines * (tile + layout::kTileGap);
     };
 
-    float y = place(Row::Kind::Item, top);
+    // --- the icon browser, which is the whole page while it is open ---------
+    if (searching_icons()) {
+        editorPanel_ = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+        gridRuleY_ = top - itemScroll_;
+        const float headerTop = gridRuleY_ + layout::kRuleCaptionGap;
+        searchRect_ =
+            D2D1::RectF(layout::kWidth - layout::kPadding - layout::kSearchWide, headerTop,
+                        layout::kWidth - layout::kPadding, headerTop + layout::kSearchHeight);
+
+        float y = top + layout::kRuleCaptionGap + layout::kSearchHeight + layout::kGridRuleGap;
+        keyButtons_[0] = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+        keyButtons_[1] = keyButtons_[0];
+        if (!IconSearch::HasKey()) {
+            const float buttonTop = y - itemScroll_ + 44.0f;
+            float x = layout::kPadding;
+            for (D2D1_RECT_F& button : keyButtons_) {
+                button = D2D1::RectF(x, buttonTop, x + layout::kKeyButtonWidth,
+                                     buttonTop + layout::kActionHeight);
+                x += layout::kKeyButtonWidth + 10.0f;
+            }
+            return y + layout::kKeyPanel;
+        }
+        if (iconHits_.empty()) {
+            return y + layout::kNoticeLine;
+        }
+        if (!iconError_.empty()) {
+            y += layout::kNoticeLine;
+        }
+        return place(Row::Kind::IconResult, y, layout::kResultTile);
+    }
+
+    float y = place(Row::Kind::Item, top, layout::kTile);
 
     editorPanel_ = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
     if (expandedItem_ >= 0) {
@@ -1250,42 +1317,18 @@ float SettingsWindow::LayoutGrids(float top, float width) {
     y += layout::kGridGap + layout::kRuleCaptionGap + layout::kSearchHeight +
          layout::kGridRuleGap;
 
-    if (searching_icons()) {
-        keyButtons_[0] = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
-        keyButtons_[1] = keyButtons_[0];
-        if (!IconSearch::HasKey()) {
-            // The explanation sits where the grid would, and the two buttons
-            // under it. Laid out here rather than at draw time so the click
-            // test and the drawing read the same rectangles.
-            const float buttonTop = y - itemScroll_ + 40.0f;
-            float x = layout::kPadding;
-            for (D2D1_RECT_F& button : keyButtons_) {
-                button = D2D1::RectF(x, buttonTop, x + layout::kKeyButtonWidth,
-                                     buttonTop + layout::kActionHeight);
-                x += layout::kKeyButtonWidth + 10.0f;
-            }
-            return y + layout::kKeyPanel;
-        }
-        if (iconHits_.empty()) {
-            return y + layout::kNoticeLine;
-        }
-        if (!iconError_.empty()) {
-            y += layout::kNoticeLine;
-        }
-        return place(Row::Kind::IconResult, y);
-    }
-
     // Two grids under one rule, each with a small caption of its own. The rule
     // separates what the dock holds from what it could; the captions say which
     // of the two things below it you are looking at, which is a smaller
     // distinction and gets a smaller mark.
     systemCaptionY_ = y - itemScroll_;
     if (!systemFiltered_.empty()) {
-        y = place(Row::Kind::SystemTile, y + layout::kSubCaption) + layout::kSubGap;
+        y = place(Row::Kind::SystemTile, y + layout::kSubCaption, layout::kTile) +
+            layout::kSubGap;
     }
     appCaptionY_ = y - itemScroll_;
     if (!suggestions_.empty()) {
-        y = place(Row::Kind::Suggestion, y + layout::kSubCaption);
+        y = place(Row::Kind::Suggestion, y + layout::kSubCaption, layout::kTile);
         if (filtered_.empty()) {
             y += layout::kEmptyHeight;
         }
@@ -1971,17 +2014,6 @@ void SettingsWindow::BeginIconSearch(int itemIndex) {
     BuildRows();
     LayoutRows();
     ApplyWindowSize();
-
-    // And scrolled to what was just opened. A dock of fifty icons fills the
-    // list on its own, so the picker underneath it starts below the fold - and
-    // a panel you have to go looking for is one that did not open. The editor
-    // goes to the top, because the thing being changed and the things to change
-    // it to both want to be on screen at once.
-    if (itemScrollMax_ > 0.0f && editorPanel_.bottom > editorPanel_.top) {
-        itemScroll_ =
-            std::clamp(editorPanel_.top - itemsClip_.top - 8.0f, 0.0f, itemScrollMax_);
-        LayoutRows();
-    }
 }
 
 void SettingsWindow::EndIconSearch() {
@@ -3132,6 +3164,24 @@ void SettingsWindow::DrawHeader() {
         }
         DrawItem(row, static_cast<int>(i) == hoverRow_, pointerX_);
     }
+
+    if (backButton_.right > backButton_.left) {
+        const D2D1_RECT_F pill =
+            D2D1::RectF(backButton_.left + 0.5f, backButton_.top + 0.5f, backButton_.right - 0.5f,
+                        backButton_.bottom - 0.5f);
+        const float radius = (pill.bottom - pill.top) * 0.5f;
+        const bool under = pointerX_ >= pill.left && pointerX_ <= pill.right &&
+                           pointerY_ >= pill.top && pointerY_ <= pill.bottom;
+        if (under) {
+            brush_->SetColor(Grey(1.0f, 0.07f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, radius, radius), brush_.Get());
+        }
+        brush_->SetColor(under ? Grey(1.0f, 0.38f) : Grey(1.0f, 0.17f));
+        d2d_->DrawRoundedRectangle(D2D1::RoundedRect(pill, radius, radius), brush_.Get(), 1.0f);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        DrawText(L"‹  Back to the dock", valueFormat_.Get(), pill, under ? kLabel : kValue);
+        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
 }
 
 void SettingsWindow::DrawTabs() {
@@ -3272,6 +3322,38 @@ void SettingsWindow::DrawTile(const Row& row, bool hovered) {
 
     const float cx = (row.bounds.left + row.bounds.right) * 0.5f;
     const float cy = (row.bounds.top + row.bounds.bottom) * 0.5f;
+
+    if (result) {
+        // Bigger, and with its name under it. A grid of unlabelled thumbnails
+        // is fine for a dock you assembled yourself and useless for a list of
+        // thirty-six strangers, which is exactly what a search returns.
+        const size_t hit = index;
+        const float top = row.bounds.top + 8.0f;
+        const D2D1_RECT_F box =
+            D2D1::RectF(cx - layout::kResultIcon * 0.5f, top, cx + layout::kResultIcon * 0.5f,
+                        top + layout::kResultIcon);
+        ID2D1Bitmap* found = (hit < iconResultIcons_.size()) ? iconResultIcons_[hit].Get()
+                                                            : nullptr;
+        if (found) {
+            d2d_->DrawBitmap(found, box, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        } else {
+            brush_->SetColor(Grey(1.0f, 0.07f));
+            d2d_->FillRoundedRectangle(D2D1::RoundedRect(box, 12.0f, 12.0f), brush_.Get());
+        }
+        if (hit < iconHits_.size()) {
+            hintFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            hintFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            DrawText(iconHits_[hit].appName, hintFormat_.Get(),
+                     D2D1::RectF(row.bounds.left + 2.0f, box.bottom + 2.0f,
+                                 row.bounds.right - 2.0f, box.bottom + 2.0f +
+                                                              layout::kResultLabel),
+                     hovered ? kLabel : kHint);
+            hintFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            hintFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
+        return;
+    }
+
     const D2D1_RECT_F box =
         D2D1::RectF(cx - layout::kTileIcon * 0.5f, cy - layout::kTileIcon * 0.5f,
                     cx + layout::kTileIcon * 0.5f, cy + layout::kTileIcon * 0.5f);
@@ -3612,13 +3694,11 @@ void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
             const D2D1_RECT_F online = EditorSearchButton(panel);
             const bool under = pointerX_ >= online.left && pointerX_ <= online.right &&
                                pointerY_ >= online.top && pointerY_ <= online.bottom;
-            const bool open = (iconSearchFor_ == itemIndex);
-            brush_->SetColor(open ? kOn : (under ? Grey(1.0f, 0.18f) : Grey(1.0f, 0.10f)));
+            brush_->SetColor(under ? Grey(1.0f, 0.18f) : Grey(1.0f, 0.10f));
             d2d_->FillRoundedRectangle(D2D1::RoundedRect(online, 5.0f, 5.0f), brush_.Get());
             valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            DrawText(open ? L"Searching" : L"Find online", valueFormat_.Get(),
-                     D2D1::RectF(online.left, online.top, online.right, online.bottom),
-                     open ? kPanel : kLabel);
+            DrawText(L"Find online", valueFormat_.Get(),
+                     D2D1::RectF(online.left, online.top, online.right, online.bottom), kLabel);
             valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
         }
     }
@@ -3914,9 +3994,9 @@ void SettingsWindow::Render() {
             // them sitting a different distance below it.
             std::wstring caption = L"Add to the dock — click anything below";
             if (searching_icons() && static_cast<size_t>(iconSearchFor_) < items_.items().size()) {
-                caption = L"An icon for “" +
+                caption = L"macOSicons.com — an icon for “" +
                           items_.items()[static_cast<size_t>(iconSearchFor_)].label +
-                          L"” — click one to use it";
+                          L"”";
             }
             hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             DrawText(caption, hintFormat_.Get(),
@@ -4288,6 +4368,13 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 if (HandleEditorClick(editorPanel_, expandedItem_, x, y)) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
+                return 0;
+            }
+
+            if (backButton_.right > backButton_.left && x >= backButton_.left &&
+                x <= backButton_.right && y >= backButton_.top && y <= backButton_.bottom) {
+                EndIconSearch();
+                InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
 
