@@ -5,6 +5,7 @@
 
 #include "model/ProfileStore.h"
 #include "ui/PathIcon.h"
+#include "ui/TextField.h"
 
 #include <shellscalingapi.h>
 #include <windowsx.h>
@@ -50,6 +51,11 @@ constexpr UINT kIconResultIconsMessage = WM_APP + 6;
 // to show for it.
 constexpr UINT_PTR kIconSearchTimer = 3;
 constexpr UINT kIconSearchDelayMs = 350;
+// The caret blinks, because a caret that does not is one more thing on a panel
+// that never moves and one fewer way to find where you are typing. Windows'
+// own rate, and armed only while something has focus.
+constexpr UINT_PTR kCaretTimer = 4;
+constexpr UINT kCaretBlinkMs = 530;
 
 namespace layout {
 constexpr float kWidth = 900.0f;
@@ -410,6 +416,9 @@ bool SettingsWindow::Create(GraphicsDevice& device, const Settings& settings,
     wc.lpfnWndProc = &SettingsWindow::WndProcThunk;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    // Without this the window never sees a double-click, and selecting a word
+    // by double-clicking it is the second thing anybody tries in a text field.
+    wc.style = CS_DBLCLKS;
     wc.lpszClassName = kWindowClass;
     // The application icon, so Alt+Tab, the taskbar and the title bar all show
     // the same thing Explorer does for the executable. Loaded at both sizes
@@ -1489,7 +1498,7 @@ void SettingsWindow::Show(HMONITOR nearMonitor) {
     // catalog this list is known immediately - there is nothing to wait for, and
     // waiting anyway would leave the section missing for the second or so the
     // catalog takes.
-    search_.clear();
+    search_.Clear();
     searchFocused_ = false;
     StartSystemLoad();
 
@@ -1775,7 +1784,308 @@ int SettingsWindow::DropIndexAt(float x, float y) const {
     return index;
 }
 
-void SettingsWindow::BeginEdit(int itemIndex, Field field) {
+float SettingsWindow::TextOffset(IDWriteTextFormat* format, const std::wstring& text,
+                                 size_t index) const {
+    if (!dwrite_ || !format || index == 0 || text.empty()) {
+        return 0.0f;
+    }
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(dwrite_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), format,
+                                         100000.0f, 200.0f, &layout))) {
+        return 0.0f;
+    }
+    // On the layout, not the format. The formats in this window are shared and
+    // several of them are right-aligned, and a right-aligned layout a hundred
+    // thousand pixels wide puts the first character a hundred thousand pixels
+    // in - which is what sent a field's scroll to infinity and left the search
+    // box drawing nothing but its caret.
+    layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    DWRITE_HIT_TEST_METRICS metrics{};
+    float x = 0.0f;
+    float y = 0.0f;
+    // The leading edge of the character the caret sits in front of. Past the
+    // last one there is no such character, so the trailing edge of the last is
+    // the answer instead - measuring the substring would be wrong, because a
+    // pair of letters can be narrower together than apart.
+    if (index >= text.size()) {
+        layout->HitTestTextPosition(static_cast<UINT32>(text.size() - 1), TRUE, &x, &y, &metrics);
+    } else {
+        layout->HitTestTextPosition(static_cast<UINT32>(index), FALSE, &x, &y, &metrics);
+    }
+    return x;
+}
+
+size_t SettingsWindow::IndexAt(IDWriteTextFormat* format, const std::wstring& text,
+                               float x) const {
+    if (!dwrite_ || !format || text.empty()) {
+        return 0;
+    }
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(dwrite_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), format,
+                                         100000.0f, 200.0f, &layout))) {
+        return 0;
+    }
+    layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    BOOL trailing = FALSE;
+    BOOL inside = FALSE;
+    DWRITE_HIT_TEST_METRICS metrics{};
+    if (FAILED(layout->HitTestPoint(std::max(0.0f, x), 4.0f, &trailing, &inside, &metrics))) {
+        return 0;
+    }
+    // Past the middle of a character means the caret belongs after it, which is
+    // what makes clicking feel like it lands where you aimed rather than always
+    // one character early.
+    const size_t index = metrics.textPosition + (trailing ? metrics.length : 0);
+    return std::min(index, text.size());
+}
+
+void SettingsWindow::DrawField(const D2D1_RECT_F& box, TextField& field,
+                               IDWriteTextFormat* format, const D2D1_COLOR_F& colour,
+                               bool focused, const wchar_t* placeholder,
+                               const D2D1_COLOR_F& placeholderColour) {
+    const float width = box.right - box.left;
+    if (width <= 0.0f || !format) {
+        return;
+    }
+
+    // Slid sideways so the caret is always on screen. A path is longer than the
+    // field it lives in, and a field that cannot show you the end of what you
+    // typed is one you cannot correct.
+    const float full = TextOffset(format, field.text(), field.size());
+    float scroll = field.scroll();
+    if (focused) {
+        constexpr float kEdge = 10.0f;
+        const float caretX = TextOffset(format, field.text(), field.caret());
+        if (caretX - scroll > width - kEdge) {
+            scroll = caretX - width + kEdge;
+        }
+        if (caretX - scroll < kEdge) {
+            scroll = caretX - kEdge;
+        }
+    }
+    scroll = std::clamp(scroll, 0.0f, std::max(0.0f, full - width + 6.0f));
+    field.SetScroll(scroll);
+
+    d2d_->PushAxisAlignedClip(box, D2D1_ANTIALIAS_MODE_ALIASED);
+
+    if (focused && field.has_selection()) {
+        const float from = TextOffset(format, field.text(), field.selection_begin()) - scroll;
+        const float to = TextOffset(format, field.text(), field.selection_end()) - scroll;
+        brush_->SetColor(D2D1::ColorF(kOn.r, kOn.g, kOn.b, 0.32f));
+        d2d_->FillRectangle(
+            D2D1::RectF(box.left + from, box.top + 2.0f, box.left + to, box.bottom - 2.0f),
+            brush_.Get());
+    }
+
+    const DWRITE_TEXT_ALIGNMENT wasAligned = format->GetTextAlignment();
+    const DWRITE_WORD_WRAPPING wasWrapped = format->GetWordWrapping();
+    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    if (field.empty() && placeholder) {
+        DrawText(placeholder, format, D2D1::RectF(box.left, box.top, box.right, box.bottom),
+                 placeholderColour);
+    } else {
+        DrawText(field.text(), format,
+                 D2D1::RectF(box.left - scroll, box.top, box.left - scroll + full + 40.0f,
+                             box.bottom),
+                 colour);
+    }
+    format->SetTextAlignment(wasAligned);
+    format->SetWordWrapping(wasWrapped);
+
+    if (focused && caretOn_) {
+        const float caretX =
+            box.left + TextOffset(format, field.text(), field.caret()) - scroll;
+        brush_->SetColor(kOn);
+        d2d_->FillRectangle(
+            D2D1::RectF(caretX, box.top + 3.0f, caretX + 1.4f, box.bottom - 3.0f), brush_.Get());
+    }
+
+    d2d_->PopAxisAlignedClip();
+}
+
+TextField* SettingsWindow::FocusedField() {
+    return const_cast<TextField*>(static_cast<const SettingsWindow*>(this)->FocusedField());
+}
+
+const TextField* SettingsWindow::FocusedField() const {
+    if (naming_) {
+        return &editor_;
+    }
+    if (editItem_ >= 0 && editField_ != Field::Count) {
+        return &editor_;
+    }
+    if (searchFocused_) {
+        return &search_;
+    }
+    return nullptr;
+}
+
+IDWriteTextFormat* SettingsWindow::FocusedFormat() const {
+    if (naming_) {
+        return valueFormat_.Get();
+    }
+    if (editItem_ >= 0 && editField_ != Field::Count) {
+        return labelFormat_.Get();
+    }
+    if (searchFocused_) {
+        return valueFormat_.Get();
+    }
+    return nullptr;
+}
+
+D2D1_RECT_F SettingsWindow::FocusedFieldBox() const {
+    if (naming_) {
+        return namingBox_;
+    }
+    if (editItem_ >= 0 && editField_ != Field::Count) {
+        D2D1_RECT_F fields[static_cast<int>(Field::Count)];
+        D2D1_RECT_F buttons[static_cast<int>(Field::Count)];
+        EditorRects(editorPanel_, fields, buttons);
+        const D2D1_RECT_F& field = fields[static_cast<int>(editField_)];
+        return D2D1::RectF(field.left + 8.0f, field.top, field.right - 8.0f, field.bottom);
+    }
+    if (searchFocused_) {
+        return D2D1::RectF(searchRect_.left + 2.0f, searchRect_.top, searchRect_.right,
+                           searchRect_.bottom);
+    }
+    return D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+}
+
+void SettingsWindow::SearchChanged() {
+    // The grid is rebuilt rather than hidden row by row: the tiles have to
+    // close up after a filter, and their positions are the only thing that says
+    // which entry a click meant.
+    itemScroll_ = 0.0f;
+    hoverRow_ = -1;
+    if (searching_icons() && hwnd_) {
+        // A beat after the typing stops, not on the keystroke.
+        SetTimer(hwnd_, kIconSearchTimer, kIconSearchDelayMs, nullptr);
+    }
+    BuildRows();
+    LayoutRows();
+    ApplyWindowSize();
+}
+
+void SettingsWindow::PlaceCaretAt(float x, bool extend) {
+    TextField* field = FocusedField();
+    IDWriteTextFormat* format = FocusedFormat();
+    if (!field || !format) {
+        return;
+    }
+    const D2D1_RECT_F box = FocusedFieldBox();
+    if (box.right <= box.left) {
+        return;
+    }
+    // Measured in the text's own space, which is the box's left edge plus
+    // however far the text has been slid to keep the caret in view.
+    const float at = x - box.left + field->scroll();
+    field->PlaceCaret(IndexAt(format, field->text(), at), extend);
+    WakeCaret();
+}
+
+void SettingsWindow::WakeCaret() {
+    caretOn_ = true;
+    if (hwnd_ && FocusedField()) {
+        SetTimer(hwnd_, kCaretTimer, kCaretBlinkMs, nullptr);
+    }
+}
+
+void SettingsWindow::UpdateCaretTimer() {
+    if (!hwnd_) {
+        return;
+    }
+    caretOn_ = true;
+    if (FocusedField()) {
+        SetTimer(hwnd_, kCaretTimer, kCaretBlinkMs, nullptr);
+    } else {
+        KillTimer(hwnd_, kCaretTimer);
+    }
+}
+
+bool SettingsWindow::HandleFieldKey(WPARAM key, bool shift, bool control, bool& changed) {
+    changed = false;
+    TextField* field = FocusedField();
+    if (!field) {
+        return false;
+    }
+
+    switch (key) {
+        case VK_LEFT: field->MoveLeft(shift, control); break;
+        case VK_RIGHT: field->MoveRight(shift, control); break;
+        case VK_HOME: field->MoveHome(shift); break;
+        case VK_END: field->MoveEnd(shift); break;
+        case VK_BACK: changed = field->Backspace(control); break;
+        case VK_DELETE:
+            if (shift && field->has_selection()) {
+                SetClipboardText(field->selected()); // the old cut, still muscle memory
+                changed = field->DeleteSelection();
+            } else {
+                changed = field->DeleteForward(control);
+            }
+            break;
+        case 'A':
+            if (!control) {
+                return false;
+            }
+            field->SelectAll();
+            break;
+        case 'C':
+            if (!control) {
+                return false;
+            }
+            if (field->has_selection()) {
+                SetClipboardText(field->selected());
+            }
+            break;
+        case 'X':
+            if (!control) {
+                return false;
+            }
+            if (field->has_selection()) {
+                SetClipboardText(field->selected());
+                changed = field->DeleteSelection();
+            }
+            break;
+        case 'V': {
+            if (!control) {
+                return false;
+            }
+            // One line of it. A path copied out of Explorer arrives with a
+            // newline attached, and a field that accepts one has a second line
+            // it can never show you.
+            std::wstring flat;
+            for (const wchar_t ch : ClipboardText()) {
+                if (ch == L'\n' || ch == L'\r') {
+                    break;
+                }
+                if (ch >= 0x20) {
+                    flat.push_back(ch);
+                }
+            }
+            changed = field->Insert(flat);
+            break;
+        }
+        case 'Z':
+            // Swallowed rather than passed on. Ctrl+Z on this window undoes a
+            // change to the dock's contents, and doing that under somebody who
+            // meant to undo a letter would throw away work they would not
+            // connect to the key they pressed.
+            if (!control) {
+                return false;
+            }
+            break;
+        default:
+            return false;
+    }
+
+    WakeCaret();
+    return true;
+}
+
+void SettingsWindow::BeginEdit(int itemIndex, Field field, float at) {
     CommitEdit();
     const auto& items = items_.items();
     if (itemIndex < 0 || static_cast<size_t>(itemIndex) >= items.size()) {
@@ -1783,14 +2093,17 @@ void SettingsWindow::BeginEdit(int itemIndex, Field field) {
     }
     const DockItem& item = items[static_cast<size_t>(itemIndex)];
     switch (field) {
-        case Field::Name: editText_ = item.label; break;
-        case Field::Arguments: editText_ = item.arguments; break;
-        case Field::WorkingDir: editText_ = item.workingDirectory; break;
+        case Field::Name: editor_.Set(item.label); break;
+        case Field::Arguments: editor_.Set(item.arguments); break;
+        case Field::WorkingDir: editor_.Set(item.workingDirectory); break;
         default: return; // path and icon are chosen, not typed
     }
     editItem_ = itemIndex;
     editField_ = field;
-    caret_ = editText_.size();
+    if (at >= 0.0f) {
+        editor_.PlaceCaret(IndexAt(labelFormat_.Get(), editor_.text(), at), false);
+    }
+    UpdateCaretTimer();
 }
 
 void SettingsWindow::CommitEdit() {
@@ -1801,9 +2114,9 @@ void SettingsWindow::CommitEdit() {
     if (index < items_.items().size()) {
         DockItem item = items_.items()[index];
         switch (editField_) {
-            case Field::Name: item.label = editText_; break;
-            case Field::Arguments: item.arguments = editText_; break;
-            case Field::WorkingDir: item.workingDirectory = editText_; break;
+            case Field::Name: item.label = editor_.text(); break;
+            case Field::Arguments: item.arguments = editor_.text(); break;
+            case Field::WorkingDir: item.workingDirectory = editor_.text(); break;
             default: break;
         }
         items_.Replace(index, std::move(item));
@@ -1813,8 +2126,8 @@ void SettingsWindow::CommitEdit() {
     }
     editItem_ = -1;
     editField_ = Field::Count;
-    editText_.clear();
-    caret_ = 0;
+    editor_.Clear();
+    UpdateCaretTimer();
 }
 
 bool SettingsWindow::HandleEditorClick(const D2D1_RECT_F& panel, int itemIndex, float x,
@@ -1909,7 +2222,20 @@ bool SettingsWindow::HandleEditorClick(const D2D1_RECT_F& panel, int itemIndex, 
                 i == static_cast<int>(Field::IconFull)) {
                 return false; // read-only: use the button beside it
             }
-            BeginEdit(itemIndex, static_cast<Field>(i));
+            // Where in the string the click landed, so the caret goes there
+            // rather than to the end. Clicking into the middle of a path is the
+            // whole reason anybody clicks into a path.
+            const float at = x - (field.left + 8.0f);
+            const bool extend = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (editItem_ == itemIndex && static_cast<int>(editField_) == i) {
+                editor_.PlaceCaret(
+                    IndexAt(labelFormat_.Get(), editor_.text(), at + editor_.scroll()), extend);
+                WakeCaret();
+            } else {
+                BeginEdit(itemIndex, static_cast<Field>(i), at);
+            }
+            textDragging_ = true;
+            SetCapture(hwnd_);
             return true;
         }
     }
@@ -2005,7 +2331,8 @@ void SettingsWindow::BeginIconSearch(int itemIndex) {
     // want for Notion is almost always the one you get by typing Notion, and
     // making somebody type it when the dock already knows it is a waste of the
     // click that got here.
-    search_ = items[static_cast<size_t>(itemIndex)].label;
+    search_.Set(items[static_cast<size_t>(itemIndex)].label);
+    search_.SelectAll();
     searchFocused_ = true;
     expandedItem_ = itemIndex;
     itemScroll_ = 0.0f;
@@ -2033,10 +2360,11 @@ void SettingsWindow::EndIconSearch() {
     iconError_.clear();
     iconSent_.clear();
     iconBusy_ = false;
-    search_.clear();
+    search_.Clear();
     searchFocused_ = false;
     itemScroll_ = 0.0f;
     hoverRow_ = -1;
+    UpdateCaretTimer();
     BuildRows();
     LayoutRows();
     ApplyWindowSize();
@@ -2054,15 +2382,15 @@ void SettingsWindow::RunIconSearch() {
         iconBusy_ = false;
         return;
     }
-    if (search_ == iconSent_) {
+    if (search_.text() == iconSent_) {
         return; // the debounce landed on text that has already been asked
     }
-    iconSent_ = search_;
+    iconSent_ = search_.text();
     iconError_.clear();
     iconBusy_ = true;
     iconResultLoader_.Stop();
     iconResultIcons_.clear();
-    iconSearch_.Start(search_, hwnd_, kIconResultsMessage);
+    iconSearch_.Start(search_.text(), hwnd_, kIconResultsMessage);
 }
 
 void SettingsWindow::DrainIconResults() {
@@ -2775,16 +3103,10 @@ void SettingsWindow::DrawAction(const Row& row, bool hovered) {
     if (typing) {
         // The button becomes the field. Asking for a name in a dialog would be
         // a second window for eight characters.
-        const D2D1_RECT_F text =
-            D2D1::RectF(box.left + 16.0f, box.top, box.right - 16.0f, box.bottom);
-        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        DrawText(editText_.empty() ? std::wstring(L"Name it, then Enter") : editText_,
-                 valueFormat_.Get(), text, editText_.empty() ? kHint : kLabel);
-        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-        const float caret = text.left + MeasureText(valueFormat_.Get(), editText_) + 1.0f;
-        brush_->SetColor(kOn);
-        d2d_->FillRectangle(D2D1::RectF(caret, box.top + 8.0f, caret + 1.4f, box.bottom - 8.0f),
-                            brush_.Get());
+        namingBox_ = D2D1::RectF(box.left + 16.0f, box.top + 6.0f, box.right - 16.0f,
+                                 box.bottom - 6.0f);
+        DrawField(namingBox_, editor_, valueFormat_.Get(), kLabel, true, L"Name it, then Enter",
+                  kHint);
         return;
     }
 
@@ -3247,7 +3569,7 @@ void SettingsWindow::ApplyFilter() {
     // Case-folded substring, over the name and the path both: people look for
     // "code" as readily as they look for "Visual Studio", and the thing they
     // typed is as likely to be in the executable's name as in its label.
-    std::wstring needle = search_;
+    std::wstring needle = search_.text();
     for (wchar_t& ch : needle) {
         ch = static_cast<wchar_t>(towlower(ch));
     }
@@ -3650,31 +3972,16 @@ void SettingsWindow::DrawEditor(const D2D1_RECT_F& panel, int itemIndex) {
             d2d_->FillRoundedRectangle(D2D1::RoundedRect(pill, 5.0f, 5.0f), brush_.Get());
         }
 
-        const std::wstring text = editing ? editText_ : values[i];
-        const bool empty = text.empty();
-        DrawText(empty ? L"—" : text, labelFormat_.Get(),
-                 D2D1::RectF(field.left + 8.0f, field.top, field.right - 8.0f, field.bottom),
-                 empty ? kHint : kLabel);
-
+        const D2D1_RECT_F inner =
+            D2D1::RectF(field.left + 8.0f, field.top, field.right - 8.0f, field.bottom);
         if (editing) {
-            // The caret, measured rather than guessed: a fixed advance per
-            // character would sit visibly wrong in a proportional face.
-            float caretX = field.left + 8.0f;
-            ComPtr<IDWriteTextLayout> layout;
-            const std::wstring head = editText_.substr(0, caret_);
-            if (!head.empty() && dwrite_ &&
-                SUCCEEDED(dwrite_->CreateTextLayout(head.c_str(),
-                                                    static_cast<UINT32>(head.size()),
-                                                    labelFormat_.Get(), 4000.0f, 40.0f, &layout))) {
-                DWRITE_TEXT_METRICS metrics{};
-                if (SUCCEEDED(layout->GetMetrics(&metrics))) {
-                    caretX += metrics.widthIncludingTrailingWhitespace;
-                }
-            }
-            brush_->SetColor(Grey(1.0f, 0.85f));
-            d2d_->FillRectangle(
-                D2D1::RectF(caretX, field.top + 4.0f, caretX + 1.0f, field.bottom - 4.0f),
-                brush_.Get());
+            // Every typable thing in this window is drawn by the same function,
+            // so selection, the caret and sliding a long path sideways behave
+            // the same wherever you are typing.
+            DrawField(inner, editor_, labelFormat_.Get(), kLabel, true, L"—", kHint);
+        } else {
+            const bool empty = values[i].empty();
+            DrawText(empty ? L"—" : values[i], labelFormat_.Get(), inner, empty ? kHint : kLabel);
         }
 
         if (kButtons[i]) {
@@ -3724,38 +4031,9 @@ void SettingsWindow::DrawSearch() {
 
     const D2D1_RECT_F text = D2D1::RectF(searchRect_.left + 2.0f, searchRect_.top,
                                          searchRect_.right, searchRect_.bottom);
-    if (search_.empty()) {
-        hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        DrawText(searching_icons() ? L"Search macOSicons.com" : L"Search Windows and apps",
-                 hintFormat_.Get(), text, Grey(1.0f, searchFocused_ ? 0.35f : 0.28f));
-        hintFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-    } else {
-        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        DrawText(search_, valueFormat_.Get(), text, kValue);
-        valueFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    }
-
-    if (searchFocused_) {
-        // The caret sits after the text rather than inside it: this field has no
-        // cursor keys, because there is nothing here worth editing in the middle
-        // of - you type a few letters and the grid answers.
-        float width = 0.0f;
-        if (!search_.empty()) {
-            ComPtr<IDWriteTextLayout> layout;
-            if (SUCCEEDED(dwrite_->CreateTextLayout(search_.c_str(),
-                                                    static_cast<UINT32>(search_.size()),
-                                                    valueFormat_.Get(), 400.0f, 40.0f, &layout))) {
-                DWRITE_TEXT_METRICS metrics{};
-                layout->GetMetrics(&metrics);
-                width = metrics.widthIncludingTrailingWhitespace;
-            }
-        }
-        const float x = searchRect_.left + 2.0f + width + 1.0f;
-        brush_->SetColor(kOn);
-        d2d_->FillRectangle(
-            D2D1::RectF(x, searchRect_.top + 4.0f, x + 1.4f, searchRect_.bottom - 2.0f),
-            brush_.Get());
-    }
+    DrawField(text, search_, valueFormat_.Get(), kValue, searchFocused_,
+              searching_icons() ? L"Search macOSicons.com" : L"Search Windows and apps",
+              Grey(1.0f, searchFocused_ ? 0.35f : 0.28f));
 }
 
 void SettingsWindow::DrawDetailBar() {
@@ -4053,7 +4331,8 @@ void SettingsWindow::Render() {
             } else if (iconHits_.empty()) {
                 line(iconBusy_        ? std::wstring(L"Searching macOSicons.com…")
                      : search_.empty() ? std::wstring(L"Type to search macOSicons.com.")
-                                       : L"Nothing on macOSicons.com matches “" + search_ + L"”.",
+                                       : L"Nothing on macOSicons.com matches “" +
+                                             search_.text() + L"”.",
                      bodyTop);
             }
         } else if (anythingToAdd) {
@@ -4080,7 +4359,8 @@ void SettingsWindow::Render() {
             }
             if (filtered_.empty() && !suggestions_.empty()) {
                 const float top = appCaptionY_ + layout::kSubCaption;
-                DrawText(L"Nothing installed matches “" + search_ + L"”.", hintFormat_.Get(),
+                DrawText(L"Nothing installed matches “" + search_.text() + L"”.",
+                         hintFormat_.Get(),
                          D2D1::RectF(layout::kPadding, top, layout::kWidth - layout::kPadding,
                                      top + layout::kEmptyHeight),
                          kHint);
@@ -4244,6 +4524,12 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             pointerX_ = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
             pointerY_ = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
 
+            if (textDragging_) {
+                PlaceCaretAt(pointerX_, true);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+
             if (pickerDrag_ >= 0 && openColour_ >= 0 &&
                 static_cast<size_t>(openColour_) < rows_.size()) {
                 const Row& open = rows_[static_cast<size_t>(openColour_)];
@@ -4301,6 +4587,25 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
+        case WM_LBUTTONDBLCLK: {
+            const float x = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
+            const float y = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
+            TextField* field = FocusedField();
+            IDWriteTextFormat* format = FocusedFormat();
+            const D2D1_RECT_F box = field ? FocusedFieldBox() : D2D1::RectF(0, 0, 0, 0);
+            if (field && format && box.right > box.left && x >= box.left - 8.0f &&
+                x <= box.right + 8.0f && y >= box.top - 6.0f && y <= box.bottom + 6.0f) {
+                field->SelectWordAt(
+                    IndexAt(format, field->text(), x - box.left + field->scroll()));
+                WakeCaret();
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            // Not in a field: treat it as the ordinary click it also is, so a
+            // fast second click on a tile is not silently swallowed.
+            return WndProc(hwnd, WM_LBUTTONDOWN, wParam, lParam);
+        }
+
         case WM_LBUTTONDOWN: {
             const float x = static_cast<float>(GET_X_LPARAM(lParam)) / scale;
             const float y = static_cast<float>(GET_Y_LPARAM(lParam)) / scale;
@@ -4350,10 +4655,16 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                                       y <= searchRect_.bottom + 6.0f;
                 if (inSearch != searchFocused_) {
                     searchFocused_ = inSearch;
+                    UpdateCaretTimer();
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 if (inSearch) {
                     CommitEdit();
+                    searchFocused_ = true;
+                    PlaceCaretAt(x, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+                    textDragging_ = true;
+                    SetCapture(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
             }
@@ -4368,6 +4679,16 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 if (HandleEditorClick(editorPanel_, expandedItem_, x, y)) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
+                return 0;
+            }
+
+            if (naming_ && namingBox_.right > namingBox_.left && x >= namingBox_.left - 8.0f &&
+                x <= namingBox_.right + 8.0f && y >= namingBox_.top - 6.0f &&
+                y <= namingBox_.bottom + 6.0f) {
+                PlaceCaretAt(x, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+                textDragging_ = true;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
 
@@ -4580,8 +4901,8 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     const int id = rows_[static_cast<size_t>(row)].itemIndex;
                     if (id == 0) {
                         naming_ = true;
-                        editText_.clear();
-                        caret_ = 0;
+                        editor_.Clear();
+                        UpdateCaretTimer();
                     } else if (id == 1) {
                         const std::wstring token = settings_.ToToken();
                         Announce(SetClipboardText(token)
@@ -4649,6 +4970,11 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         }
 
         case WM_LBUTTONUP:
+            if (textDragging_) {
+                textDragging_ = false;
+                ReleaseCapture();
+                return 0;
+            }
             if (pickerDrag_ >= 0) {
                 pickerDrag_ = -1;
                 ReleaseCapture();
@@ -4722,69 +5048,33 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return 0;
         }
 
-        case WM_CHAR:
-            if (naming_) {
-                const wchar_t ch = static_cast<wchar_t>(wParam);
-                if (ch == VK_BACK) {
-                    if (!editText_.empty()) {
-                        editText_.pop_back();
-                    }
-                } else if (ch >= 0x20) {
-                    editText_.push_back(ch);
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
+        case WM_CHAR: {
+            TextField* field = FocusedField();
+            if (!field) {
                 return 0;
             }
-            if (searchFocused_) {
-                const wchar_t ch = static_cast<wchar_t>(wParam);
-                if (ch == VK_BACK) {
-                    if (!search_.empty()) {
-                        search_.pop_back();
-                    }
-                } else if (ch >= 0x20) {
-                    search_.push_back(ch);
-                } else {
-                    return 0;
-                }
-                // The grid is rebuilt rather than hidden row by row: the tiles
-                // have to close up after a filter, and their positions are the
-                // only thing that says which entry a click meant.
-                itemScroll_ = 0.0f;
-                hoverRow_ = -1;
-                if (searching_icons()) {
-                    // A beat after the typing stops, not on the keystroke.
-                    SetTimer(hwnd, kIconSearchTimer, kIconSearchDelayMs, nullptr);
-                }
-                BuildRows();
-                LayoutRows();
-                ApplyWindowSize();
-                InvalidateRect(hwnd, nullptr, FALSE);
+            const wchar_t ch = static_cast<wchar_t>(wParam);
+            // Everything below space is a key, not a character: backspace and
+            // the arrows are handled in WM_KEYDOWN, and Ctrl+A arrives here as
+            // 0x01, which typed into the field would be an invisible character
+            // nobody could delete.
+            if (ch < 0x20 || ch == 0x7F) {
                 return 0;
             }
-            if (editItem_ >= 0 && editField_ != Field::Count) {
-                const wchar_t ch = static_cast<wchar_t>(wParam);
-                if (ch == VK_BACK) {
-                    if (caret_ > 0) {
-                        editText_.erase(caret_ - 1, 1);
-                        --caret_;
-                    }
-                } else if (ch == VK_RETURN || ch == VK_ESCAPE) {
-                    // Handled in WM_KEYDOWN; swallowed here so Enter does not
-                    // insert a control character into the field.
-                } else if (ch >= 0x20) {
-                    editText_.insert(caret_, 1, ch);
-                    ++caret_;
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
-                return 0;
+            if (field->Insert(std::wstring_view(&ch, 1)) && field == &search_) {
+                SearchChanged();
             }
+            WakeCaret();
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
+        }
 
         case WM_KEYDOWN:
             if (naming_ && (wParam == VK_RETURN || wParam == VK_ESCAPE)) {
-                const std::wstring name = ProfileStore::Clean(editText_);
+                const std::wstring name = ProfileStore::Clean(editor_.text());
                 naming_ = false;
-                editText_.clear();
+                editor_.Clear();
+                UpdateCaretTimer();
                 if (wParam == VK_RETURN && !name.empty()) {
                     if (ProfileStore::Save(name)) {
                         Announce(L"Saved " + name);
@@ -4799,6 +5089,23 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
+            {
+                // A field, if one has focus, gets first refusal on every key.
+                // Which is what makes Ctrl+A select the text rather than doing
+                // nothing, and the arrows move the caret rather than nudging
+                // whichever slider the pointer happens to be resting on.
+                const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                bool changed = false;
+                TextField* field = FocusedField();
+                if (HandleFieldKey(wParam, shift, control, changed)) {
+                    if (changed && field == &search_) {
+                        SearchChanged();
+                    }
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
             if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000) != 0) {
                 CommitEdit();
                 if (items_.Undo()) {
@@ -4812,23 +5119,6 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             }
             if (editItem_ >= 0 && editField_ != Field::Count) {
                 switch (wParam) {
-                    case VK_LEFT:
-                        if (caret_ > 0) {
-                            --caret_;
-                        }
-                        break;
-                    case VK_RIGHT:
-                        if (caret_ < editText_.size()) {
-                            ++caret_;
-                        }
-                        break;
-                    case VK_HOME: caret_ = 0; break;
-                    case VK_END: caret_ = editText_.size(); break;
-                    case VK_DELETE:
-                        if (caret_ < editText_.size()) {
-                            editText_.erase(caret_, 1);
-                        }
-                        break;
                     case VK_RETURN:
                         CommitEdit();
                         CommitItems();
@@ -4838,7 +5128,8 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                         // nearer thing wins, which is what Escape means.
                         editItem_ = -1;
                         editField_ = Field::Count;
-                        editText_.clear();
+                        editor_.Clear();
+                        UpdateCaretTimer();
                         break;
                     default: break;
                 }
@@ -4863,7 +5154,7 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 // Escape leaves the nearer thing: the text first, then the
                 // search, and only then the window.
                 if (!search_.empty()) {
-                    search_.clear();
+                    search_.Clear();
                     iconSent_.clear();
                     iconHits_.clear();
                     iconResultIcons_.clear();
@@ -4883,7 +5174,7 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 // closing the window out from under a half-typed filter is the
                 // sort of thing that loses you the window you were working in.
                 if (!search_.empty()) {
-                    search_.clear();
+                    search_.Clear();
                     itemScroll_ = 0.0f;
                     hoverRow_ = -1;
                     BuildRows();
@@ -4983,6 +5274,15 @@ LRESULT SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
         case WM_TIMER:
             if (wParam == kAnimTimer) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (wParam == kCaretTimer) {
+                if (!FocusedField()) {
+                    KillTimer(hwnd, kCaretTimer);
+                    return 0;
+                }
+                caretOn_ = !caretOn_;
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }

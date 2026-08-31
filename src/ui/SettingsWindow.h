@@ -16,6 +16,7 @@
 #include "model/SystemItems.h"
 #include "gfx/CompositionTarget.h"
 #include "gfx/GraphicsDevice.h"
+#include "ui/TextField.h"
 
 namespace liquidock {
 
@@ -308,7 +309,44 @@ private:
     bool HandleEditorClick(const D2D1_RECT_F& panel, int itemIndex, float x, float y);
     // Commits whatever is being typed back into the item.
     void CommitEdit();
-    void BeginEdit(int itemIndex, Field field);
+    // `at` is where in the field the click landed, in DIPs from its left edge,
+    // or negative to put the caret at the end. Clicking into the middle of a
+    // path should leave the caret in the middle of the path.
+    void BeginEdit(int itemIndex, Field field, float at = -1.0f);
+
+    // --- text fields ------------------------------------------------------
+    //
+    // Everything typable in this window goes through these four, so what a key
+    // does is decided in one place. Before, each field carried its own scrap of
+    // key handling and they all disagreed - which is how the window ended up
+    // with three text fields, none of which could select anything.
+
+    // Where the caret sits at `index`, in DIPs from the start of the string.
+    float TextOffset(IDWriteTextFormat* format, const std::wstring& text, size_t index) const;
+    // Which character a point falls on, measured from the start of the string.
+    size_t IndexAt(IDWriteTextFormat* format, const std::wstring& text, float x) const;
+    // The text, its selection and its caret, clipped to `box` and slid sideways
+    // to keep the caret in view.
+    void DrawField(const D2D1_RECT_F& box, TextField& field, IDWriteTextFormat* format,
+                   const D2D1_COLOR_F& colour, bool focused, const wchar_t* placeholder,
+                   const D2D1_COLOR_F& placeholderColour);
+    // Whichever field the keyboard is talking to, and the box it is drawn in.
+    TextField* FocusedField();
+    const TextField* FocusedField() const;
+    IDWriteTextFormat* FocusedFormat() const;
+    D2D1_RECT_F FocusedFieldBox() const;
+    // True when the key was a field's to handle. `changed` says the text itself
+    // moved, which is what the search box has to rebuild for.
+    bool HandleFieldKey(WPARAM key, bool shift, bool control, bool& changed);
+    // Puts the caret back on and restarts the blink, so it is never invisible
+    // at the moment you were looking for it.
+    void WakeCaret();
+    void UpdateCaretTimer();
+    // What the window has to redo when the search text moves.
+    void SearchChanged();
+    // Puts the caret where a click landed in the focused field, or extends the
+    // selection to it. `x` is in panel coordinates.
+    void PlaceCaretAt(float x, bool extend);
     // The item index a drop at `y` would land on.
     int DropIndexAt(float x, float y) const;
     void DrawDetailBar();
@@ -384,7 +422,7 @@ private:
     // time. The browser takes the whole page, so the editor's own button is not
     // on screen to press a second time.
     D2D1_RECT_F backButton_{};
-    std::wstring search_;
+    TextField search_;
     bool searchFocused_ = false;
     D2D1_RECT_F searchRect_{};
     Tab activeTab_ = Tab::Items;
@@ -469,8 +507,14 @@ private:
     // IME composition, undo - is a project in itself.
     Field editField_ = Field::Count;
     int editItem_ = -1;
-    std::wstring editText_;
-    size_t caret_ = 0;
+    // The item editor's field and the profile-name field share one, because
+    // only one of them can be open at a time.
+    TextField editor_;
+    // Where the profile-name field was last drawn, for hit testing it.
+    D2D1_RECT_F namingBox_{};
+    // Which field a drag is extending a selection in: 0 none, 1 dragging.
+    bool textDragging_ = false;
+    bool caretOn_ = true;
     float pointerX_ = 0.0f;
     float pointerY_ = 0.0f;
     bool visible_ = false;
